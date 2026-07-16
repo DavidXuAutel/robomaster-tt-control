@@ -9,4 +9,5 @@ build/
 *.mp4
 *.avi
 .idea/
-.vscode/
+logs/
+*.csv

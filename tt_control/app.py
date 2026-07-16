@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import pathlib
 import threading
 import time
 from enum import Enum
@@ -62,7 +63,11 @@ class App:
         self._cmd_lock = threading.Lock()
         self._twin: Optional[MujocoPadTwin] = None
         if config.enable_mujoco:
-            self._twin = MujocoPadTwin(get_state=lambda: (self.client.state if self.client else {}))
+            traj_dir = pathlib.Path.cwd() / "logs" / "trajectories"
+            self._twin = MujocoPadTwin(
+                get_state=lambda: (self.client.state if self.client else {}),
+                traj_dir=traj_dir,
+            )
 
     @property
     def connected(self) -> bool:
