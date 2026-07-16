@@ -51,9 +51,19 @@ python main.py --mujoco -v
 ```
 
 流程：CONNECT → 起飞 → 飞到垫子上方锁定 → MuJoCo 窗口跟随。  
-控制界面 HUD 会显示 `MuJoCo: pad m1 xyz=...`；未看到垫子时为 `no pad lock`。
+控制界面 HUD 会显示 `MuJoCo: pad m1 xyz=... traj=N`；未看到垫子时为 `no pad lock`。
 
-垫子放在 MuJoCo 世界原点（红色方块）。无垫子时无法提供可靠水平位置。
+### 轨迹记录
+
+- MuJoCo 中**绿色**轨迹=垫子锁定段；**黄色**=丢垫后水平保持最后锁定位置、高度继续更新  
+- **蓝点**=起点，**红点**=终点  
+- 关闭 MuJoCo / DISCONNECT 时自动保存：  
+  `logs/trajectories/traj_YYYYMMDD_HHMMSS.csv` + 同名 `.json` 摘要  
+- CSV 字段：`t, mid, x, y, z, yaw, pitch, roll, vgx, vgy, vgz, h, bat, pad_locked`（米，垫子局部系）
+
+垫子放在 MuJoCo 世界原点（红色方块）。无垫子时水平位置不可靠。
+
+## 接入实时推理
 
 实现 `InferenceBackend.infer(frame) -> frame`，例如：
 
