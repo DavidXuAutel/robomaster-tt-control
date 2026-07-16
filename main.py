@@ -17,7 +17,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--local-ip",
         default="",
-        help="本机 Wi-Fi IP（默认自动检测 192.168.10.x）",
+        help="本机 Wi-Fi IP（默认自动检测 192.168.10.x；可稍后点 CONNECT 再连）",
     )
     p.add_argument("--tello-ip", default="192.168.10.1", help="飞机 IP")
     p.add_argument("--rc-speed", type=int, default=40, help="杆量 1-100")
@@ -39,12 +39,9 @@ def main(argv: list[str] | None = None) -> int:
 
     local_ip = args.local_ip or detect_local_ip()
     if not local_ip:
-        print(
-            "未检测到 192.168.10.x。请先连接 TELLO Wi-Fi，或指定 --local-ip。\n"
-            "注意：不要改动服务器有线网卡配置。",
-            file=sys.stderr,
+        logging.warning(
+            "未检测到 192.168.10.x，界面仍会启动；请连接 TELLO Wi-Fi 后点击 CONNECT"
         )
-        return 2
 
     cfg = AppConfig(
         local_ip=local_ip,

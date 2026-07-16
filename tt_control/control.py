@@ -21,11 +21,12 @@ class RcAxes:
 
 @dataclass
 class KeyAction:
-    kind: str  # takeoff | land | emergency | hover | rc | toggle_help | quit | none
+    kind: str  # takeoff | land | emergency | hover | rc | toggle_help | connect_toggle | quit | none
     axes: RcAxes = field(default_factory=RcAxes)
 
 
 HELP_TEXT = [
+    "C connect/disconnect | click CONNECT",
     "T takeoff | L land | ESC emergency",
     "W/S forward/back  A/D left/right",
     "R/F up/down       Q/E yaw",
@@ -43,6 +44,8 @@ def map_key(key: int, speed: int = 40) -> KeyAction:
 
     if k == 27:  # Esc
         return KeyAction("emergency")
+    if ch == "c":
+        return KeyAction("connect_toggle")
     if ch == "t":
         return KeyAction("takeoff")
     if ch == "l":
