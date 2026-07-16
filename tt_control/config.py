@@ -26,6 +26,8 @@ class AppConfig:
     rc_speed: int = RC_SPEED
     window_name: str = "RoboMaster TT Control"
     heartbeat_interval: float = 5.0
+    enable_mujoco: bool = False
+    enable_mission_pad: bool = True
 
 
 def detect_local_ip(preferred_prefix: str = "192.168.10.") -> str:

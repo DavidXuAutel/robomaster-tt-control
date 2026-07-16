@@ -91,6 +91,17 @@ class TelloClient:
     def stream_off(self) -> None:
         self.send("streamoff", timeout=3.0)
 
+    def mission_pad_on(self, downward: bool = True) -> Optional[str]:
+        """打开 Mission Pad 检测；downward=True 时仅下视。"""
+        r = self.send("mon", timeout=3.0)
+        if r != "ok":
+            return r
+        # 0=下视 1=前视 2=双向
+        return self.send("mdirection 0" if downward else "mdirection 2", timeout=3.0)
+
+    def mission_pad_off(self) -> Optional[str]:
+        return self.send("moff", timeout=3.0)
+
     def takeoff(self) -> Optional[str]:
         return self.send("takeoff", timeout=20.0)
 

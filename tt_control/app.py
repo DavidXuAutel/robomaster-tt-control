@@ -14,10 +14,10 @@ import numpy as np
 from tt_control.config import AppConfig, detect_local_ip
 from tt_control.control import HELP_TEXT, RcAxes, map_key
 from tt_control.inference import InferenceBackend, PassthroughBackend
+from tt_control.mujoco_twin import MujocoPadTwin
 from tt_control.status import is_drone_online
 from tt_control.tello_client import TelloClient
 from tt_control.video_stream import VideoStream
-
 logger = logging.getLogger(__name__)
 
 BTN_W, BTN_H = 160, 44
@@ -60,6 +60,9 @@ class App:
         self._buttons: Dict[str, Tuple[int, int, int, int]] = {}
         self._connect_lock = threading.Lock()
         self._cmd_lock = threading.Lock()
+        self._twin: Optional[MujocoPadTwin] = None
+        if config.enable_mujoco:
+            self._twin = MujocoPadTwin(get_state=lambda: (self.client.state if self.client else {}))
 
     @property
     def connected(self) -> bool:
@@ -159,11 +162,24 @@ class App:
                 self.client.start_state_listener()
                 if not self.client.stream_on():
                     raise RuntimeError("streamon 失败")
+                if self.config.enable_mission_pad:
+                    pad = self.client.mission_pad_on(downward=True)
+                    logger.info("mission pad on: %s", pad)
+                    if pad != "ok":
+                        self._hint = f"Connected; pad detect: {pad}"
+                    else:
+                        self._hint = "Connected — fly over Mission Pad for MuJoCo lock"
                 self.video = VideoStream(local_ip, self.config.video_port)
                 self.video.start()
+                if self._twin:
+                    if self._twin.start():
+                        logger.info("MuJoCo twin started")
+                    else:
+                        logger.warning("MuJoCo twin failed: %s", self._twin.status)
                 self._conn_state = ConnState.CONNECTED
                 self._status_msg = "connected"
-                self._hint = "Press T or TAKEOFF, then hold WASD to fly"
+                if not self._hint.startswith("Connected"):
+                    self._hint = "Press T or TAKEOFF, then hold WASD to fly"
                 self._flying = False
                 self._last_rc = RcAxes()
                 logger.info("drone connected via %s", local_ip)
@@ -184,6 +200,13 @@ class App:
             logger.info("drone disconnected")
 
     def _cleanup_session(self, land: bool) -> None:
+        if self._twin:
+            self._twin.stop()
+        try:
+            if self.client and self.config.enable_mission_pad:
+                self.client.mission_pad_off()
+        except Exception:
+            pass
         try:
             if self.client and self._flying and land:
                 self.client.land()
@@ -447,12 +470,14 @@ class App:
             f"{self._hint}",
             f"key {self._last_key_label}  RC {self._last_rc.as_tuple()}",
         ]
+        if self._twin:
+            lines.append(f"MuJoCo: {self._twin.status}")
         y = 28
         for i, text in enumerate(lines):
             col = fly_color if i == 0 else (40, 255, 40)
-            cv2.putText(frame, text[:70], (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
-            cv2.putText(frame, text[:70], (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, col, 1, cv2.LINE_AA)
-            y += 24
+            cv2.putText(frame, text[:78], (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, text[:78], (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.52, col, 1, cv2.LINE_AA)
+            y += 22
 
         if self.show_help:
             help_lines = HELP_TEXT

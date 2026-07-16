@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""入口：RoboMaster TT 统一控制界面。"""
+"""入口：RoboMaster TT 统一控制界面（可选 MuJoCo Mission Pad 孪生）。"""
 
 from __future__ import annotations
 
@@ -26,6 +26,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="passthrough",
         help="推理后端名（默认 passthrough，可自行扩展）",
     )
+    p.add_argument(
+        "--mujoco",
+        action="store_true",
+        help="启用 MuJoCo 数字孪生（Mission Pad 局部坐标 x/y/z → 仿真机体）",
+    )
+    p.add_argument(
+        "--no-mission-pad",
+        action="store_true",
+        help="连接后不自动 mon（默认会开启垫子检测）",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -47,6 +57,8 @@ def main(argv: list[str] | None = None) -> int:
         local_ip=local_ip,
         tello_ip=args.tello_ip,
         rc_speed=max(1, min(100, args.rc_speed)),
+        enable_mujoco=args.mujoco,
+        enable_mission_pad=(not args.no_mission_pad) or args.mujoco,
     )
     backend = create_backend(args.inference)
     return App(cfg, inference=backend).run()

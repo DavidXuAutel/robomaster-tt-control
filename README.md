@@ -41,7 +41,19 @@ python main.py --local-ip 192.168.10.2 -v
 
 启动后先显示界面与在线状态；点 **CONNECT** 再进入 SDK 并开图传。
 
-## 接入实时推理
+## Mission Pad → MuJoCo 孪生
+
+启用后，连接飞机会自动 `mon`（下视垫子检测）。看到 Mission Pad 时，用 SDK 的 `x/y/z`（相对垫子，cm）更新 MuJoCo 中机体位姿。
+
+```bash
+pip install mujoco
+python main.py --mujoco -v
+```
+
+流程：CONNECT → 起飞 → 飞到垫子上方锁定 → MuJoCo 窗口跟随。  
+控制界面 HUD 会显示 `MuJoCo: pad m1 xyz=...`；未看到垫子时为 `no pad lock`。
+
+垫子放在 MuJoCo 世界原点（红色方块）。无垫子时无法提供可靠水平位置。
 
 实现 `InferenceBackend.infer(frame) -> frame`，例如：
 
