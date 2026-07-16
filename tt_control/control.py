@@ -26,19 +26,24 @@ class KeyAction:
 
 
 HELP_TEXT = [
-    "C connect/disconnect | click CONNECT",
-    "T takeoff | L land | ESC emergency",
-    "W/S forward/back  A/D left/right",
-    "R/F up/down       Q/E yaw",
-    "SPACE hover       H help  X quit",
+    "1. CONNECT  2. T takeoff  3. hold WASD/RF/QE move",
+    "Arrow keys also move | SPACE hover | L land",
+    "ESC emergency | C disconnect | H help | X quit",
 ]
+
+# OpenCV waitKeyEx 方向键（常见值）
+_KEY_LEFT = {81, 2, 2424832}
+_KEY_UP = {82, 0, 2490368}
+_KEY_RIGHT = {83, 3, 2555904}
+_KEY_DOWN = {84, 1, 2621440}
 
 
 def map_key(key: int, speed: int = 40) -> KeyAction:
-    """OpenCV waitKey 返回值 → 动作。"""
-    if key < 0:
+    """OpenCV waitKey / waitKeyEx 返回值 → 动作。"""
+    if key is None or key < 0 or key == 255:
         return KeyAction("none")
 
+    raw = key
     k = key & 0xFF
     ch = chr(k).lower() if 32 <= k < 127 else ""
 
@@ -54,18 +59,17 @@ def map_key(key: int, speed: int = 40) -> KeyAction:
         return KeyAction("hover")
     if ch == "h":
         return KeyAction("toggle_help")
-    # X 退出（Q 留给偏航）
     if ch == "x":
         return KeyAction("quit")
 
     axes = RcAxes()
-    if ch == "a":
+    if ch == "a" or raw in _KEY_LEFT:
         axes.roll = -speed
-    elif ch == "d":
+    elif ch == "d" or raw in _KEY_RIGHT:
         axes.roll = speed
-    elif ch == "w":
+    elif ch == "w" or raw in _KEY_UP:
         axes.pitch = speed
-    elif ch == "s":
+    elif ch == "s" or raw in _KEY_DOWN:
         axes.pitch = -speed
     elif ch == "r":
         axes.throttle = speed
