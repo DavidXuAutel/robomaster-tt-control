@@ -1,0 +1,6 @@
+{
+  "router_ssid": "填你家路由器的Wi-Fi名",
+  "router_password": "填该Wi-Fi的密码",
+  "drone_ssid": "飞机热点名如RMTT-A1B2C3，不知道可留空",
+  "wifi_interface": ""
+}

@@ -3,8 +3,9 @@
 
 用法：
   1) Mac 连接飞机热点 RMTT-xxxx 后执行：
-       python station_mode.py setup --ssid <路由器SSID> --password <密码>
-     飞机回复 OK 后会自动重启并加入路由器。
+       python station_mode.py setup
+     路由器 SSID/密码 默认读 wifi_config.json（首次运行进入配置向导），
+     也可用 --ssid/--password 临时覆盖。飞机回复 OK 后会自动重启并加入路由器。
   2) Mac 切回路由器 Wi-Fi 后执行：
        python station_mode.py find
      在本机所在 /24 网段广播 `command` 探测，打印飞机的局域网 IP。
@@ -58,11 +59,13 @@ def cmd_setup(ssid: str, password: str) -> int:
 
 
 def get_lan_ip() -> str:
-    # 优先取 Wi-Fi 网卡 en0 的地址（默认路由可能被 VPN 虚拟网卡接管，不可信）
+    # 优先取 Wi-Fi 网卡的地址（默认路由可能被 VPN 虚拟网卡接管，不可信）
     import subprocess
+
+    from wifi_config import detect_wifi_interface
     try:
         ip = subprocess.run(
-            ["ipconfig", "getifaddr", "en0"],
+            ["ipconfig", "getifaddr", detect_wifi_interface()],
             capture_output=True, text=True, timeout=5,
         ).stdout.strip()
         if ip:
@@ -128,12 +131,14 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="action", required=True)
     sp = sub.add_parser("setup", help="直连飞机热点时执行，发送 ap 组网指令")
-    sp.add_argument("--ssid", required=True)
-    sp.add_argument("--password", required=True)
+    sp.add_argument("--ssid", default=None, help="路由器 Wi-Fi 名（默认读 wifi_config.json）")
+    sp.add_argument("--password", default=None, help="路由器 Wi-Fi 密码（默认读 wifi_config.json）")
     sub.add_parser("find", help="连接路由器 Wi-Fi 时执行，扫描飞机局域网 IP")
     args = p.parse_args()
     if args.action == "setup":
-        return cmd_setup(args.ssid, args.password)
+        from wifi_config import get_config
+        cfg = get_config(args.ssid, args.password)
+        return cmd_setup(cfg["router_ssid"], cfg["router_password"])
     return cmd_find()
 
 

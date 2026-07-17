@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """全自动组网 + 启动控制界面。
 
+首次运行会进入配置向导（生成本地 wifi_config.json，不会提交到仓库），
+之后零参数运行：python auto_fly.py
+
 流程（无人值守）：
   0. 若飞机已在路由器局域网内 → 直接跳到第 4 步
-  1. 等待用户把 Mac Wi-Fi 连到 RMTT-xxxx 热点（检测 en0 出现 192.168.10.x）
+  1. 等待用户把 Mac Wi-Fi 连到 RMTT-xxxx 热点（检测 Wi-Fi 网卡出现 192.168.10.x）
   2. 发送 `ap <ssid> <password>` 组网指令（带重试）
   3. 自动把 Mac Wi-Fi 切回路由器，等待拿到局域网 IP
   4. 扫描找到飞机 IP（飞机重启需要时间，带重试）
@@ -15,9 +18,9 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
-import sys
 import time
 
+import wifi_config
 from station_mode import cmd_setup, find_drone, get_lan_ip
 
 REPO = os.path.dirname(os.path.abspath(__file__))
@@ -28,18 +31,18 @@ def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def wifi_ip() -> str:
+def wifi_ip(iface: str) -> str:
     try:
         return subprocess.run(
-            ["ipconfig", "getifaddr", "en0"],
+            ["ipconfig", "getifaddr", iface],
             capture_output=True, text=True, timeout=5,
         ).stdout.strip()
     except subprocess.TimeoutExpired:
         return ""
 
 
-def switch_wifi(ssid: str, password: str = "") -> None:
-    cmd = ["networksetup", "-setairportnetwork", "en0", ssid]
+def switch_wifi(iface: str, ssid: str, password: str = "") -> None:
+    cmd = ["networksetup", "-setairportnetwork", iface, ssid]
     if password:
         cmd.append(password)
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -75,11 +78,15 @@ def launch_gui(tello_ip: str, local_ip: str) -> None:
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--ssid", required=True, help="路由器 Wi-Fi 名称")
-    p.add_argument("--password", required=True, help="路由器 Wi-Fi 密码")
-    p.add_argument("--drone-ssid", default="", help="飞机热点名（已知网络时可自动连接）")
+    p.add_argument("--ssid", default=None, help="路由器 Wi-Fi 名（默认读 wifi_config.json）")
+    p.add_argument("--password", default=None, help="路由器 Wi-Fi 密码（默认读 wifi_config.json）")
+    p.add_argument("--drone-ssid", default=None, help="飞机热点名（已知网络时可自动连接）")
     p.add_argument("--wait-hotspot", type=float, default=480, help="等待连上 RMTT 热点的秒数")
     args = p.parse_args()
+
+    cfg = wifi_config.get_config(args.ssid, args.password, args.drone_ssid)
+    ssid, password = cfg["router_ssid"], cfg["router_password"]
+    drone_ssid, iface = cfg["drone_ssid"], cfg["wifi_interface"]
 
     # 0. 飞机可能已经组网成功，直接找
     log("先检查飞机是否已在局域网内 ...")
@@ -90,30 +97,33 @@ def main() -> int:
         return 0
 
     # 1. 等待飞机热点出现并连接（已知网络可全自动；否则等用户手动点击）
-    log(f"等待飞机热点 [{args.drone_ssid}] 出现，每 15 秒自动尝试连接 ...")
+    if drone_ssid:
+        log(f"等待飞机热点 [{drone_ssid}] 出现，每 15 秒自动尝试连接 ...")
+    else:
+        log("请把飞机开机，并在 Mac 的 Wi-Fi 菜单中手动连接 RMTT-xxxx 热点 ...")
     deadline = time.time() + args.wait_hotspot
     connected = False
     last_try = 0.0
     while time.time() < deadline:
-        ip = wifi_ip()
+        ip = wifi_ip(iface)
         if ip.startswith("192.168.10."):
             log(f"已连上飞机热点（本机 {ip}）")
             connected = True
             break
-        if args.drone_ssid and time.time() - last_try >= 15:
+        if drone_ssid and time.time() - last_try >= 15:
             last_try = time.time()
-            switch_wifi(args.drone_ssid)
+            switch_wifi(iface, drone_ssid)
         time.sleep(3)
     if not connected:
         log("超时：一直没有连上飞机热点。确认飞机已长按电源键 5 秒重置 WiFi 后，重新运行本脚本")
-        switch_wifi(args.ssid, args.password)
+        switch_wifi(iface, ssid, password)
         return 1
 
     # 2. 发组网指令
     ok = False
     for i in range(3):
-        log(f"发送组网指令（第 {i + 1}/3 次）: ap {args.ssid} ***")
-        if cmd_setup(args.ssid, args.password) == 0:
+        log(f"发送组网指令（第 {i + 1}/3 次）: ap {ssid} ***")
+        if cmd_setup(ssid, password) == 0:
             ok = True
             break
         time.sleep(3)
@@ -123,17 +133,17 @@ def main() -> int:
 
     # 3. 切回路由器
     time.sleep(3)
-    log(f"把 Mac Wi-Fi 切回 [{args.ssid}] ...")
-    switch_wifi(args.ssid, args.password)
+    log(f"把 Mac Wi-Fi 切回 [{ssid}] ...")
+    switch_wifi(iface, ssid, password)
     deadline = time.time() + 60
     while time.time() < deadline:
-        ip = wifi_ip()
+        ip = wifi_ip(iface)
         if ip and not ip.startswith("192.168.10.") and not ip.startswith("169.254."):
             log(f"已回到路由器网络（本机 {ip}）")
             break
         time.sleep(2)
     else:
-        log(f"没能自动切回 [{args.ssid}]，请手动在 Wi-Fi 菜单选择它，脚本继续扫描 ...")
+        log(f"没能自动切回 [{ssid}]，请手动在 Wi-Fi 菜单选择它，脚本继续扫描 ...")
 
     # 4. 等飞机重启入网并扫描
     log("等待飞机重启加入路由器（约 10-30 秒）...")

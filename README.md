@@ -17,7 +17,29 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 启动
+## 一键组网起飞（macOS，推荐）
+
+```bash
+python auto_fly.py
+```
+
+**首次运行**会自动进入配置向导（只需一次）：路由器 Wi-Fi 名自动探测、密码输入不回显，
+配置保存在本地 `wifi_config.json`（已被 `.gitignore` 忽略，**不会提交到仓库**）。
+不想走向导也可以手动配置：
+
+```bash
+cp wifi_config.example.json wifi_config.json   # 然后填入自己的 Wi-Fi 信息
+```
+
+之后每次零参数运行。脚本自动完成：连接飞机热点 → 发送 `ap` 组网指令 →
+Mac 切回路由器 → 扫描飞机局域网 IP → 拉起控制界面。
+组网完成后 Mac 一直待在路由器 Wi-Fi 上（**可正常上网**），通过局域网控制飞机。
+想重新配置：删掉 `wifi_config.json` 再运行即可；`--ssid/--password` 参数可临时覆盖配置。
+
+分步执行（调试用）：`python station_mode.py setup`（直连热点时发组网指令）、
+`python station_mode.py find`（回路由器后扫描飞机 IP）。
+
+## 启动（直连飞机热点模式）
 
 ```bash
 # 自动检测 192.168.10.x

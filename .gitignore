@@ -11,3 +11,5 @@ build/
 .idea/
 logs/
 *.csv
+wifi_config.json
+logs_*.log
