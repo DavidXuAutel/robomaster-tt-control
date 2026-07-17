@@ -28,6 +28,12 @@ RC_HOLD_TIMEOUT = 0.35  # 按键松开判定（秒）
 RC_SEND_HZ = 15.0
 
 
+def _ascii(text: str) -> str:
+    """cv2.putText 只能渲染 ASCII，其余字符替换，避免画出乱码。"""
+    text = text.replace("—", "-").replace("→", "->").replace("；", "; ")
+    return text.encode("ascii", "replace").decode()
+
+
 class ConnState(str, Enum):
     OFFLINE = "OFFLINE"
     ONLINE = "ONLINE"
@@ -148,7 +154,7 @@ class App:
             try:
                 local_ip = self.config.local_ip or detect_local_ip()
                 if not local_ip:
-                    raise RuntimeError("未检测到 192.168.10.x，请先连接 TELLO Wi-Fi")
+                    raise RuntimeError("no local IP - join drone Wi-Fi or pass --local-ip")
                 self.config.local_ip = local_ip
 
                 if self.client:
@@ -287,7 +293,25 @@ class App:
     def _loop(self) -> int:
         blank = np.zeros((720, 960, 3), dtype=np.uint8)
         running = True
+        last_draw = 0.0
         while running:
+            key = cv2.waitKeyEx(5)
+            if key != -1 and key != 255:
+                action = map_key(key, self.config.rc_speed)
+                if action.kind == "quit":
+                    running = False
+                    continue
+                self._dispatch_action(action, key)
+
+            self._update_rc_stream()
+
+            # macOS 的 Cocoa 后端异步合成，imshow 频率过高会把前后帧混叠出文字重影；
+            # 渲染节流到 30fps，按键轮询仍走上面的高频 waitKeyEx
+            now = time.time()
+            if now - last_draw < 1.0 / 30.0:
+                continue
+            last_draw = now
+
             frame = None
             if self.video and self.connected:
                 frame = self.video.read()
@@ -296,12 +320,13 @@ class App:
                 tip = self._hint or "Click CONNECT or press C"
                 cv2.putText(
                     frame,
-                    tip[:60],
+                    _ascii(tip)[:60],
                     (40, 360),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.8,
                     (0, 200, 255),
                     2,
+                    cv2.LINE_AA,
                 )
             else:
                 try:
@@ -311,16 +336,6 @@ class App:
 
             self._draw_ui(frame)
             cv2.imshow(self.config.window_name, frame)
-
-            key = cv2.waitKeyEx(1)
-            if key != -1 and key != 255:
-                action = map_key(key, self.config.rc_speed)
-                if action.kind == "quit":
-                    running = False
-                else:
-                    self._dispatch_action(action, key)
-
-            self._update_rc_stream()
 
         return 0
 
@@ -477,20 +492,37 @@ class App:
         ]
         if self._twin:
             lines.append(f"MuJoCo: {self._twin.status}")
-        y = 28
-        for i, text in enumerate(lines):
-            col = fly_color if i == 0 else (40, 255, 40)
-            cv2.putText(frame, text[:78], (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 0), 3, cv2.LINE_AA)
-            cv2.putText(frame, text[:78], (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.52, col, 1, cv2.LINE_AA)
-            y += 22
+        lines = [_ascii(t)[:70] for t in lines]
+        colors = [fly_color] + [(60, 255, 60)] * (len(lines) - 1)
+        self._draw_text_panel(frame, lines, 6, 6, colors)
 
         if self.show_help:
-            help_lines = HELP_TEXT
-            y = h - 12 - 22 * len(help_lines)
-            for text in help_lines:
-                cv2.putText(frame, text, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
-                cv2.putText(frame, text, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
-                y += 22
+            help_lines = [_ascii(t) for t in HELP_TEXT]
+            line_h, pad = 28, 12
+            block_h = pad * 2 + line_h * len(help_lines)
+            self._draw_text_panel(
+                frame,
+                help_lines,
+                6,
+                h - 10 - block_h,
+                [(235, 235, 235)] * len(help_lines),
+            )
+
+    def _draw_text_panel(self, frame, lines, x, y_top, colors) -> None:
+        """深色半透明底板 + 文字，保证任何视频背景下都可读。"""
+        font, scale, line_h, pad = cv2.FONT_HERSHEY_SIMPLEX, 0.6, 28, 12
+        h, w = frame.shape[:2]
+        tw = max(cv2.getTextSize(t, font, scale, 1)[0][0] for t in lines)
+        x2 = min(x + tw + pad * 2, w)
+        y2 = min(y_top + pad * 2 + line_h * len(lines) - 8, h)
+        x1, y1 = max(x, 0), max(y_top, 0)
+        if x2 > x1 and y2 > y1:
+            roi = frame[y1:y2, x1:x2]
+            frame[y1:y2, x1:x2] = (roi * 0.35).astype(np.uint8)
+        y = y_top + pad + 16
+        for text, col in zip(lines, colors):
+            cv2.putText(frame, text, (x + pad, y), font, scale, col, 1, cv2.LINE_AA)
+            y += line_h
 
     def _shutdown(self) -> None:
         logger.info("shutting down")

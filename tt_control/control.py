@@ -26,9 +26,9 @@ class KeyAction:
 
 
 HELP_TEXT = [
-    "1. CONNECT  2. T takeoff  3. hold WASD/RF/QE move",
-    "Arrow keys also move | SPACE hover | L land",
-    "ESC emergency | C disconnect | H help | X quit",
+    "C / CONNECT: link drone   T: take off   L: land",
+    "Hold to fly:  W/S fwd/back  A/D left/right  R/F up/down  Q/E turn",
+    "SPACE: hover   ESC: EMERGENCY STOP   H: help   X: quit",
 ]
 
 # OpenCV waitKeyEx 方向键（常见值）

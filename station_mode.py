@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""RoboMaster TT 组网模式辅助脚本（仅标准库）。
+
+用法：
+  1) Mac 连接飞机热点 RMTT-xxxx 后执行：
+       python station_mode.py setup --ssid <路由器SSID> --password <密码>
+     飞机回复 OK 后会自动重启并加入路由器。
+  2) Mac 切回路由器 Wi-Fi 后执行：
+       python station_mode.py find
+     在本机所在 /24 网段广播 `command` 探测，打印飞机的局域网 IP。
+"""
+
+from __future__ import annotations
+
+import argparse
+import socket
+import sys
+import time
+
+CMD_PORT = 8889
+TELLO_AP_IP = "192.168.10.1"
+
+
+def _open_socket(bind_ip: str = "") -> socket.socket:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((bind_ip, CMD_PORT))
+    sock.settimeout(5.0)
+    return sock
+
+
+def _send(sock: socket.socket, addr: tuple[str, int], cmd: str) -> str:
+    print(f">>> {cmd}")
+    sock.sendto(cmd.encode(), addr)
+    try:
+        data, _ = sock.recvfrom(1024)
+    except socket.timeout:
+        return "<timeout>"
+    reply = data.decode(errors="ignore").strip()
+    print(f"<<< {reply}")
+    return reply
+
+
+def cmd_setup(ssid: str, password: str) -> int:
+    sock = _open_socket()
+    try:
+        addr = (TELLO_AP_IP, CMD_PORT)
+        if _send(sock, addr, "command") != "ok":
+            print("无法进入 SDK 模式：请确认 Mac 已连接 RMTT-xxxx 热点、飞机电量充足", file=sys.stderr)
+            return 1
+        reply = _send(sock, addr, f"ap {ssid} {password}")
+    finally:
+        sock.close()
+    if reply.lower().startswith("ok"):
+        print(f"成功：飞机将重启并加入路由器 [{ssid}]。约 10 秒后把 Mac 切回该 Wi-Fi，再运行: python station_mode.py find")
+        return 0
+    print(f"设置失败：{reply}", file=sys.stderr)
+    return 1
+
+
+def get_lan_ip() -> str:
+    # 优先取 Wi-Fi 网卡 en0 的地址（默认路由可能被 VPN 虚拟网卡接管，不可信）
+    import subprocess
+    try:
+        ip = subprocess.run(
+            ["ipconfig", "getifaddr", "en0"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        if ip:
+            return ip
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("8.8.8.8", 53))
+        return probe.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        probe.close()
+
+
+def find_drone(local_ip: str, timeout: float = 3.0) -> list[str]:
+    """向 local_ip 所在 /24 网段所有主机发 `command`，回 ok 的就是飞机。"""
+    prefix = local_ip.rsplit(".", 1)[0]
+    sock = _open_socket(local_ip)
+    sock.settimeout(0.2)
+    found: list[str] = []
+    try:
+        for i in range(1, 255):
+            target = f"{prefix}.{i}"
+            if target != local_ip:
+                try:
+                    sock.sendto(b"command", (target, CMD_PORT))
+                except OSError:
+                    continue  # 接口切换瞬间可能 No route to host，跳过该地址
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                data, addr = sock.recvfrom(1024)
+            except socket.timeout:
+                continue
+            if data.decode(errors="ignore").strip() == "ok" and addr[0] not in found:
+                found.append(addr[0])
+    finally:
+        sock.close()
+    return found
+
+
+def cmd_find(timeout: float = 3.0) -> int:
+    local_ip = get_lan_ip()
+    if not local_ip:
+        print("本机没有可用网络地址", file=sys.stderr)
+        return 1
+    prefix = local_ip.rsplit(".", 1)[0]
+    print(f"本机 IP {local_ip}，扫描 {prefix}.1-254 ...")
+    found = find_drone(local_ip, timeout)
+    for ip in found:
+        print(f"找到飞机: {ip}")
+
+    if not found:
+        print("未找到。确认飞机指示灯为组网状态、与 Mac 在同一路由器下，稍等片刻重试", file=sys.stderr)
+        return 1
+    print(f"\n启动控制界面:\n  python main.py --tello-ip {found[0]} --local-ip {local_ip} -v")
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="action", required=True)
+    sp = sub.add_parser("setup", help="直连飞机热点时执行，发送 ap 组网指令")
+    sp.add_argument("--ssid", required=True)
+    sp.add_argument("--password", required=True)
+    sub.add_parser("find", help="连接路由器 Wi-Fi 时执行，扫描飞机局域网 IP")
+    args = p.parse_args()
+    if args.action == "setup":
+        return cmd_setup(args.ssid, args.password)
+    return cmd_find()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
