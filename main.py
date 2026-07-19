@@ -42,6 +42,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="只显示手势识别结果，不发送起飞/降落命令",
     )
+    p.add_argument(
+        "--gesture-flight-test",
+        action="store_true",
+        help="启用需手动 ARM 的真机流程：手势起飞 -> 相对上升40cm -> 悬停 -> 手势降落",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -52,6 +57,12 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if args.gesture_dry_run and args.gesture_flight_test:
+        logging.error("--gesture-dry-run 与 --gesture-flight-test 不能同时使用")
+        return 2
+    if args.gesture_flight_test and args.inference != "gestures":
+        logging.error("真机手势测试必须使用 --inference gestures")
+        return 2
 
     local_ip = args.local_ip or detect_local_ip()
     if not local_ip:
@@ -66,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         enable_mujoco=args.mujoco,
         enable_mission_pad=(not args.no_mission_pad) or args.mujoco,
         gesture_commands_enabled=not args.gesture_dry_run,
+        gesture_flight_test=args.gesture_flight_test,
     )
     backend = create_backend(args.inference)
     return App(cfg, inference=backend).run()

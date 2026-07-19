@@ -93,6 +93,26 @@ dry-run 会把起飞和降落作为两项验收：单项识别时显示大号 PA
 `gesture_profiles/profile_*.json`，每次保存新文件且不会覆盖旧记录。该目录默认不提交 Git。
 每次成功识别后需让手短暂离开画面才会重新布防，以免一个较长动作重复触发。
 
+### 真机手势飞行测试
+
+真机测试使用独立模式，不能与 `--gesture-dry-run` 同时启用：
+
+```bash
+python auto_fly.py --gesture-flight-test
+```
+
+流程为：`CONNECT` → 确认电量和画面 → `TEST ARM` → 起飞手势 → 自动起飞 →
+相对当前位置执行 `up 40` → 悬停 → 降落手势 → 自动降落。根据 Ryze Tello SDK，
+`up x` 是向上飞行 x 厘米，合法范围为 20-500cm，因此这里的 40cm 是自动起飞完成后的
+**相对上升距离**，不是离地绝对高度。
+
+安全门控：ARM 时要求飞机在地面、电量至少 50%、手已离开画面且没有飞行命令在执行；
+测试期间禁用水平 RC 操作。红色 `TEST FAIL` 会立即记录失败现场，并在飞机离地时尝试降落；
+界面 `LAND` 和键盘 `Esc` 仍保留为人工安全备份。
+
+日志逐条实时写入 `logs/gesture_flight_tests/gesture_flight_*.jsonl`，包含手势置信度、
+模型状态、SDK 命令及响应、完整 Tello 遥测、图传 FPS、FAIL/PASS 和退出清理记录。
+
 ## 键位 / 界面
 
 | 操作 | 说明 |

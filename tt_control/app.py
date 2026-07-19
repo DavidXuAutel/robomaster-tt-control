@@ -14,6 +14,7 @@ import numpy as np
 
 from tt_control.config import AppConfig, detect_local_ip
 from tt_control.control import HELP_TEXT, RcAxes, map_key
+from tt_control.flight_test import FlightTestRecorder
 from tt_control.inference import InferenceBackend, InferenceEvent, PassthroughBackend
 from tt_control.mujoco_twin import MujocoPadTwin
 from tt_control.status import is_drone_online
@@ -74,6 +75,10 @@ class App:
         self._gesture_banner = ""
         self._gesture_banner_color = (0, 200, 255)
         self._gesture_banner_until = 0.0
+        self._flight_test_state = "DISARMED"
+        self._flight_test_recorder: FlightTestRecorder | None = None
+        self._flight_test_log: pathlib.Path | None = None
+        self._last_test_telemetry = 0.0
         self._twin: Optional[MujocoPadTwin] = None
         if config.enable_mujoco:
             traj_dir = pathlib.Path.cwd() / "logs" / "trajectories"
@@ -145,8 +150,16 @@ class App:
             else:
                 threading.Thread(target=self._connect, daemon=True).start()
         elif name == "takeoff":
+            if self.config.gesture_flight_test:
+                self._hint = "Flight test: use the takeoff gesture after TEST ARM"
+                return
             self._async_flight_cmd("takeoff")
         elif name == "land":
+            if self.config.gesture_flight_test and self._flight_test_state not in (
+                "DISARMED", "PASSED", "FAILED",
+            ):
+                self._record_flight_test("manual_land_backup")
+                self._flight_test_state = "ABORTING"
             self._async_flight_cmd("land")
         elif name == "hover":
             self._hover()
@@ -160,12 +173,107 @@ class App:
         elif name == "train_save":
             self._reset_gesture_test()
             self._hint = self.inference.save_training_profile()
+        elif name == "test_arm":
+            if self._flight_test_state == "ARMED":
+                self._disarm_flight_test("user_disarmed")
+            else:
+                self._arm_flight_test()
+        elif name == "test_fail":
+            self._fail_flight_test("FAIL button clicked")
 
     def _reset_gesture_test(self) -> None:
         self._gesture_test_results.clear()
         self._gesture_test_complete = False
         self._gesture_banner = ""
         self._gesture_banner_until = 0.0
+
+    def _test_snapshot(self) -> dict:
+        return {
+            "test_state": self._flight_test_state,
+            "connected": self.connected,
+            "flying": self._flying,
+            "telemetry": dict(self.client.state) if self.client else {},
+            "inference": self.inference.status_text,
+            "hint": self._hint,
+            "video_fps": round(self.video.fps, 2) if self.video else 0.0,
+        }
+
+    def _record_flight_test(self, event: str, **data) -> None:
+        if self._flight_test_recorder:
+            self._flight_test_recorder.record(event, **self._test_snapshot(), **data)
+
+    def _arm_flight_test(self) -> None:
+        if not self.config.gesture_flight_test:
+            return
+        if not (self.connected and self.client):
+            self._hint = "Connect first"
+            return
+        if self._flight_cmd_pending.is_set() or self._flying:
+            self._hint = "Cannot arm while a flight command is active or airborne"
+            return
+        if "waiting for hand" not in self.inference.status_text.lower():
+            self._hint = "Remove hand from camera, then ARM"
+            return
+        try:
+            battery = int(self.client.state.get("bat", "-1"))
+            height = int(self.client.state.get("h", "0"))
+        except ValueError:
+            battery, height = -1, 0
+        if battery < 50:
+            reason = "telemetry not ready" if battery < 0 else f"battery {battery}% < 50%"
+            self._hint = f"TEST ARM blocked: {reason}"
+            return
+        if height > 10:
+            self._hint = f"TEST ARM blocked: reported height {height}cm"
+            return
+
+        if self._flight_test_recorder:
+            self._flight_test_recorder.close()
+        recorder = FlightTestRecorder(pathlib.Path.cwd() / "logs" / "gesture_flight_tests")
+        self._flight_test_recorder = recorder
+        self._flight_test_log = recorder.path
+        self._flight_test_state = "ARMED"
+        self._gesture_test_complete = False
+        self._last_inference_event = 0.0
+        self._gesture_banner = "FLIGHT TEST ARMED"
+        self._gesture_banner_color = (0, 180, 255)
+        self._gesture_banner_until = time.monotonic() + 2.5
+        self._hint = "ARMED: show takeoff gesture; keep clear of propellers"
+        self._record_flight_test("armed", battery=battery, height_cm=height)
+        logger.info("flight test armed log=%s", recorder.path)
+
+    def _disarm_flight_test(self, reason: str) -> None:
+        if self._flying:
+            self._hint = "Cannot disarm while airborne - use TEST FAIL or LAND"
+            return
+        self._record_flight_test("disarmed", reason=reason)
+        self._flight_test_state = "DISARMED"
+        self._hint = "Flight test disarmed"
+        if self._flight_test_recorder:
+            self._flight_test_recorder.close()
+            self._flight_test_recorder = None
+
+    def _fail_flight_test(self, reason: str) -> None:
+        if not self.config.gesture_flight_test:
+            return
+        if self._flight_test_state in ("DISARMED", "PASSED"):
+            self._hint = "No active flight test"
+            return
+        self._record_flight_test("failed", reason=reason)
+        self._flight_test_state = "FAILED"
+        self._gesture_banner = "TEST FAILED - LANDING"
+        self._gesture_banner_color = (0, 0, 255)
+        self._gesture_banner_until = float("inf")
+        self._hint = f"FAILED: {reason}; landing if airborne"
+        logger.error("flight test failed: %s log=%s", reason, self._flight_test_log)
+        height = 0
+        if self.client:
+            try:
+                height = int(self.client.state.get("h", "0"))
+            except ValueError:
+                pass
+        if (self._flying or height > 20) and not self._flight_cmd_pending.is_set():
+            self._async_flight_cmd("land")
 
     def _connect(self) -> None:
         with self._connect_lock:
@@ -234,6 +342,8 @@ class App:
             logger.info("drone disconnected")
 
     def _cleanup_session(self, land: bool) -> None:
+        if self._flight_test_recorder:
+            self._record_flight_test("session_cleanup", requested_land=land)
         if self._twin:
             self._twin.stop()
         try:
@@ -286,6 +396,7 @@ class App:
             return
         with self._cmd_lock:
             if kind == "takeoff":
+                self._record_flight_test("command_takeoff")
                 self._hint = "Taking off..."
                 self._status_msg = "takeoff..."
                 self._last_rc = RcAxes()
@@ -294,10 +405,44 @@ class App:
                 except Exception:
                     pass
                 resp = self.client.takeoff()
+                self._record_flight_test("command_takeoff_result", response=resp)
                 if resp == "ok":
                     self._flying = True
-                    self._hint = "Airborne — hold WASD/arrows to move, SPACE hover"
                     self._status_msg = "flying"
+                    if self.config.gesture_flight_test:
+                        if self._flight_test_state == "FAILED":
+                            land_resp = self.client.land()
+                            self._record_flight_test(
+                                "land_after_failure", response=land_resp
+                            )
+                            self._flying = False
+                            return
+                        self._flight_test_state = "ASCENDING_40CM"
+                        self._hint = "Takeoff OK - ascending another 40cm..."
+                        self._record_flight_test("command_up_40")
+                        up_resp = self.client.up(40)
+                        self._record_flight_test("command_up_40_result", response=up_resp)
+                        if up_resp == "ok" and self._flight_test_state != "FAILED":
+                            self.client.rc(0, 0, 0, 0)
+                            self._flight_test_state = "HOVERING_WAIT_LAND"
+                            self._hint = "Hovering - show LAND gesture"
+                            self._gesture_banner = "HOVERING - WAIT LAND GESTURE"
+                            self._gesture_banner_color = (0, 210, 255)
+                            self._gesture_banner_until = float("inf")
+                            self._record_flight_test("hovering_after_up_40")
+                        else:
+                            self._flight_test_state = "FAILED"
+                            self._hint = f"up 40 failed: {up_resp or 'timeout'}; landing"
+                            self._record_flight_test(
+                                "failed", reason="up 40 failed", response=up_resp
+                            )
+                            land_resp = self.client.land()
+                            self._record_flight_test(
+                                "land_after_failure", response=land_resp
+                            )
+                            self._flying = False
+                    else:
+                        self._hint = "Airborne — hold WASD/arrows to move, SPACE hover"
                 else:
                     self._hint = f"Takeoff failed: {resp or 'timeout'}"
                     self._status_msg = "takeoff failed"
@@ -305,8 +450,23 @@ class App:
                     h = self.client.height_cm()
                     if h is not None and h > 20:
                         self._flying = True
+                    if self.config.gesture_flight_test:
+                        self._flight_test_state = "FAILED"
+                        self._record_flight_test(
+                            "failed",
+                            reason="takeoff command failed or timed out",
+                            response=resp,
+                            reported_height_cm=h,
+                        )
+                        # 超时并不等于未离地；真机测试中无条件补发 land 更安全。
+                        land_resp = self.client.land()
+                        self._record_flight_test(
+                            "land_after_failure", response=land_resp
+                        )
+                        self._flying = land_resp != "ok"
                 logger.info("takeoff result=%s flying=%s", resp, self._flying)
             elif kind == "land":
+                self._record_flight_test("command_land")
                 self._hint = "Landing..."
                 self._last_rc = RcAxes()
                 try:
@@ -314,9 +474,37 @@ class App:
                 except Exception:
                     pass
                 resp = self.client.land()
-                self._flying = False
+                self._record_flight_test("command_land_result", response=resp)
+                if resp == "ok":
+                    self._flying = False
+                else:
+                    height = self.client.height_cm()
+                    # 高度未知时按仍在空中处理，保证退出/FAIL 会继续尝试降落。
+                    self._flying = height is None or height > 20
                 self._hint = "Landed" if resp == "ok" else f"Land: {resp or 'timeout'}"
-                self._status_msg = "landed"
+                self._status_msg = "landed" if resp == "ok" else "land failed"
+                if self.config.gesture_flight_test and self._flight_test_state == "LANDING":
+                    if resp == "ok":
+                        self._flight_test_state = "PASSED"
+                        self._gesture_test_complete = True
+                        self._gesture_banner = "REAL FLIGHT TEST PASSED"
+                        self._gesture_banner_color = (40, 210, 40)
+                        self._gesture_banner_until = float("inf")
+                        self._hint = "PASS: takeoff + up 40cm + hover + gesture land"
+                        self._record_flight_test("passed")
+                        self._record_flight_test("recorder_closed", reason="test_passed")
+                        if self._flight_test_recorder:
+                            self._flight_test_recorder.close()
+                            self._flight_test_recorder = None
+                        logger.info("real flight test PASS log=%s", self._flight_test_log)
+                    else:
+                        self._flight_test_state = "FAILED"
+                        self._gesture_banner = "LAND FAILED - CLICK TEST FAIL"
+                        self._gesture_banner_color = (0, 0, 255)
+                        self._gesture_banner_until = float("inf")
+                        self._record_flight_test(
+                            "failed", reason="land command failed", response=resp
+                        )
                 logger.info("land result=%s", resp)
 
     def _hover(self) -> None:
@@ -341,6 +529,7 @@ class App:
                 self._dispatch_action(action, key)
 
             self._update_rc_stream()
+            self._update_flight_test_log()
 
             # macOS 的 Cocoa 后端异步合成，imshow 频率过高会把前后帧混叠出文字重影；
             # 渲染节流到 30fps，按键轮询仍走上面的高频 waitKeyEx
@@ -408,6 +597,20 @@ class App:
         if self._flight_cmd_pending.is_set():
             return
 
+        if self.config.gesture_flight_test:
+            self._record_flight_test(
+                "gesture_detected",
+                gesture=event.kind,
+                confidence=round(event.confidence, 4),
+                detail=event.detail,
+            )
+            if event.kind == "takeoff" and self._flight_test_state != "ARMED":
+                self._hint = f"Takeoff gesture ignored: test {self._flight_test_state}"
+                return
+            if event.kind == "land" and self._flight_test_state != "HOVERING_WAIT_LAND":
+                self._hint = f"Land gesture ignored: test {self._flight_test_state}"
+                return
+
         try:
             height = int(self.client.state.get("h", "0"))
         except ValueError:
@@ -427,6 +630,8 @@ class App:
                 logger.warning("gesture takeoff blocked: %s", reason)
                 return
             self._last_inference_event = now
+            if self.config.gesture_flight_test:
+                self._flight_test_state = "TAKING_OFF"
             self._last_key_label = f"GESTURE palm-up {event.confidence:.2f}"
             self._hint = "Palm-up confirmed - taking off"
             logger.info("gesture takeoff: %s", event.detail)
@@ -438,10 +643,20 @@ class App:
                 self._hint = "Finger-snap ignored: already grounded"
                 return
             self._last_inference_event = now
+            if self.config.gesture_flight_test:
+                self._flight_test_state = "LANDING"
             self._last_key_label = f"GESTURE finger-snap {event.confidence:.2f}"
             self._hint = "Visual finger-snap confirmed - landing"
             logger.info("gesture land: %s", event.detail)
             self._async_flight_cmd("land")
+
+    def _update_flight_test_log(self) -> None:
+        if not self._flight_test_recorder:
+            return
+        now = time.monotonic()
+        if now - self._last_test_telemetry >= 1.0:
+            self._last_test_telemetry = now
+            self._record_flight_test("telemetry")
 
     def _dispatch_action(self, action, key: int) -> None:
         kind = action.kind
@@ -462,6 +677,9 @@ class App:
             return
 
         if kind == "takeoff":
+            if self.config.gesture_flight_test:
+                self._hint = "Flight test: use takeoff gesture after TEST ARM"
+                return
             self._last_key_label = "T takeoff"
             self._async_flight_cmd("takeoff")
             return
@@ -481,6 +699,11 @@ class App:
             self._hover()
             return
         if kind == "rc":
+            if self.config.gesture_flight_test and self._flight_test_state not in (
+                "DISARMED", "PASSED", "FAILED",
+            ):
+                self._hint = "RC movement disabled during vertical flight test"
+                return
             self._last_key_label = f"key={key & 0xFF} rc{action.axes.as_tuple()}"
             if not self._flying:
                 self._hint = "Not airborne — press T / TAKEOFF first (rc ignored on ground)"
@@ -600,6 +823,13 @@ class App:
             self._draw_button(
                 frame, "train_save", sx, by, "SAVE PROFILE", (110, 45, 125)
             )
+            by += BTN_H + 8
+        if self.config.gesture_flight_test:
+            arm_label = "DISARM TEST" if self._flight_test_state == "ARMED" else "TEST ARM"
+            arm_color = (0, 150, 220) if self._flight_test_state == "ARMED" else (45, 135, 45)
+            self._draw_button(frame, "test_arm", sx, by, arm_label, arm_color)
+            by += BTN_H + 8
+            self._draw_button(frame, "test_fail", sx, by, "TEST FAIL", (0, 0, 210))
 
         bat = self.client.state.get("bat", "?") if self.client else "?"
         alt = self.client.state.get("h", "?") if self.client else "?"
@@ -621,6 +851,9 @@ class App:
             land = "PASS" if "land" in self._gesture_test_results else "WAIT"
             state = "COMPLETE" if self._gesture_test_complete else "RUNNING"
             lines.append(f"DRY-RUN TEST [{state}]  TAKEOFF {takeoff} | LAND {land}")
+        if self.config.gesture_flight_test:
+            log_name = self._flight_test_log.name if self._flight_test_log else "-"
+            lines.append(f"REAL TEST [{self._flight_test_state}]  LOG {log_name}")
         lines = [_ascii(t)[:70] for t in lines]
         colors = [fly_color] + [(60, 255, 60)] * (len(lines) - 1)
         self._draw_text_panel(frame, lines, 6, 6, colors)
@@ -641,6 +874,7 @@ class App:
     def _draw_gesture_banner(self, frame: np.ndarray) -> None:
         if (
             self.config.gesture_commands_enabled
+            and not self.config.gesture_flight_test
             or not self._gesture_banner
             or time.monotonic() > self._gesture_banner_until
         ):
@@ -695,4 +929,8 @@ class App:
             self.inference.close()
         except Exception:
             logger.exception("inference close failed")
+        if self._flight_test_recorder:
+            self._record_flight_test("recorder_closed")
+            self._flight_test_recorder.close()
+            self._flight_test_recorder = None
         cv2.destroyAllWindows()

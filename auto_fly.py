@@ -69,6 +69,7 @@ def launch_gui(
     local_ip: str,
     inference: str = "gestures",
     gesture_dry_run: bool = False,
+    gesture_flight_test: bool = False,
 ) -> None:
     os.makedirs(os.path.join(REPO, "logs"), exist_ok=True)
     gui_log = os.path.join(REPO, "logs", "gui.log")
@@ -78,6 +79,8 @@ def launch_gui(
                "--inference", inference, "-v"]
         if gesture_dry_run:
             cmd.append("--gesture-dry-run")
+        if gesture_flight_test:
+            cmd.append("--gesture-flight-test")
         subprocess.Popen(
             cmd,
             stdout=f, stderr=f, cwd=REPO, start_new_session=True,
@@ -101,8 +104,18 @@ def main() -> int:
         action="store_true",
         help="只识别和显示手势，不发送飞行命令",
     )
+    p.add_argument(
+        "--gesture-flight-test",
+        action="store_true",
+        help="启用需手动 ARM 的真机手势飞行测试",
+    )
     p.add_argument("--wait-hotspot", type=float, default=480, help="等待连上 RMTT 热点的秒数")
     args = p.parse_args()
+
+    if args.gesture_dry_run and args.gesture_flight_test:
+        p.error("--gesture-dry-run 与 --gesture-flight-test 不能同时使用")
+    if args.gesture_flight_test and args.inference != "gestures":
+        p.error("真机手势测试必须使用 --inference gestures")
 
     cfg = wifi_config.get_config(args.ssid, args.password, args.drone_ssid)
     ssid, password = cfg["router_ssid"], cfg["router_password"]
@@ -113,7 +126,9 @@ def main() -> int:
     lan, drone = try_find(retries=1, interval=0)
     if drone:
         log(f"飞机已在局域网: {drone}，跳过组网步骤")
-        launch_gui(drone, lan, args.inference, args.gesture_dry_run)
+        launch_gui(
+            drone, lan, args.inference, args.gesture_dry_run, args.gesture_flight_test
+        )
         return 0
 
     # 1. 等待飞机热点出现并连接（已知网络可全自动；否则等用户手动点击）
@@ -174,7 +189,9 @@ def main() -> int:
 
     log(f"找到飞机: {drone}（本机 {lan}）")
     # 5. 拉起控制界面
-    launch_gui(drone, lan, args.inference, args.gesture_dry_run)
+    launch_gui(
+        drone, lan, args.inference, args.gesture_dry_run, args.gesture_flight_test
+    )
     return 0
 
 

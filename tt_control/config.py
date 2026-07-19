@@ -29,6 +29,7 @@ class AppConfig:
     enable_mujoco: bool = False
     enable_mission_pad: bool = True
     gesture_commands_enabled: bool = True
+    gesture_flight_test: bool = False
 
 
 def detect_local_ip(preferred_prefix: str = "192.168.10.") -> str:
