@@ -28,6 +28,7 @@ class AppConfig:
     heartbeat_interval: float = 5.0
     enable_mujoco: bool = False
     enable_mission_pad: bool = True
+    gesture_commands_enabled: bool = True
 
 
 def detect_local_ip(preferred_prefix: str = "192.168.10.") -> str:

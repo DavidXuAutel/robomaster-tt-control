@@ -64,13 +64,22 @@ def try_find(retries: int, interval: float) -> tuple[str, str]:
     return "", ""
 
 
-def launch_gui(tello_ip: str, local_ip: str) -> None:
+def launch_gui(
+    tello_ip: str,
+    local_ip: str,
+    inference: str = "gestures",
+    gesture_dry_run: bool = False,
+) -> None:
     os.makedirs(os.path.join(REPO, "logs"), exist_ok=True)
     gui_log = os.path.join(REPO, "logs", "gui.log")
     with open(gui_log, "a") as f:
+        cmd = [PYTHON, os.path.join(REPO, "main.py"),
+               "--tello-ip", tello_ip, "--local-ip", local_ip,
+               "--inference", inference, "-v"]
+        if gesture_dry_run:
+            cmd.append("--gesture-dry-run")
         subprocess.Popen(
-            [PYTHON, os.path.join(REPO, "main.py"),
-             "--tello-ip", tello_ip, "--local-ip", local_ip, "-v"],
+            cmd,
             stdout=f, stderr=f, cwd=REPO, start_new_session=True,
         )
     log(f"控制界面已启动（日志 {gui_log}）：点 CONNECT → 按 T 起飞，L 降落，Esc 紧急停桨")
@@ -81,6 +90,17 @@ def main() -> int:
     p.add_argument("--ssid", default=None, help="路由器 Wi-Fi 名（默认读 wifi_config.json）")
     p.add_argument("--password", default=None, help="路由器 Wi-Fi 密码（默认读 wifi_config.json）")
     p.add_argument("--drone-ssid", default=None, help="飞机热点名（已知网络时可自动连接）")
+    p.add_argument(
+        "--inference",
+        choices=("gestures", "passthrough"),
+        default="gestures",
+        help="控制界面推理后端（默认启用纯视觉手势）",
+    )
+    p.add_argument(
+        "--gesture-dry-run",
+        action="store_true",
+        help="只识别和显示手势，不发送飞行命令",
+    )
     p.add_argument("--wait-hotspot", type=float, default=480, help="等待连上 RMTT 热点的秒数")
     args = p.parse_args()
 
@@ -93,7 +113,7 @@ def main() -> int:
     lan, drone = try_find(retries=1, interval=0)
     if drone:
         log(f"飞机已在局域网: {drone}，跳过组网步骤")
-        launch_gui(drone, lan)
+        launch_gui(drone, lan, args.inference, args.gesture_dry_run)
         return 0
 
     # 1. 等待飞机热点出现并连接（已知网络可全自动；否则等用户手动点击）
@@ -154,7 +174,7 @@ def main() -> int:
 
     log(f"找到飞机: {drone}（本机 {lan}）")
     # 5. 拉起控制界面
-    launch_gui(drone, lan)
+    launch_gui(drone, lan, args.inference, args.gesture_dry_run)
     return 0
 
 

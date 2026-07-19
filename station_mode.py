@@ -83,27 +83,34 @@ def get_lan_ip() -> str:
 
 
 def find_drone(local_ip: str, timeout: float = 3.0) -> list[str]:
-    """向 local_ip 所在 /24 网段所有主机发 `command`，回 ok 的就是飞机。"""
+    """向 /24 网段多轮发送 `command`，降低 UDP 单轮扫描漏检概率。"""
     prefix = local_ip.rsplit(".", 1)[0]
     sock = _open_socket(local_ip)
     sock.settimeout(0.2)
     found: list[str] = []
     try:
-        for i in range(1, 255):
-            target = f"{prefix}.{i}"
-            if target != local_ip:
-                try:
-                    sock.sendto(b"command", (target, CMD_PORT))
-                except OSError:
-                    continue  # 接口切换瞬间可能 No route to host，跳过该地址
         deadline = time.time() + timeout
+        next_sweep = 0.0
         while time.time() < deadline:
+            now = time.time()
+            if now >= next_sweep:
+                next_sweep = now + 0.75
+                for i in range(1, 255):
+                    target = f"{prefix}.{i}"
+                    if target == local_ip:
+                        continue
+                    try:
+                        sock.sendto(b"command", (target, CMD_PORT))
+                    except OSError:
+                        continue  # 接口切换瞬间可能 No route to host，跳过该地址
             try:
                 data, addr = sock.recvfrom(1024)
             except socket.timeout:
                 continue
             if data.decode(errors="ignore").strip() == "ok" and addr[0] not in found:
                 found.append(addr[0])
+                # 已找到即可返回，避免让飞机反复进入 SDK 模式。
+                break
     finally:
         sock.close()
     return found

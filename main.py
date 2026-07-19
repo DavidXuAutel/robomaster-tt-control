@@ -24,7 +24,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--inference",
         default="passthrough",
-        help="推理后端名（默认 passthrough，可自行扩展）",
+        choices=("passthrough", "gestures"),
+        help="推理后端：passthrough 或 gestures（纯视觉手势控制）",
     )
     p.add_argument(
         "--mujoco",
@@ -35,6 +36,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-mission-pad",
         action="store_true",
         help="连接后不自动 mon（默认会开启垫子检测）",
+    )
+    p.add_argument(
+        "--gesture-dry-run",
+        action="store_true",
+        help="只显示手势识别结果，不发送起飞/降落命令",
     )
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
@@ -59,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         rc_speed=max(1, min(100, args.rc_speed)),
         enable_mujoco=args.mujoco,
         enable_mission_pad=(not args.no_mission_pad) or args.mujoco,
+        gesture_commands_enabled=not args.gesture_dry_run,
     )
     backend = create_backend(args.inference)
     return App(cfg, inference=backend).run()

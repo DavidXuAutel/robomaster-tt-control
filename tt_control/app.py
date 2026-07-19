@@ -14,7 +14,7 @@ import numpy as np
 
 from tt_control.config import AppConfig, detect_local_ip
 from tt_control.control import HELP_TEXT, RcAxes, map_key
-from tt_control.inference import InferenceBackend, PassthroughBackend
+from tt_control.inference import InferenceBackend, InferenceEvent, PassthroughBackend
 from tt_control.mujoco_twin import MujocoPadTwin
 from tt_control.status import is_drone_online
 from tt_control.tello_client import TelloClient
@@ -67,6 +67,13 @@ class App:
         self._buttons: Dict[str, Tuple[int, int, int, int]] = {}
         self._connect_lock = threading.Lock()
         self._cmd_lock = threading.Lock()
+        self._flight_cmd_pending = threading.Event()
+        self._last_inference_event = 0.0
+        self._gesture_test_results: set[str] = set()
+        self._gesture_test_complete = False
+        self._gesture_banner = ""
+        self._gesture_banner_color = (0, 200, 255)
+        self._gesture_banner_until = 0.0
         self._twin: Optional[MujocoPadTwin] = None
         if config.enable_mujoco:
             traj_dir = pathlib.Path.cwd() / "logs" / "trajectories"
@@ -143,6 +150,22 @@ class App:
             self._async_flight_cmd("land")
         elif name == "hover":
             self._hover()
+        elif name.startswith("train_") and name != "train_save":
+            if not self.connected:
+                self._hint = "Connect first, then start gesture training"
+                return
+            self._reset_gesture_test()
+            label = name.removeprefix("train_")
+            self._hint = self.inference.toggle_training(label)
+        elif name == "train_save":
+            self._reset_gesture_test()
+            self._hint = self.inference.save_training_profile()
+
+    def _reset_gesture_test(self) -> None:
+        self._gesture_test_results.clear()
+        self._gesture_test_complete = False
+        self._gesture_banner = ""
+        self._gesture_banner_until = 0.0
 
     def _connect(self) -> None:
         with self._connect_lock:
@@ -242,7 +265,21 @@ class App:
         if not self.connected or not self.client:
             self._hint = "Connect first"
             return
-        threading.Thread(target=self._run_flight_cmd, args=(kind,), daemon=True).start()
+        if self._flight_cmd_pending.is_set():
+            self._hint = "Flight command already running"
+            return
+        self._flight_cmd_pending.set()
+        threading.Thread(
+            target=self._run_flight_cmd_guarded,
+            args=(kind,),
+            daemon=True,
+        ).start()
+
+    def _run_flight_cmd_guarded(self, kind: str) -> None:
+        try:
+            self._run_flight_cmd(kind)
+        finally:
+            self._flight_cmd_pending.clear()
 
     def _run_flight_cmd(self, kind: str) -> None:
         if not self.client:
@@ -330,7 +367,10 @@ class App:
                 )
             else:
                 try:
-                    frame = self.inference.infer(frame)
+                    if not self._gesture_test_complete:
+                        frame = self.inference.infer(frame)
+                        for event in self.inference.drain_events():
+                            self._handle_inference_event(event)
                 except Exception as e:
                     logger.exception("inference error: %s", e)
 
@@ -338,6 +378,70 @@ class App:
             cv2.imshow(self.config.window_name, frame)
 
         return 0
+
+    def _handle_inference_event(self, event: InferenceEvent) -> None:
+        """把模型事件转换成飞行命令；所有安全条件只在这一层判断。"""
+        now = time.monotonic()
+        if now - self._last_inference_event < 1.0:
+            return
+        if not self.config.gesture_commands_enabled:
+            self._last_inference_event = now
+            self._gesture_test_results.add(event.kind)
+            self._last_key_label = f"DRY-RUN {event.kind} {event.confidence:.2f}"
+            label = "TAKEOFF" if event.kind == "takeoff" else "LAND"
+            self._gesture_banner = f"{label} GESTURE DETECTED"
+            self._gesture_banner_color = (40, 210, 255)
+            self._gesture_banner_until = now + 3.0
+            self._hint = f"Gesture test PASS: {event.kind}"
+            logger.info("gesture dry-run %s: %s", event.kind, event.detail)
+            if {"takeoff", "land"}.issubset(self._gesture_test_results):
+                self._gesture_test_complete = True
+                self._gesture_banner = "GESTURE TEST PASSED"
+                self._gesture_banner_color = (40, 210, 40)
+                self._gesture_banner_until = float("inf")
+                self._hint = "PASS: takeoff + land detected; gesture inference stopped"
+                logger.info("gesture dry-run test complete: takeoff + land PASS")
+            return
+        if not (self.connected and self.client):
+            self._hint = f"Gesture {event.kind} ignored: not connected"
+            return
+        if self._flight_cmd_pending.is_set():
+            return
+
+        try:
+            height = int(self.client.state.get("h", "0"))
+        except ValueError:
+            height = 0
+
+        if event.kind == "takeoff":
+            if self._flying or height > 20:
+                self._hint = "Palm-up ignored: already airborne"
+                return
+            try:
+                battery = int(self.client.state.get("bat", "-1"))
+            except ValueError:
+                battery = -1
+            if battery < 30:
+                reason = "battery unknown" if battery < 0 else f"battery {battery}%"
+                self._hint = f"Palm-up blocked: {reason}"
+                logger.warning("gesture takeoff blocked: %s", reason)
+                return
+            self._last_inference_event = now
+            self._last_key_label = f"GESTURE palm-up {event.confidence:.2f}"
+            self._hint = "Palm-up confirmed - taking off"
+            logger.info("gesture takeoff: %s", event.detail)
+            self._async_flight_cmd("takeoff")
+            return
+
+        if event.kind == "land":
+            if not self._flying and height <= 20:
+                self._hint = "Finger-snap ignored: already grounded"
+                return
+            self._last_inference_event = now
+            self._last_key_label = f"GESTURE finger-snap {event.confidence:.2f}"
+            self._hint = "Visual finger-snap confirmed - landing"
+            logger.info("gesture land: %s", event.detail)
+            self._async_flight_cmd("land")
 
     def _dispatch_action(self, action, key: int) -> None:
         kind = action.kind
@@ -478,6 +582,24 @@ class App:
         self._draw_button(frame, "land", sx, by, "LAND", (0, 100, 220))
         by += BTN_H + 8
         self._draw_button(frame, "hover", sx, by, "HOVER", (120, 120, 120))
+        if self.inference.training_supported:
+            by += BTN_H + 8
+            active = self.inference.active_training_label
+            training_buttons = (
+                ("takeoff", "TRAIN TAKEOFF", (120, 95, 30)),
+                ("land", "TRAIN LAND", (125, 75, 75)),
+                ("none", "TRAIN NONE", (100, 100, 100)),
+            )
+            for label, idle_text, idle_color in training_buttons:
+                button_text = f"STOP {label.upper()}" if active == label else idle_text
+                button_color = (30, 70, 210) if active == label else idle_color
+                self._draw_button(
+                    frame, f"train_{label}", sx, by, button_text, button_color
+                )
+                by += BTN_H + 8
+            self._draw_button(
+                frame, "train_save", sx, by, "SAVE PROFILE", (110, 45, 125)
+            )
 
         bat = self.client.state.get("bat", "?") if self.client else "?"
         alt = self.client.state.get("h", "?") if self.client else "?"
@@ -492,6 +614,13 @@ class App:
         ]
         if self._twin:
             lines.append(f"MuJoCo: {self._twin.status}")
+        if self.inference.status_text:
+            lines.append(self.inference.status_text)
+        if not self.config.gesture_commands_enabled:
+            takeoff = "PASS" if "takeoff" in self._gesture_test_results else "WAIT"
+            land = "PASS" if "land" in self._gesture_test_results else "WAIT"
+            state = "COMPLETE" if self._gesture_test_complete else "RUNNING"
+            lines.append(f"DRY-RUN TEST [{state}]  TAKEOFF {takeoff} | LAND {land}")
         lines = [_ascii(t)[:70] for t in lines]
         colors = [fly_color] + [(60, 255, 60)] * (len(lines) - 1)
         self._draw_text_panel(frame, lines, 6, 6, colors)
@@ -507,6 +636,38 @@ class App:
                 h - 10 - block_h,
                 [(235, 235, 235)] * len(help_lines),
             )
+        self._draw_gesture_banner(frame)
+
+    def _draw_gesture_banner(self, frame: np.ndarray) -> None:
+        if (
+            self.config.gesture_commands_enabled
+            or not self._gesture_banner
+            or time.monotonic() > self._gesture_banner_until
+        ):
+            return
+        h, w = frame.shape[:2]
+        x1, x2 = 24, max(300, w - BTN_W - BTN_MARGIN * 2)
+        y1, y2 = max(110, h // 2 - 76), max(230, h // 2 + 76)
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), (15, 15, 15), -1)
+        cv2.addWeighted(overlay, 0.82, frame, 0.18, 0, frame)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), self._gesture_banner_color, 5)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 1.05
+        text = self._gesture_banner
+        tw = cv2.getTextSize(text, font, scale, 3)[0][0]
+        cv2.putText(
+            frame, text, (x1 + max(12, (x2 - x1 - tw) // 2), y1 + 66),
+            font, scale, self._gesture_banner_color, 3, cv2.LINE_AA,
+        )
+        takeoff = "PASS" if "takeoff" in self._gesture_test_results else "WAIT"
+        land = "PASS" if "land" in self._gesture_test_results else "WAIT"
+        detail = f"TAKEOFF: {takeoff}     LAND: {land}"
+        dw = cv2.getTextSize(detail, font, 0.72, 2)[0][0]
+        cv2.putText(
+            frame, detail, (x1 + max(12, (x2 - x1 - dw) // 2), y1 + 118),
+            font, 0.72, (245, 245, 245), 2, cv2.LINE_AA,
+        )
 
     def _draw_text_panel(self, frame, lines, x, y_top, colors) -> None:
         """深色半透明底板 + 文字，保证任何视频背景下都可读。"""
@@ -530,4 +691,8 @@ class App:
         if self._probe_thread and self._probe_thread.is_alive():
             self._probe_thread.join(timeout=2.0)
         self._cleanup_session(land=True)
+        try:
+            self.inference.close()
+        except Exception:
+            logger.exception("inference close failed")
         cv2.destroyAllWindows()
