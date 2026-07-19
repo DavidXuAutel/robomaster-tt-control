@@ -105,11 +105,6 @@ class TelloClient:
     def takeoff(self) -> Optional[str]:
         return self.send("takeoff", timeout=20.0)
 
-    def up(self, centimeters: int) -> Optional[str]:
-        """按 Tello SDK 范围执行相对上升。"""
-        centimeters = max(20, min(500, int(centimeters)))
-        return self.send(f"up {centimeters}", timeout=15.0)
-
     def land(self) -> Optional[str]:
         return self.send("land", timeout=20.0)
 

@@ -45,7 +45,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--gesture-flight-test",
         action="store_true",
-        help="启用需手动 ARM 的真机流程：手势起飞 -> 相对上升40cm -> 悬停 -> 手势降落",
+        help="启用需手动 ARM 的真机流程：手势起飞 -> 自动起飞高度悬停 -> 手势降落",
     )
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)

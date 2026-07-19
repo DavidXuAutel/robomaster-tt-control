@@ -417,30 +417,15 @@ class App:
                             )
                             self._flying = False
                             return
-                        self._flight_test_state = "ASCENDING_40CM"
-                        self._hint = "Takeoff OK - ascending another 40cm..."
-                        self._record_flight_test("command_up_40")
-                        up_resp = self.client.up(40)
-                        self._record_flight_test("command_up_40_result", response=up_resp)
-                        if up_resp == "ok" and self._flight_test_state != "FAILED":
-                            self.client.rc(0, 0, 0, 0)
-                            self._flight_test_state = "HOVERING_WAIT_LAND"
-                            self._hint = "Hovering - show LAND gesture"
-                            self._gesture_banner = "HOVERING - WAIT LAND GESTURE"
-                            self._gesture_banner_color = (0, 210, 255)
-                            self._gesture_banner_until = float("inf")
-                            self._record_flight_test("hovering_after_up_40")
-                        else:
-                            self._flight_test_state = "FAILED"
-                            self._hint = f"up 40 failed: {up_resp or 'timeout'}; landing"
-                            self._record_flight_test(
-                                "failed", reason="up 40 failed", response=up_resp
-                            )
-                            land_resp = self.client.land()
-                            self._record_flight_test(
-                                "land_after_failure", response=land_resp
-                            )
-                            self._flying = False
+                        # Tello 的自动 takeoff 已经完成离地和定高；测试不再发送
+                        # 任何额外 up/down 指令，直接在该高度悬停等待降落手势。
+                        self.client.rc(0, 0, 0, 0)
+                        self._flight_test_state = "HOVERING_WAIT_LAND"
+                        self._hint = "Takeoff OK - hovering; show LAND gesture"
+                        self._gesture_banner = "HOVERING - WAIT LAND GESTURE"
+                        self._gesture_banner_color = (0, 210, 255)
+                        self._gesture_banner_until = float("inf")
+                        self._record_flight_test("hovering_after_takeoff")
                     else:
                         self._hint = "Airborne — hold WASD/arrows to move, SPACE hover"
                 else:
@@ -490,7 +475,7 @@ class App:
                         self._gesture_banner = "REAL FLIGHT TEST PASSED"
                         self._gesture_banner_color = (40, 210, 40)
                         self._gesture_banner_until = float("inf")
-                        self._hint = "PASS: takeoff + up 40cm + hover + gesture land"
+                        self._hint = "PASS: takeoff + hover + gesture land"
                         self._record_flight_test("passed")
                         self._record_flight_test("recorder_closed", reason="test_passed")
                         if self._flight_test_recorder:

@@ -13,9 +13,8 @@ class _FakeClient:
 
 
 class _FakeFlightClient(_FakeClient):
-    def __init__(self, up_response: str | None = "ok") -> None:
+    def __init__(self) -> None:
         super().__init__(battery=90, height=0)
-        self.up_response = up_response
         self.calls: list[object] = []
 
     def rc(self, *axes) -> None:
@@ -23,14 +22,8 @@ class _FakeFlightClient(_FakeClient):
 
     def takeoff(self):
         self.calls.append("takeoff")
-        self.state["h"] = "80"
+        self.state["h"] = "40"
         return "ok"
-
-    def up(self, centimeters: int):
-        self.calls.append(("up", centimeters))
-        if self.up_response == "ok":
-            self.state["h"] = str(int(self.state["h"]) + centimeters)
-        return self.up_response
 
     def land(self):
         self.calls.append("land")
@@ -91,7 +84,7 @@ class AppGestureEventTests(unittest.TestCase):
         self.assertEqual(app._gesture_banner, "GESTURE TEST PASSED")
         self.assertIn("inference stopped", app._hint)
 
-    def test_real_flight_protocol_takeoff_up_40_hover_then_land(self):
+    def test_real_flight_protocol_takeoff_hover_then_land_without_extra_up(self):
         app = App(AppConfig(gesture_flight_test=True), PassthroughBackend())
         app._conn_state = ConnState.CONNECTED
         client = _FakeFlightClient()
@@ -99,23 +92,12 @@ class AppGestureEventTests(unittest.TestCase):
         app._flight_test_state = "TAKING_OFF"
         app._run_flight_cmd("takeoff")
         self.assertEqual(app._flight_test_state, "HOVERING_WAIT_LAND")
-        self.assertIn(("up", 40), client.calls)
+        self.assertFalse(any(isinstance(call, tuple) and call[0] == "up" for call in client.calls))
         self.assertTrue(app._flying)
         app._flight_test_state = "LANDING"
         app._run_flight_cmd("land")
         self.assertEqual(app._flight_test_state, "PASSED")
         self.assertTrue(app._gesture_test_complete)
-        self.assertFalse(app._flying)
-
-    def test_real_flight_protocol_lands_if_up_40_fails(self):
-        app = App(AppConfig(gesture_flight_test=True), PassthroughBackend())
-        app._conn_state = ConnState.CONNECTED
-        client = _FakeFlightClient(up_response=None)
-        app.client = client  # type: ignore[assignment]
-        app._flight_test_state = "TAKING_OFF"
-        app._run_flight_cmd("takeoff")
-        self.assertEqual(app._flight_test_state, "FAILED")
-        self.assertIn("land", client.calls)
         self.assertFalse(app._flying)
 
     def test_real_flight_takeoff_gesture_requires_arm(self):
