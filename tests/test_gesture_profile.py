@@ -107,11 +107,21 @@ class GestureProfileTests(unittest.TestCase):
         for index, landmarks in enumerate(takeoff_sequence(24, 0.21), start=50):
             backend._update_profile_match(index * 0.08, landmarks)
         self.assertEqual([event.kind for event in backend._events], ["takeoff"])
-        backend._mark_hand_absent(10.0)
-        backend._mark_hand_absent(10.2)
+        self.assertFalse(backend._mark_hand_absent(10.0))
+        self.assertFalse(backend._mark_hand_absent(10.2))
         self.assertFalse(backend._profile_armed)
-        backend._mark_hand_absent(10.41)
+        self.assertTrue(backend._mark_hand_absent(10.41))
         self.assertTrue(backend._profile_armed)
+
+    def test_short_hand_dropout_keeps_motion_buffer(self):
+        backend = MediaPipeGestureBackend.__new__(MediaPipeGestureBackend)
+        backend._profile = GestureProfile.build(make_samples())
+        backend._profile_armed = True
+        backend._hand_absent_since = None
+        backend._live_landmarks = deque([(1.0, open_hand()), (1.1, open_hand(-0.02))])
+        self.assertFalse(backend._mark_hand_absent(1.2))
+        self.assertFalse(backend._mark_hand_absent(1.45))
+        self.assertEqual(len(backend._live_landmarks), 2)
 
 
 class GuidedTrainingSessionTests(unittest.TestCase):

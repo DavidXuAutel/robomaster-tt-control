@@ -202,6 +202,12 @@ class App:
         if self._flight_test_recorder:
             self._flight_test_recorder.record(event, **self._test_snapshot(), **data)
 
+    def _close_flight_test_log(self, reason: str) -> None:
+        if self._flight_test_recorder:
+            self._record_flight_test("recorder_closed", reason=reason)
+            self._flight_test_recorder.close()
+            self._flight_test_recorder = None
+
     def _arm_flight_test(self) -> None:
         if not self.config.gesture_flight_test:
             return
@@ -259,6 +265,9 @@ class App:
         if self._flight_test_state in ("DISARMED", "PASSED"):
             self._hint = "No active flight test"
             return
+        if self._flight_test_state == "FAILED":
+            self._hint = "Failure already recorded; review the current test log"
+            return
         self._record_flight_test("failed", reason=reason)
         self._flight_test_state = "FAILED"
         self._gesture_banner = "TEST FAILED - LANDING"
@@ -274,6 +283,9 @@ class App:
                 pass
         if (self._flying or height > 20) and not self._flight_cmd_pending.is_set():
             self._async_flight_cmd("land")
+        elif not self._flying and height <= 20 and not self._flight_cmd_pending.is_set():
+            self._gesture_test_complete = True
+            self._close_flight_test_log("failed_on_ground")
 
     def _connect(self) -> None:
         with self._connect_lock:
@@ -415,7 +427,9 @@ class App:
                             self._record_flight_test(
                                 "land_after_failure", response=land_resp
                             )
-                            self._flying = False
+                            self._flying = land_resp != "ok"
+                            self._gesture_test_complete = True
+                            self._close_flight_test_log("failed_during_takeoff")
                             return
                         # Tello 的自动 takeoff 已经完成离地和定高；测试不再发送
                         # 任何额外 up/down 指令，直接在该高度悬停等待降落手势。
@@ -449,6 +463,8 @@ class App:
                             "land_after_failure", response=land_resp
                         )
                         self._flying = land_resp != "ok"
+                        self._gesture_test_complete = True
+                        self._close_flight_test_log("takeoff_failed")
                 logger.info("takeoff result=%s flying=%s", resp, self._flying)
             elif kind == "land":
                 self._record_flight_test("command_land")
@@ -477,10 +493,7 @@ class App:
                         self._gesture_banner_until = float("inf")
                         self._hint = "PASS: takeoff + hover + gesture land"
                         self._record_flight_test("passed")
-                        self._record_flight_test("recorder_closed", reason="test_passed")
-                        if self._flight_test_recorder:
-                            self._flight_test_recorder.close()
-                            self._flight_test_recorder = None
+                        self._close_flight_test_log("test_passed")
                         logger.info("real flight test PASS log=%s", self._flight_test_log)
                     else:
                         self._flight_test_state = "FAILED"
@@ -490,6 +503,12 @@ class App:
                         self._record_flight_test(
                             "failed", reason="land command failed", response=resp
                         )
+                elif self.config.gesture_flight_test and self._flight_test_state == "FAILED":
+                    self._gesture_test_complete = True
+                    self._record_flight_test(
+                        "failure_landing_finished", response=resp
+                    )
+                    self._close_flight_test_log("failure_landing_finished")
                 logger.info("land result=%s", resp)
 
     def _hover(self) -> None:

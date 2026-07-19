@@ -370,12 +370,20 @@ class MediaPipeGestureBackend(InferenceBackend):
                 self._status = self._training_session.status
                 if self._training_session.completed:
                     self._finish_training()
+            elif self._profile:
+                if self._mark_hand_absent(timestamp):
+                    self._detector.reset()
+                    self._live_landmarks.clear()
+                    self._status = "Gesture profile: waiting for hand"
+                else:
+                    self._status = (
+                        f"Gesture profile: brief hand dropout; "
+                        f"keeping {len(self._live_landmarks)} frames"
+                    )
             else:
                 self._detector.reset()
                 self._live_landmarks.clear()
-                self._mark_hand_absent(timestamp)
-                prefix = "Gesture profile" if self._profile else "Gesture"
-                self._status = f"{prefix}: waiting for hand"
+                self._status = "Gesture: waiting for hand"
             self._log_status()
             return frame
 
@@ -421,17 +429,20 @@ class MediaPipeGestureBackend(InferenceBackend):
         self._draw_hand(frame, landmarks)
         return frame
 
-    def _mark_hand_absent(self, timestamp: float) -> None:
-        """连续看不到手 0.4 秒才重新布防，忽略 MediaPipe 的单帧漏检。"""
+    def _mark_hand_absent(self, timestamp: float) -> bool:
+        """返回是否已连续丢手 0.4 秒；短暂漏检不应切断动态轨迹。"""
         if not self._profile:
-            return
+            return True
         if self._hand_absent_since is None:
             self._hand_absent_since = timestamp
-        elif timestamp - self._hand_absent_since >= 0.40:
+            return False
+        if timestamp - self._hand_absent_since >= 0.40:
             self._profile_armed = True
+            return True
+        return False
 
     def _update_profile_match(self, timestamp: float, landmarks: list[Point3]) -> None:
-        if self._live_landmarks and timestamp - self._live_landmarks[-1][0] > 0.30:
+        if self._live_landmarks and timestamp - self._live_landmarks[-1][0] > 0.45:
             self._live_landmarks.clear()
         self._live_landmarks.append((timestamp, landmarks))
         while self._live_landmarks and timestamp - self._live_landmarks[0][0] > 2.0:

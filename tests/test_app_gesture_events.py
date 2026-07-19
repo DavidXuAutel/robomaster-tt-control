@@ -111,6 +111,17 @@ class AppGestureEventTests(unittest.TestCase):
         self.assertEqual(commands, ["takeoff"])
         self.assertEqual(app._flight_test_state, "TAKING_OFF")
 
+    def test_fail_button_on_ground_freezes_test_and_is_idempotent(self):
+        app, commands = self.make_app(battery=90, height=0)
+        app.config.gesture_flight_test = True
+        app._flight_test_state = "ARMED"
+        app._fail_flight_test("test failure")
+        self.assertEqual(app._flight_test_state, "FAILED")
+        self.assertTrue(app._gesture_test_complete)
+        self.assertEqual(commands, [])
+        app._fail_flight_test("clicked twice")
+        self.assertIn("already recorded", app._hint)
+
 
 if __name__ == "__main__":
     unittest.main()
