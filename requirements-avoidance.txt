@@ -1,0 +1,16 @@
+# 视觉避障依赖 —— 仅「感知服务端」(GPU 机, server/da_v2_service.py) 需要。
+#
+# 控制端(本仓库 main.py / offline_avoidance.py / sim_avoidance.py)不需要任何
+# 额外依赖:DepthAnythingBackend 只用标准库 urllib + 主 requirements 的 numpy/opencv。
+#
+# 部署(在 GPU 机上,独立 venv,避免污染主环境):
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements-avoidance.txt
+#   .venv/bin/python da_v2_service.py --host 0.0.0.0 --port 8899
+#
+# 权重(depth-anything/Depth-Anything-V2-Small-hf)由 transformers 首次运行自动下载。
+
+torch
+transformers
+pillow
+numpy

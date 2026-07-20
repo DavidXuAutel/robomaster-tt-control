@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import platform
 import socket
 import subprocess
 from typing import Optional
 
 
 def ping_host(host: str, timeout_s: float = 1.0) -> bool:
+    if platform.system().lower().startswith("win"):
+        # Windows: -n 次数, -w 超时(毫秒)
+        cmd = ["ping", "-n", "1", "-w", str(max(1, int(timeout_s * 1000))), host]
+    else:
+        # Linux/macOS: -c 次数, -W 超时(秒)
+        cmd = ["ping", "-c", "1", "-W", str(max(1, int(timeout_s))), host]
     try:
         r = subprocess.run(
-            ["ping", "-c", "1", "-W", str(max(1, int(timeout_s))), host],
+            cmd,
             capture_output=True,
             text=True,
             timeout=timeout_s + 1.5,

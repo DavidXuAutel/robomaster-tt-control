@@ -21,14 +21,14 @@ class RcAxes:
 
 @dataclass
 class KeyAction:
-    kind: str  # takeoff | land | emergency | hover | rc | toggle_help | connect_toggle | quit | none
+    kind: str  # takeoff | land | emergency | hover | rc | auto_toggle | toggle_help | connect_toggle | quit | none
     axes: RcAxes = field(default_factory=RcAxes)
 
 
 HELP_TEXT = [
     "C / CONNECT: link drone   T: take off   L: land",
     "Hold to fly:  W/S fwd/back  A/D left/right  R/F up/down  Q/E turn",
-    "SPACE: hover   ESC: EMERGENCY STOP   H: help   X: quit",
+    "V: semi-auto avoid (ARMED->ON)   SPACE: hover   ESC: E-STOP   H: help   X: quit",
 ]
 
 # OpenCV waitKeyEx 方向键（常见值）
@@ -59,6 +59,8 @@ def map_key(key: int, speed: int = 40) -> KeyAction:
         return KeyAction("hover")
     if ch == "h":
         return KeyAction("toggle_help")
+    if ch == "v":
+        return KeyAction("auto_toggle")
     if ch == "x":
         return KeyAction("quit")
 

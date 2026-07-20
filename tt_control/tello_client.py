@@ -34,6 +34,7 @@ class TelloClient:
         self._lock = threading.Lock()
         self._running = False
         self._state_thread: Optional[threading.Thread] = None
+        self._ka_thread: Optional[threading.Thread] = None
         self.state: dict[str, str] = {}
         self._on_state: Optional[Callable[[dict[str, str]], None]] = None
 
@@ -42,6 +43,25 @@ class TelloClient:
         self._running = True
         self._state_thread = threading.Thread(target=self._state_loop, daemon=True)
         self._state_thread.start()
+        # 保活:定期发 command,防止 Tello 空闲自动关机/断 SDK
+        self._ka_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
+        self._ka_thread.start()
+
+    def _keepalive_loop(self, interval: float = 5.0) -> None:
+        while self._running:
+            slept = 0.0
+            while slept < interval:
+                if not self._running:
+                    return
+                time.sleep(0.5)
+                slept += 0.5
+            with self._lock:
+                try:
+                    self._cmd.settimeout(2.0)
+                    self._cmd.sendto(b"command", self.tello_addr)
+                    self._cmd.recvfrom(2048)
+                except OSError:
+                    pass
 
     def _state_loop(self) -> None:
         while self._running:
@@ -82,8 +102,12 @@ class TelloClient:
                 logger.warning("timeout: %s", cmd)
                 return None
 
-    def connect(self) -> bool:
-        return self.send("command", timeout=3.0) == "ok"
+    def connect(self, retries: int = 4) -> bool:
+        # Tello 常丢首包,重试几次
+        for _ in range(max(1, retries)):
+            if self.send("command", timeout=2.5) == "ok":
+                return True
+        return False
 
     def stream_on(self) -> bool:
         return self.send("streamon", timeout=5.0) == "ok"
@@ -145,6 +169,8 @@ class TelloClient:
         self._running = False
         if self._state_thread and self._state_thread.is_alive():
             self._state_thread.join(timeout=1.0)
+        if self._ka_thread and self._ka_thread.is_alive():
+            self._ka_thread.join(timeout=1.0)
         for s in (self._cmd, self._state_sock):
             try:
                 s.close()

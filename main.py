@@ -24,7 +24,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--inference",
         default="passthrough",
-        help="推理后端名（默认 passthrough，可自行扩展）",
+        help="推理后端名（passthrough / depth-anything / gestures）",
+    )
+    p.add_argument(
+        "--depth-service",
+        default="",
+        help="depth-anything 后端的推理服务地址（留空用内置默认 4090 地址）",
     )
     p.add_argument(
         "--mujoco",
@@ -36,6 +41,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="连接后不自动 mon（默认会开启垫子检测）",
     )
+    p.add_argument(
+        "--gesture-dry-run",
+        action="store_true",
+        help="只显示手势识别结果，不发送起飞/降落命令",
+    )
+    p.add_argument(
+        "--gesture-flight-test",
+        action="store_true",
+        help="启用需手动 ARM 的真机流程：手势起飞 -> 自动起飞高度悬停 -> 手势降落",
+    )
+    p.add_argument(
+        "--sim",
+        action="store_true",
+        help="离线仿真:用 SimDrone/SimVideo 代替真机(无需飞机)",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -46,6 +66,12 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if args.gesture_dry_run and args.gesture_flight_test:
+        logging.error("--gesture-dry-run 与 --gesture-flight-test 不能同时使用")
+        return 2
+    if args.gesture_flight_test and args.inference != "gestures":
+        logging.error("真机手势测试必须使用 --inference gestures")
+        return 2
 
     local_ip = args.local_ip or detect_local_ip()
     if not local_ip:
@@ -59,8 +85,15 @@ def main(argv: list[str] | None = None) -> int:
         rc_speed=max(1, min(100, args.rc_speed)),
         enable_mujoco=args.mujoco,
         enable_mission_pad=(not args.no_mission_pad) or args.mujoco,
+        gesture_commands_enabled=not args.gesture_dry_run,
+        gesture_flight_test=args.gesture_flight_test,
+        sim=args.sim,
     )
-    backend = create_backend(args.inference)
+    # 手势后端通过 --inference gestures 选择；depth-anything 可注入远端服务地址
+    kw = {}
+    if args.inference in ("depth-anything", "da-v2", "depth") and args.depth_service:
+        kw["service_url"] = args.depth_service
+    backend = create_backend(args.inference, **kw)
     return App(cfg, inference=backend).run()
 
 

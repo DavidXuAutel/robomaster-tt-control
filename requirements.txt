@@ -2,3 +2,4 @@ numpy>=1.20
 opencv-python>=4.5
 av>=10.0
 mujoco>=3.0
+mediapipe>=0.10.35,<0.11
