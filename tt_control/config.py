@@ -30,6 +30,7 @@ class AppConfig:
     enable_mission_pad: bool = True
     gesture_commands_enabled: bool = True
     gesture_flight_test: bool = False
+    sim: bool = False          # 使用 SimDrone/SimVideo 离线仿真(无需真机)
 
 
 def detect_local_ip(preferred_prefix: str = "192.168.10.") -> str:
@@ -47,13 +48,16 @@ def detect_local_ip(preferred_prefix: str = "192.168.10.") -> str:
         if addr.startswith(preferred_prefix):
             return addr
 
-    # macOS / 无 ip 命令时：尝试 UDP 探测默认路由侧地址（可能不是 Wi-Fi）
+    # macOS / Windows / 无 ip 命令时：用 UDP 路由探测本机主用地址。
+    # 优先 Tello 直连网段；找不到则回退为本机地址（如 station 模式下与飞机同网段）。
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect((TELLO_IP, CMD_PORT))
         ip = s.getsockname()[0]
         s.close()
         if ip.startswith(preferred_prefix):
+            return ip
+        if ip and ip != "0.0.0.0":
             return ip
     except OSError:
         pass

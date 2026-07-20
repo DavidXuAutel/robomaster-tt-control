@@ -55,11 +55,16 @@ class PassthroughBackend(InferenceBackend):
         return frame
 
 
-def create_backend(name: str = "passthrough") -> InferenceBackend:
+def create_backend(name: str = "passthrough", **kwargs) -> InferenceBackend:
     name = (name or "passthrough").lower()
     if name in ("passthrough", "none", "identity"):
         return PassthroughBackend()
-    if name in ("gesture", "gestures", "hand"):
+    if name in ("depth-anything", "da-v2", "depth"):
+        # 延迟导入：避免无避障需求时也加载 opencv 之外的依赖
+        from tt_control.depth_backend import DepthAnythingBackend
+
+        return DepthAnythingBackend(**kwargs)
+    if name in ("gesture", "gestures", "hand", "hands"):
         # 延迟导入，保证不启用手势时无需安装 mediapipe。
         from tt_control.gesture_control import MediaPipeGestureBackend
 

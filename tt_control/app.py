@@ -12,6 +12,7 @@ from typing import Dict, Optional, Tuple
 import cv2
 import numpy as np
 
+from tt_control.avoidance import AvoidanceController
 from tt_control.config import AppConfig, detect_local_ip
 from tt_control.control import HELP_TEXT, RcAxes, map_key
 from tt_control.flight_test import FlightTestRecorder
@@ -20,6 +21,7 @@ from tt_control.mujoco_twin import MujocoPadTwin
 from tt_control.status import is_drone_online
 from tt_control.tello_client import TelloClient
 from tt_control.video_stream import VideoStream
+from tt_control.sim_drone import SimDrone, SimVideo
 logger = logging.getLogger(__name__)
 
 BTN_W, BTN_H = 160, 44
@@ -86,6 +88,13 @@ class App:
                 get_state=lambda: (self.client.state if self.client else {}),
                 traj_dir=traj_dir,
             )
+        # 半自动视觉避障：OFF -> ARMED -> ON（需已起飞 + 深度后端）
+        self._auto = "OFF"
+        self._auto_hud = ""
+        self._controller = AvoidanceController()
+        # 深度后端持有同一 controller 用于叠图标注「此刻会输出的杆量」
+        if hasattr(self.inference, "controller"):
+            self.inference.controller = self._controller
 
     @property
     def connected(self) -> bool:
@@ -115,19 +124,13 @@ class App:
             if self._conn_state == ConnState.CONNECTING:
                 time.sleep(0.5)
                 continue
-            local = self.config.local_ip or detect_local_ip()
-            online = is_drone_online(self.config.tello_ip, local_ip=local or "")
+            if self.config.sim:
+                online = True
+            else:
+                local = self.config.local_ip or detect_local_ip()
+                online = is_drone_online(self.config.tello_ip, local_ip=local or "")
             self._online = online
-            if self.client and self.client.state:
-                try:
-                    h = int(self.client.state.get("h", "0"))
-                    if h > 20:
-                        self._flying = True
-                    elif h <= 5 and self._flying:
-                        # 可能已降落
-                        pass
-                except ValueError:
-                    pass
+            # 飞行状态以起飞/降落指令为准,不用高度读数猜(避免落地后被误判为在飞、切换错乱)
             if self._conn_state == ConnState.CONNECTED:
                 if not online and not (self.client and self.client.state):
                     self._status_msg = "link lost?"
@@ -295,9 +298,12 @@ class App:
             self._status_msg = "connecting..."
             self._hint = "Connecting..."
             try:
-                local_ip = self.config.local_ip or detect_local_ip()
-                if not local_ip:
-                    raise RuntimeError("no local IP - join drone Wi-Fi or pass --local-ip")
+                if self.config.sim:
+                    local_ip = self.config.local_ip or "sim"
+                else:
+                    local_ip = self.config.local_ip or detect_local_ip()
+                    if not local_ip:
+                        raise RuntimeError("no local IP - join drone Wi-Fi or pass --local-ip")
                 self.config.local_ip = local_ip
 
                 if self.client:
@@ -305,12 +311,15 @@ class App:
                 if self.video:
                     self.video.stop()
 
-                self.client = TelloClient(
-                    local_ip=local_ip,
-                    tello_ip=self.config.tello_ip,
-                    cmd_port=self.config.cmd_port,
-                    state_port=self.config.state_port,
-                )
+                if self.config.sim:
+                    self.client = SimDrone(local_ip=local_ip or "sim", tello_ip=self.config.tello_ip)
+                else:
+                    self.client = TelloClient(
+                        local_ip=local_ip,
+                        tello_ip=self.config.tello_ip,
+                        cmd_port=self.config.cmd_port,
+                        state_port=self.config.state_port,
+                    )
                 if not self.client.connect():
                     raise RuntimeError("command 未返回 ok")
                 self.client.start_state_listener()
@@ -323,7 +332,10 @@ class App:
                         self._hint = f"Connected; pad detect: {pad}"
                     else:
                         self._hint = "Connected — fly over Mission Pad for MuJoCo lock"
-                self.video = VideoStream(local_ip, self.config.video_port)
+                if self.config.sim:
+                    self.video = SimVideo(local_ip, self.config.video_port)
+                else:
+                    self.video = VideoStream(local_ip, self.config.video_port)
                 self.video.start()
                 if self._twin:
                     if self._twin.start():
@@ -354,6 +366,7 @@ class App:
             logger.info("drone disconnected")
 
     def _cleanup_session(self, land: bool) -> None:
+        self._auto = "OFF"
         if self._flight_test_recorder:
             self._record_flight_test("session_cleanup", requested_land=land)
         if self._twin:
@@ -514,10 +527,43 @@ class App:
     def _hover(self) -> None:
         self._last_rc = RcAxes()
         self._last_rc_time = time.time()
+        self._auto = "OFF"  # 悬停即关闭半自动
         if self.client and self.connected:
             self.client.rc(0, 0, 0, 0)
             self._hint = "Hover"
             self._last_key_label = "SPACE/hover"
+
+    def _toggle_auto(self) -> None:
+        """V 键：首次 ARMED 确认，再按在 ARMED/ON 间切换。需已起飞 + 深度后端。"""
+        if not self._flying:
+            self._auto = "OFF"
+            self._hint = "V ignored - take off first (auto only after airborne)"
+            return
+        if not hasattr(self.inference, "latest_depth"):
+            self._hint = "V ignored - depth backend off (run --inference depth-anything)"
+            return
+        if self._auto == "OFF":
+            self._auto = "ARMED"
+            self._hint = "AUTO ARMED - press V again to ENGAGE"
+        elif self._auto == "ARMED":
+            self._auto = "ON"
+            self._controller.reset()
+            self._hint = "AUTO ON - WASD overrides, SPACE/ESC/L to stop"
+        else:  # ON -> 暂停回 ARMED
+            self._auto = "ARMED"
+            self._last_rc = RcAxes()
+            if self.client:
+                self.client.rc(0, 0, 0, 0)
+            self._hint = "AUTO paused (ARMED)"
+        self._last_key_label = f"V auto={self._auto}"
+
+    def _auto_decision(self):
+        """读最新深度 → 控制律决策；无深度则 None。"""
+        be = self.inference
+        depth = be.latest_depth() if hasattr(be, "latest_depth") else None
+        if depth is None:
+            return None
+        return self._controller.decide(depth.nearness)
 
     def _loop(self) -> int:
         blank = np.zeros((720, 960, 3), dtype=np.uint8)
@@ -689,10 +735,12 @@ class App:
             return
         if kind == "land":
             self._last_key_label = "L land"
+            self._auto = "OFF"
             self._async_flight_cmd("land")
             return
         if kind == "emergency":
             self._last_key_label = "ESC emergency"
+            self._auto = "OFF"
             if self.client:
                 self.client.emergency()
             self._flying = False
@@ -701,6 +749,9 @@ class App:
             return
         if kind == "hover":
             self._hover()
+            return
+        if kind == "auto_toggle":
+            self._toggle_auto()
             return
         if kind == "rc":
             if self.config.gesture_flight_test and self._flight_test_state not in (
@@ -725,22 +776,29 @@ class App:
         if not (self.connected and self.client and self._flying):
             return
         now = time.time()
-        # 按键松开 → 回中悬停
-        if (
-            not self._last_rc.is_zero()
-            and self._last_rc_time > 0
-            and now - self._last_rc_time > RC_HOLD_TIMEOUT
-        ):
-            self._last_rc = RcAxes()
-            self.client.rc(0, 0, 0, 0)
-            self._last_rc_send = now
-            self._hint = "Key released → hover"
+        # 键盘保持优先：有杆量时走键盘链路，覆盖半自动
+        if not self._last_rc.is_zero():
+            # 按键松开 → 回中（半自动开启时交回避障，否则悬停）
+            if self._last_rc_time > 0 and now - self._last_rc_time > RC_HOLD_TIMEOUT:
+                self._last_rc = RcAxes()
+                self.client.rc(0, 0, 0, 0)
+                self._last_rc_send = now
+                self._hint = "Key released -> auto" if self._auto == "ON" else "Key released -> hover"
+                return
+            # 按住时高频发送 rc（Tello 需要持续杆量）
+            if now - self._last_rc_send >= 1.0 / RC_SEND_HZ:
+                a, b, c, d = self._last_rc.as_tuple()
+                self.client.rc(a, b, c, d)
+                self._last_rc_send = now
             return
-        # 按住时高频发送 rc（Tello 需要持续杆量）
-        if not self._last_rc.is_zero() and now - self._last_rc_send >= 1.0 / RC_SEND_HZ:
-            a, b, c, d = self._last_rc.as_tuple()
-            self.client.rc(a, b, c, d)
-            self._last_rc_send = now
+        # 无键盘输入 + 半自动 ON → 由避障控制律驱动
+        if self._auto == "ON" and now - self._last_rc_send >= 1.0 / RC_SEND_HZ:
+            dec = self._auto_decision()
+            if dec is not None:
+                a, b, c, d = dec.axes.as_tuple()
+                self.client.rc(a, b, c, d)
+                self._last_rc_send = now
+                self._auto_hud = dec.as_hud()
 
     def _draw_button(
         self,
@@ -846,6 +904,8 @@ class App:
             f"{self._hint}",
             f"key {self._last_key_label}  RC {self._last_rc.as_tuple()}",
         ]
+        if self._auto != "OFF":
+            lines.append(f"AUTO: {self._auto}  {self._auto_hud}")
         if self._twin:
             lines.append(f"MuJoCo: {self._twin.status}")
         if self.inference.status_text:

@@ -14,3 +14,9 @@ logs/
 wifi_config.json
 logs_*.log
 gesture_profiles/
+*.bak-*
+*.orig*
+_old_gesture_*/
+.merge-backup-*/
+.pytest_cache/
+.superpowers/
