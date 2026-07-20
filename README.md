@@ -18,6 +18,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+如需开发或运行完整回归测试（含离线仿真和轨迹出图）：
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/ -q
+```
+
+`requirements-dev.txt` 已包含主运行依赖，新开发环境可直接安装该文件。
+
 ## 一键组网起飞（macOS，推荐）
 
 ```bash

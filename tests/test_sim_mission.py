@@ -1,6 +1,6 @@
 """定点航线仿真端到端:闭环飞行 + MuJoCo 孪生记录 + 出图。
 
-需要 mujoco / matplotlib(见 requirements-sim.txt);未装则跳过。
+需要 mujoco / matplotlib(见 requirements-dev.txt);未装则跳过。
 """
 import json
 import pathlib
