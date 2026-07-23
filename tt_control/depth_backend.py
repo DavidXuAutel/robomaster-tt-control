@@ -98,6 +98,11 @@ class DepthAnythingBackend(InferenceBackend):
     def last_error(self) -> str:
         return self._err
 
+    @property
+    def infer_ms(self) -> float:
+        """最近一次感知往返耗时（ms），录制器记录 depth_rtt_ms 用。"""
+        return self._infer_ms
+
     def infer(self, frame: np.ndarray) -> np.ndarray:
         now = time.time()
         need = self.min_interval <= 0.0 or (now - self._last_req) >= self.min_interval

@@ -56,6 +56,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="离线仿真:用 SimDrone/SimVideo 代替真机(无需飞机)",
     )
+    p.add_argument(
+        "--record",
+        action="store_true",
+        help="飞行中同步录制 episode(RGB+深度+动作+状态+时间戳)到 logs/episodes/",
+    )
+    p.add_argument(
+        "--record-hz",
+        type=float,
+        default=10.0,
+        help="录制采样频率(默认 10Hz,限流避免全帧落盘)",
+    )
+    p.add_argument("--cruise", type=int, default=25, help="避障:通畅前进杆量")
+    p.add_argument("--approach-pitch", type=int, default=16,
+                   help="避障:接近区前进量(调小=更原地转、少前冲,近人更安全)")
+    p.add_argument("--yaw", type=int, default=35, help="避障:转向杆量")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -88,6 +103,11 @@ def main(argv: list[str] | None = None) -> int:
         gesture_commands_enabled=not args.gesture_dry_run,
         gesture_flight_test=args.gesture_flight_test,
         sim=args.sim,
+        enable_record=args.record,
+        record_hz=args.record_hz,
+        avoid_cruise=args.cruise,
+        avoid_approach_pitch=args.approach_pitch,
+        avoid_yaw=args.yaw,
     )
     # 手势后端通过 --inference gestures 选择；depth-anything 可注入远端服务地址
     kw = {}

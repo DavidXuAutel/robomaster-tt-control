@@ -21,6 +21,7 @@ class AvoidParams:
     turn_pitch: int = 10        # 微调转向时附带的小前进量
     approach_pitch: int = 16    # 接近区(边转边前进)的前进量，保证绕弧推进而非原地转
     stop_thresh: float = 0.70   # 中区 nearness 超过 → 过近，零前进原地转/悬停
+    estop_thresh: float = 0.82  # 任一区 nearness 超过 → 遇障急停兜底(直接悬停,不前冲)
     clear_thresh: float = 0.45  # 中区 nearness 超过此值即进入「接近区」提前转向
     side_margin: float = 0.08   # 左右 nearness 差超过此值才判为一侧更开阔
     band_top: float = 0.30      # 取深度图中部水平带 [top, bottom]（比例）
@@ -72,6 +73,11 @@ class AvoidanceController:
         zones = (left, mid, right)
         # 危险度取全视场最大：障碍常只占某一区，只看中区会「斜插进侧向障碍」
         danger = max(left, mid, right)
+
+        # 遇障急停兜底:正前方(中区)非常近 = 要正撞 → 直接悬停,不往里冲(优先级最高)
+        # (侧向很近应转开而非急停,故只看 mid)
+        if mid > p.estop_thresh:
+            return AvoidDecision(RcAxes(), "BLOCKED", zones)
 
         # 整个前方视场都通畅 → 释放锁定、直行巡航
         if danger <= p.clear_thresh:

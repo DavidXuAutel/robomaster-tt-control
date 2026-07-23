@@ -12,9 +12,11 @@ from typing import Dict, Optional, Tuple
 import cv2
 import numpy as np
 
-from tt_control.avoidance import AvoidanceController
+from tt_control.auto_safety import AutoWatchdog
+from tt_control.avoidance import AvoidanceController, AvoidParams
 from tt_control.config import AppConfig, detect_local_ip
 from tt_control.control import HELP_TEXT, RcAxes, map_key
+from tt_control.episode_recorder import EpisodeRecorder
 from tt_control.flight_test import FlightTestRecorder
 from tt_control.inference import InferenceBackend, InferenceEvent, PassthroughBackend
 from tt_control.mujoco_twin import MujocoPadTwin
@@ -88,10 +90,21 @@ class App:
                 get_state=lambda: (self.client.state if self.client else {}),
                 traj_dir=traj_dir,
             )
+        # episode 录制器（--record 开启）：飞行中同步落盘观测+动作+状态
+        self._recorder: Optional[EpisodeRecorder] = None
+        # 当前生效的动作与决策状态（供录制器逐帧读取）
+        self._act_axes = RcAxes()
+        self._act_state = "IDLE"
         # 半自动视觉避障：OFF -> ARMED -> ON（需已起飞 + 深度后端）
         self._auto = "OFF"
         self._auto_hud = ""
-        self._controller = AvoidanceController()
+        self._auto_since: Optional[float] = None  # AUTO ON 起始墙钟（看门狗用）
+        self._watchdog = AutoWatchdog()
+        self._controller = AvoidanceController(AvoidParams(
+            cruise_speed=config.avoid_cruise,
+            approach_pitch=config.avoid_approach_pitch,
+            yaw_speed=config.avoid_yaw,
+        ))
         # 深度后端持有同一 controller 用于叠图标注「此刻会输出的杆量」
         if hasattr(self.inference, "controller"):
             self.inference.controller = self._controller
@@ -367,6 +380,8 @@ class App:
 
     def _cleanup_session(self, land: bool) -> None:
         self._auto = "OFF"
+        if self._recorder is not None:
+            self._close_recorder("aborted", "session_cleanup")
         if self._flight_test_recorder:
             self._record_flight_test("session_cleanup", requested_land=land)
         if self._twin:
@@ -455,6 +470,7 @@ class App:
                         self._record_flight_test("hovering_after_takeoff")
                     else:
                         self._hint = "Airborne — hold WASD/arrows to move, SPACE hover"
+                        self._start_recorder()
                 else:
                     self._hint = f"Takeoff failed: {resp or 'timeout'}"
                     self._status_msg = "takeoff failed"
@@ -497,6 +513,10 @@ class App:
                     self._flying = height is None or height > 20
                 self._hint = "Landed" if resp == "ok" else f"Land: {resp or 'timeout'}"
                 self._status_msg = "landed" if resp == "ok" else "land failed"
+                if self._recorder is not None:
+                    self._close_recorder(
+                        "completed" if resp == "ok" else "land_failed"
+                    )
                 if self.config.gesture_flight_test and self._flight_test_state == "LANDING":
                     if resp == "ok":
                         self._flight_test_state = "PASSED"
@@ -533,6 +553,87 @@ class App:
             self._hint = "Hover"
             self._last_key_label = "SPACE/hover"
 
+    def _start_recorder(self) -> None:
+        """起飞成功后开一个 episode 录制器（--record 开启且非手势测试时）。"""
+        if not self.config.enable_record or self._recorder is not None:
+            return
+        has_depth = hasattr(self.inference, "latest_depth")
+        meta_base = {
+            "drone": "sim" if self.config.sim else self.config.tello_ip,
+            "sim": self.config.sim,
+            "camera": {
+                "model": "sim" if self.config.sim else "tello-front-mono",
+                "res": "960x720",
+            },
+            "depth": {
+                "model": "DepthAnythingV2-Small" if has_depth else "none",
+                "semantic": "nearness(relative)" if has_depth else None,
+            },
+            "scale_anchor": "mission_pad",
+            "inference": self.inference.__class__.__name__,
+        }
+        try:
+            self._recorder = EpisodeRecorder(
+                pathlib.Path.cwd() / "logs" / "episodes",
+                meta_base=meta_base,
+                record_hz=self.config.record_hz,
+            )
+            logger.info("episode recording -> %s", self._recorder.dir)
+        except Exception as e:
+            logger.exception("start recorder failed: %s", e)
+            self._recorder = None
+
+    def _close_recorder(self, outcome: str, reason: Optional[str] = None) -> None:
+        if self._recorder is None:
+            return
+        try:
+            self._recorder.set_outcome(outcome, reason)
+            path = self._recorder.close()
+            logger.info("episode saved: %s (%d frames)", path, self._recorder.n_frames)
+        except Exception:
+            logger.exception("close recorder failed")
+        finally:
+            self._recorder = None
+
+    def _record_frame(self, rgb: np.ndarray, t_mono: float) -> None:
+        """把一帧观测+当前动作+状态交给录制器（录制器内部限流去重）。"""
+        rec = self._recorder
+        if rec is None or not self.client:
+            return
+        depth = self.inference.latest_depth() if hasattr(self.inference, "latest_depth") else None
+        zones = None
+        if depth is not None and getattr(depth, "nearness", None) is not None:
+            try:
+                zones = self._controller.zone_nearness(depth.nearness)
+            except Exception:
+                zones = None
+        rec.capture(
+            t_mono=t_mono,
+            rgb=rgb,
+            depth=depth,
+            depth_rtt_ms=getattr(self.inference, "infer_ms", 0.0),
+            state=self.client.state,
+            act=self._act_axes,
+            ctrl_state=self._act_state,
+            zones=zones,
+        )
+
+    def _disengage_auto(self, reason: str) -> None:
+        """看门狗触发：悬停、解除 AUTO 回 ARMED、HUD 显因、录制器记因。"""
+        self._auto = "ARMED"
+        self._auto_since = None
+        self._act_axes = RcAxes()
+        self._act_state = "HOVER"
+        self._last_rc = RcAxes()
+        if self.client:
+            self.client.rc(0, 0, 0, 0)
+        self._last_rc_send = time.time()
+        self._auto_hud = f"WATCHDOG {reason}"
+        self._hint = f"AUTO auto-disengaged: {reason} (press V to re-engage)"
+        if self._recorder is not None:
+            self._recorder.note(auto_disengage=reason)
+        logger.warning("AUTO watchdog disengage: %s", reason)
+
     def _toggle_auto(self) -> None:
         """V 键：首次 ARMED 确认，再按在 ARMED/ON 间切换。需已起飞 + 深度后端。"""
         if not self._flying:
@@ -544,13 +645,16 @@ class App:
             return
         if self._auto == "OFF":
             self._auto = "ARMED"
+            self._auto_since = None
             self._hint = "AUTO ARMED - press V again to ENGAGE"
         elif self._auto == "ARMED":
             self._auto = "ON"
+            self._auto_since = time.time()
             self._controller.reset()
             self._hint = "AUTO ON - WASD overrides, SPACE/ESC/L to stop"
         else:  # ON -> 暂停回 ARMED
             self._auto = "ARMED"
+            self._auto_since = None
             self._last_rc = RcAxes()
             if self.client:
                 self.client.rc(0, 0, 0, 0)
@@ -605,6 +709,11 @@ class App:
                     cv2.LINE_AA,
                 )
             else:
+                t_mono = time.monotonic()
+                # 录制原始图传（叠图前），限流命中才 copy，避免 30fps 无谓拷贝
+                raw = None
+                if self._recorder is not None and self._recorder.due(t_mono):
+                    raw = frame.copy()
                 try:
                     if not self._gesture_test_complete:
                         frame = self.inference.infer(frame)
@@ -612,6 +721,8 @@ class App:
                             self._handle_inference_event(event)
                 except Exception as e:
                     logger.exception("inference error: %s", e)
+                if raw is not None:
+                    self._record_frame(raw, t_mono)
 
             self._draw_ui(frame)
             cv2.imshow(self.config.window_name, frame)
@@ -745,6 +856,7 @@ class App:
                 self.client.emergency()
             self._flying = False
             self._last_rc = RcAxes()
+            self._close_recorder("aborted", "emergency")
             self._hint = "EMERGENCY stop"
             return
         if kind == "hover":
@@ -783,6 +895,8 @@ class App:
                 self._last_rc = RcAxes()
                 self.client.rc(0, 0, 0, 0)
                 self._last_rc_send = now
+                self._act_axes = RcAxes()
+                self._act_state = "HOVER"
                 self._hint = "Key released -> auto" if self._auto == "ON" else "Key released -> hover"
                 return
             # 按住时高频发送 rc（Tello 需要持续杆量）
@@ -790,15 +904,32 @@ class App:
                 a, b, c, d = self._last_rc.as_tuple()
                 self.client.rc(a, b, c, d)
                 self._last_rc_send = now
+            self._act_axes = self._last_rc
+            self._act_state = "MANUAL"
             return
-        # 无键盘输入 + 半自动 ON → 由避障控制律驱动
-        if self._auto == "ON" and now - self._last_rc_send >= 1.0 / RC_SEND_HZ:
+        # 无键盘输入：非 ON 即悬停；ON 由避障控制律驱动
+        if self._auto != "ON":
+            self._act_axes = RcAxes()
+            self._act_state = "HOVER"
+            return
+        # 看门狗：感知失联 / 挂载超时 → 悬停并解除 AUTO（人工接管仍是第一保障）
+        be = self.inference
+        depth = be.latest_depth() if hasattr(be, "latest_depth") else None
+        reason = self._watchdog.check(
+            now, self._auto_since, depth.ts if depth is not None else None
+        )
+        if reason:
+            self._disengage_auto(reason)
+            return
+        if now - self._last_rc_send >= 1.0 / RC_SEND_HZ:
             dec = self._auto_decision()
             if dec is not None:
                 a, b, c, d = dec.axes.as_tuple()
                 self.client.rc(a, b, c, d)
                 self._last_rc_send = now
                 self._auto_hud = dec.as_hud()
+                self._act_axes = dec.axes
+                self._act_state = dec.state
 
     def _draw_button(
         self,
