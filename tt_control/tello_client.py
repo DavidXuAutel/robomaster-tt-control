@@ -55,11 +55,11 @@ class TelloClient:
                     return
                 time.sleep(0.5)
                 slept += 0.5
+            # 只发不等回执:等回执会占住命令锁最多 timeout 秒,阻塞 rc 下发→控制延迟。
+            # 保活只需把包发出去防止空闲关机;回执(若有)留待缓冲,不在此消费。
             with self._lock:
                 try:
-                    self._cmd.settimeout(2.0)
                     self._cmd.sendto(b"command", self.tello_addr)
-                    self._cmd.recvfrom(2048)
                 except OSError:
                     pass
 
