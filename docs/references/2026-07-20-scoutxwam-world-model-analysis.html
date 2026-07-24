@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ScoutXWAM 世界模型技术方案分析</title>
+  <style>
+    :root {
+      --green: #00b341;
+      --green-dark: #007744;
+      --ink: #16201b;
+      --muted: #566;
+      --line: rgba(0, 0, 0, 0.09);
+      --bg-soft: #f3f8f5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: linear-gradient(180deg, #fff 0%, #f7fbf8 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Helvetica, Arial, sans-serif;
+      line-height: 1.75;
+    }
+    main { width: min(980px, calc(100% - 40px)); margin: 0 auto; padding: 56px 0 100px; }
+    .kicker {
+      color: var(--green-dark); font-size: 0.8rem; font-weight: 700;
+      letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 10px;
+    }
+    h1 { font-size: clamp(2rem, 5vw, 3.1rem); font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; margin: 0 0 14px; }
+    .source {
+      margin: 0 0 34px; padding: 14px 18px; border-left: 4px solid var(--green);
+      border-radius: 0 12px 12px 0; background: var(--bg-soft); color: var(--muted); font-size: 0.9rem;
+    }
+    .source code { color: var(--green-dark); word-break: break-all; }
+    h2 {
+      margin: 52px 0 8px; padding-top: 26px; border-top: 1px solid var(--line);
+      font-size: clamp(1.4rem, 3vw, 2rem); font-weight: 600; letter-spacing: -0.02em;
+    }
+    h3 { margin: 30px 0 8px; font-size: 1.18rem; font-weight: 650; }
+    p { margin: 10px 0; }
+    ul, ol { padding-left: 1.4rem; }
+    li { margin: 5px 0; }
+    a { color: var(--green-dark); }
+    code {
+      padding: 1px 6px; border-radius: 6px; background: rgba(0, 119, 68, 0.09);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 0.86em;
+    }
+    strong { color: #16201b; }
+    .lead {
+      margin: 18px 0 8px; padding: 20px 22px; border: 1px solid var(--line);
+      border-radius: 16px; background: rgba(255, 255, 255, 0.8); font-size: 1.03rem;
+    }
+    .metric-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px; margin: 24px 0;
+    }
+    .metric-card {
+      padding: 18px; border: 1px solid var(--line); border-radius: 14px;
+      background: rgba(255, 255, 255, 0.85);
+    }
+    .metric-card strong {
+      display: block; margin-bottom: 6px; color: var(--green-dark);
+      font-size: 1.7rem; font-weight: 600; letter-spacing: -0.03em; line-height: 1;
+    }
+    .metric-card span { color: var(--muted); font-size: 0.86rem; }
+    table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 0.92rem; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--green-dark); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+    tbody tr:nth-child(even) { background: rgba(0, 119, 68, 0.028); }
+    .takeaway {
+      margin: 22px 0; padding: 20px 24px; border-radius: 16px;
+      background: var(--green-dark); color: #fff;
+    }
+    .takeaway strong { display: block; margin-bottom: 6px; color: #8ff0b4; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; }
+    .takeaway p { margin: 0; color: rgba(255, 255, 255, 0.9); }
+    .flow { display: grid; gap: 12px; margin: 22px 0; }
+    .flow-step {
+      display: grid; grid-template-columns: 40px 1fr; gap: 14px; align-items: start;
+      padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px; background: #fff;
+    }
+    .flow-num {
+      display: inline-grid; place-items: center; width: 32px; height: 32px;
+      border-radius: 50%; background: var(--green-dark); color: #fff; font-size: 0.8rem; font-weight: 700;
+    }
+    .flow-step h4 { margin: 2px 0 4px; font-size: 1rem; }
+    .flow-step p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+    footer { margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--line); color: #8a978f; font-size: 0.85rem; text-align: center; }
+    .toc { margin: 8px 0 10px; padding: 18px 22px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,0.8); }
+    .toc strong { display: block; margin-bottom: 8px; color: var(--green-dark); font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; }
+    .toc ol { margin: 0; }
+
+    /* 术语悬停释义 */
+    .term {
+      border-bottom: 1px dashed var(--green-dark);
+      cursor: help;
+      position: relative;
+    }
+    .term:hover, .term:focus { background: rgba(0, 179, 65, 0.10); outline: none; }
+    .term::after {
+      content: attr(data-tip);
+      position: absolute;
+      left: 50%;
+      bottom: calc(100% + 9px);
+      transform: translateX(-50%);
+      width: max-content;
+      max-width: 280px;
+      padding: 10px 13px;
+      border-radius: 10px;
+      background: #16201b;
+      color: #fff;
+      font-size: 0.82rem;
+      font-weight: 400;
+      line-height: 1.55;
+      letter-spacing: 0;
+      text-align: left;
+      white-space: normal;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.15s ease;
+      z-index: 60;
+      pointer-events: none;
+    }
+    .term::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: calc(100% + 3px);
+      transform: translateX(-50%);
+      border: 6px solid transparent;
+      border-top-color: #16201b;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.15s ease;
+      z-index: 60;
+      pointer-events: none;
+    }
+    .term:hover::after, .term:focus::after,
+    .term:hover::before, .term:focus::before { opacity: 1; visibility: visible; }
+    /* 靠边的术语提示改为左/右对齐，避免溢出视口 */
+    .term.tip-left::after { left: 0; transform: none; }
+    .term.tip-right::after { left: auto; right: 0; transform: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="kicker">外部技术方案分析 · 世界模型</p>
+    <h1>ScoutXWAM 世界模型技术方案分析</h1>
+    <div class="source">
+      来源：<code>http://10.229.66.70/frontier_vla/scoutxwam.html</code>（Φ-Embodiment / Φ-e 团队）<br>
+      分析日期：2026-07-20 · 用途：本项目（RoboMaster TT 视觉避障 / 真机-仿真链路）后续开发引用的技术背景资料。<br>
+      说明：本文为结构化解读与要点提炼，非逐字翻译；关键数字均取自原页面。
+    </div>
+
+    <div class="toc">
+      <strong>目录</strong>
+      <ol>
+        <li>一句话概括</li>
+        <li>立项动机</li>
+        <li>架构设计与单步去噪流程</li>
+        <li>数据课程：三层数据金字塔</li>
+        <li>DROID-1K Spatial 数据集</li>
+        <li>Scout-GELLO 与 real-to-sim-to-real 平台</li>
+        <li>模型训练与验证</li>
+        <li>零样本定性结果</li>
+        <li>具身特定后训练</li>
+        <li>关键指标速查表</li>
+        <li>对本项目的启示与可复用点</li>
+      </ol>
+    </div>
+
+    <h2>0. 一句话概括</h2>
+    <p class="lead">ScoutXWAM 是在紧凑型「世界-动作模型」ScoutWAM（2.06B 参数、LIBERO 平均成功率 91.1%）基础上做的<strong>下一代扩展</strong>，核心目标是把模型从"benchmark 上会预测动作"推进到"在想象空间里具备<strong>空间智能</strong>、并能把动作能力<strong>迁移到真实机器人</strong>"。技术手段：<strong>几何先验引导的世界建模 + 多视角 RGB-D + 轻量深度适配分支 + 动作/视频异步噪声调度 + 三层数据金字塔课程</strong>。</p>
+
+    <h2>1. 立项动机</h2>
+    <p>已有基础 <strong>ScoutWAM</strong> 是一个紧凑型世界-动作模型（World-Action Model）：</p>
+    <div class="metric-grid">
+      <div class="metric-card"><strong>91.1%</strong><span>LIBERO（Spatial/Object/Goal/LIBERO-10）平均成功率</span></div>
+      <div class="metric-card"><strong>2.06B</strong><span>参数量，对比基线 Fast-WAM 的 6.70B</span></div>
+      <div class="metric-card"><strong>1,822</strong><span>/ 2,000 评测 episode 成功 rollout</span></div>
+      <div class="metric-card"><strong>52.0</strong><span>rollouts / GPU-hour（两卡评测）</span></div>
+      <div class="metric-card"><strong>4.21×</strong><span>LIBERO-10 聚合 rollout 吞吐（对比基线）</span></div>
+    </div>
+    <p>核心论点：仿真/benchmark 成功是<strong>必要但不充分</strong>的，下一步要验证学到的是<strong>可迁移的世界表征</strong>。为此 ScoutXWAM 提出两个待验证的核心问题：</p>
+    <table>
+      <thead><tr><th>编号</th><th>问题</th><th>验证内容</th></tr></thead>
+      <tbody>
+        <tr><td>Q1</td><td>世界模型能否在<strong>想象空间</strong>发展出空间智能？</td><td>想象未来是否保持真实几何、物体关系、运动、可供性与动作的物理后果，而不仅是"看起来像"。</td></tr>
+        <tr><td>Q2</td><td>动作性能能否<strong>迁移到真实世界</strong>？</td><td>LIBERO 上的动作能力在真机（真实感知、本体、动力学、环境变化）下是否成立。</td></tr>
+      </tbody>
+    </table>
+
+    <h2>2. 架构设计与单步去噪流程</h2>
+    <p>在 ScoutWAM 紧凑基础上扩展四点：<strong>几何先验引导的世界建模</strong>、<strong>成对多视角 RGB-D 观测</strong>、<strong>轻量深度适配分支</strong>、<strong>动作-视频异步噪声调度</strong>。输出直接嵌入高分辨率的 3D 重建 / 4D 重建 / 场景流 / 动作轨迹。</p>
+    <p>单步去噪会<strong>联合去噪</strong>想象视频 + 机器人状态 + 动作轨迹，同时辅助深度分支把共享表征拉向一致 3D 几何。</p>
+    <ul>
+      <li><strong>输入</strong>：带噪视频隐变量 <code>z_O^{tO}</code>、状态 <code>z_s^{ta}</code>、动作 <code>z_a^{ta}</code>，加上初始观测 <code>O_0</code>、初始状态 <code>s_0</code>、语言指令 <code>c</code>。</li>
+      <li><strong>输出</strong>：视频/状态/动作速度场 <code>v̂_O, v̂_s, v̂_a</code> 与逆深度 <code>D̂</code>。</li>
+    </ul>
+    <div class="flow">
+      <div class="flow-step"><span class="flow-num">01</span><div><h4>编码条件</h4><p>Causal VAE 编码初始 RGB 观测；MLP 编码初始机器人状态。时刻 0 的干净信号作为 rollout 锚点。</p></div></div>
+      <div class="flow-step"><span class="flow-num">02</span><div><h4>组装隐变量序列</h4><p>条件与带噪视频/状态/动作隐变量拼接，加可学习视角嵌入。独立的 <code>t_O</code> 与 <code>t_a</code> 让视频和动作走异步噪声调度。</p></div></div>
+      <div class="flow-step"><span class="flow-num">03</span><div><h4>构建共享上下文</h4><p>序列经过 <code>N − M</code> 个共享 DiT 块，融合视觉、状态、动作、指令、相机视角上下文。</p></div></div>
+      <div class="flow-step"><span class="flow-num">04</span><div><h4>动力学与深度交织</h4><p>主分支与深度分支从同一共享特征出发；最后 <code>M</code> 层深度单向 attend 主分支输入，主动力学流独立推进。</p></div></div>
+      <div class="flow-step"><span class="flow-num">05</span><div><h4>解码预测</h4><p>主头预测视频/状态/动作去噪速度；轻量深度头单独回归逆深度，提供几何学习信号。</p></div></div>
+    </div>
+    <div class="takeaway">
+      <strong>核心思想</strong>
+      <p>主分支学习世界与动作动力学，单向深度适配器把共享隐空间引导向几何收敛——在不让动作生成依赖深度反馈的前提下，为表征补充空间结构。</p>
+    </div>
+
+    <h2>3. 数据课程：三层数据金字塔</h2>
+    <table>
+      <thead><tr><th>层级</th><th>名称</th><th>定位</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td>Level 03（顶）</td><td><strong>Scout-GELLO</strong></td><td>Apex · Specialise</td><td>任务特定真实世界演示，对齐 Scout 机器人与真实任务。</td></tr>
+        <tr><td>Level 02（中）</td><td><strong>DROID-1K Spatial</strong></td><td>Middle · Ground</td><td>多样真实机器人交互：场景/视角/物体/操作者，增强鲁棒性。</td></tr>
+        <tr><td>Level 01（底）</td><td><strong>5,800 小时</strong></td><td>Foundation · Scale</td><td>真实机器人 + 仿真操作数据，覆盖多样任务/本体/环境/交互。</td></tr>
+      </tbody>
+    </table>
+    <p><strong>基础数据集</strong>：AgiBot World Beta、InternData-A1 · ALOHA、InternData-A1 · Genie、InternData-A1 · Lift2、RoboCasa · MimicGen、RoboTwin 2.0。</p>
+
+    <h2>4. DROID-1K Spatial 数据集</h2>
+    <p>目标：在 <strong>4D 想象空间</strong> rollout 学习空间智能——在三维几何、时间、视角、动作上联合推理。做法：用<strong>深度引导隐空间走向几何收敛</strong>，鼓励想象状态收敛到一致物理结构而非只学外观。</p>
+    <div class="metric-grid">
+      <div class="metric-card"><strong>1,000</strong><span>机器人演示 episode</span></div>
+      <div class="metric-card"><strong>281,119</strong><span>同步时间步</span></div>
+      <div class="metric-card"><strong>5.21 h</strong><span>真实机器人演示时长</span></div>
+      <div class="metric-card"><strong>18.74 s</strong><span>单 episode 平均时长</span></div>
+      <div class="metric-card"><strong>15 FPS</strong><span>全部 3,000 路相机视频帧率</span></div>
+    </div>
+    <p>样本把机器人视觉观测与对应深度重建配对；声称达成稳定视频-深度估计、全 episode RGB 与深度流同步。</p>
+
+    <h2>5. Scout-GELLO 与 real-to-sim-to-real 平台</h2>
+    <p>为支持模型后处理/精修，搭建<strong>自动化 real-to-sim-to-real 平台</strong>做可扩展数据采集，闭环连接物理演示 → 仿真可用经验 → 部署回真机。</p>
+    <div class="flow">
+      <div class="flow-step"><span class="flow-num">01</span><div><h4>Real · 采集目标演示</h4><p>在物理 Scout 平台采集高价值、具身特定的交互数据。</p></div></div>
+      <div class="flow-step"><span class="flow-num">02</span><div><h4>Sim · 扩充经验</h4><p>把经验转成可重复、仿真可用的数据，高效精修模型。</p></div></div>
+      <div class="flow-step"><span class="flow-num">03</span><div><h4>Real · 回流精修</h4><p>把改进行为带回机器人做真实验证，进入下一轮采集。</p></div></div>
+    </div>
+
+    <h2>6. 模型训练与验证</h2>
+    <p>预处理：单张 <strong>RTX 4090</strong>，<strong>48 小时</strong>；DROID-1K Spatial 训练：<strong>DGX Spark</strong>，运行 <strong>1.104 天</strong>；联合优化视频/深度/本体感知三目标，共 <strong>9,079</strong> 步。</p>
+    <h3>训练损失（最终值）</h3>
+    <table>
+      <thead><tr><th>目标</th><th>显示值</th><th>平滑值</th></tr></thead>
+      <tbody>
+        <tr><td>Video loss</td><td>0.1824</td><td>0.2162</td></tr>
+        <tr><td>Depth loss</td><td>0.039</td><td>0.082</td></tr>
+        <tr><td>Proprioception loss</td><td>0.0107</td><td>0.0109</td></tr>
+      </tbody>
+    </table>
+    <h3>留出集验证（冻结 9K checkpoint，未见 DROID 演示）</h3>
+    <table>
+      <thead><tr><th>输出</th><th>指标</th><th>均值</th></tr></thead>
+      <tbody>
+        <tr><td>Normalized action</td><td>MAE</td><td>0.2646</td></tr>
+        <tr><td>Normalized action</td><td>RMSE</td><td>0.3492</td></tr>
+        <tr><td>Normalized proprioception</td><td>MAE</td><td>0.1407</td></tr>
+        <tr><td>Normalized proprioception</td><td>RMSE</td><td>0.3057</td></tr>
+        <tr><td>RGB</td><td>PSNR</td><td>16.61 dB</td></tr>
+        <tr><td>RGB</td><td>SSIM</td><td>0.6734</td></tr>
+        <tr><td>Normalized depth</td><td>PSNR</td><td>20.97 dB</td></tr>
+        <tr><td>Normalized depth</td><td>SSIM</td><td>0.8764</td></tr>
+      </tbody>
+    </table>
+
+    <h2>7. 零样本定性结果</h2>
+    <p>设置：在 <strong>DROID-1K Spatial</strong> 训练，在训练从未包含的 <strong>Scout-GELLO</strong> 上零样本评测，检验空间表征迁移能力。迁移路径：<code>DROID-1K Spatial → Scout-GELLO</code>。</p>
+    <div class="takeaway">
+      <strong>关键结论</strong>
+      <p>预训练初始化 + DROID-1K 微调，产出强通用空间智能模型，能做准确的 3D 重建、4D 时空推理与场景流理解。展示含 RGB→深度序列，以及 3D/4D 重建与场景流三段零样本视频。</p>
+    </div>
+
+    <h2>8. 具身特定后训练</h2>
+    <p>目标平台 <strong>Franka</strong>。用 <strong>Scout-GELLO</strong> 微调通用 ScoutXWAM，对齐目标本体的观测、运动学、控制接口与真实工况，同时保留预训练 + DROID-1K 的广泛空间智能。</p>
+    <p>路线：<code>Scout-GELLO 适配数据 → 具身对齐（微调感知/本体感知/动作到 Franka 控制空间）→ Franka 闭环部署测试</code>。原页面中最终曲线、收敛分析、定性结果、真机部署结果均标注为 <em>forthcoming</em>（尚未公布）。</p>
+
+    <h2>9. 关键指标速查表</h2>
+    <table>
+      <thead><tr><th>类别</th><th>指标</th><th>数值</th></tr></thead>
+      <tbody>
+        <tr><td>ScoutWAM 基础</td><td>参数量</td><td>2.06B（vs 基线 6.70B）</td></tr>
+        <tr><td>ScoutWAM 基础</td><td>LIBERO 平均成功率</td><td>91.1%</td></tr>
+        <tr><td>ScoutWAM 基础</td><td>rollout 吞吐</td><td>52.0 / GPU-hour；LIBERO-10 为基线 4.21×</td></tr>
+        <tr><td>ScoutWAM 基础</td><td>推理 PSNR</td><td>30.35 dB</td></tr>
+        <tr><td>DROID-1K Spatial</td><td>episode / 时间步</td><td>1,000 / 281,119</td></tr>
+        <tr><td>DROID-1K Spatial</td><td>时长 / 帧率</td><td>5.21 h / 15 FPS</td></tr>
+        <tr><td>训练</td><td>预处理 / 训练耗时</td><td>48 h（4090）/ 1.104 天（DGX Spark）</td></tr>
+        <tr><td>训练</td><td>优化步</td><td>9,079</td></tr>
+        <tr><td>留出验证</td><td>深度 PSNR / SSIM</td><td>20.97 dB / 0.8764</td></tr>
+        <tr><td>留出验证</td><td>RGB PSNR / SSIM</td><td>16.61 dB / 0.6734</td></tr>
+      </tbody>
+    </table>
+
+    <h2>10. 对本项目的启示与可复用点</h2>
+    <p>结合本仓"真机优先：真机飞 → 仿真记录轨迹 → 证明真机↔仿真匹配 → 部署'别人的模型'跑真机"的思路：</p>
+    <ol>
+      <li><strong>深度作为几何先验可对接避障。</strong> 本项目 <code>tt_control/depth_backend.py</code> / <code>avoidance.py</code> 已有"深度图 → 最近障碍方位 → 避让杆量"设想；若接入的模型是世界/深度类模型，可对齐 RGB-D、逆深度输入与速度场/动作输出约定。</li>
+      <li><strong>异步动作-视频噪声调度 = 世界预测与动作生成解耦。</strong> 设计 <code>policy.py</code> 的 <code>ExternalModelPolicy</code> adapter 时，注意动作输出可能不与视频预测同步。</li>
+      <li><strong>real-to-sim-to-real 闭环与本项目链路同构。</strong> Scout-GELLO 的"真采集→仿真扩充→回流真机"正是本项目链路的通用化版本，可作数据采集/回归验证模板。</li>
+      <li><strong>零样本迁移评测方法可借鉴。</strong> "A 分布训练、未见 B 分布评测重建/动作质量"是判断表征可迁移性的实用手段；真机↔仿真匹配验证可用类似留出集 + PSNR/SSIM/MAE/RMSE 指标量化。</li>
+      <li><strong>接口约定备忘。</strong> 输入：初始 RGB 观测、初始机器人状态、语言指令、（可选）多视角与深度；输出：动作序列/速度场（<code>Δx·Δy·Δz·ΔR·G</code>）与可选深度/重建。TT 无人机把 <code>Δx·Δy·Δz·ΔR</code> 映射到 RcAxes 杆量即可复用现有下发通路。</li>
+    </ol>
+
+    <footer>ScoutXWAM 世界模型技术方案分析 · 2026-07-20 · 供本项目后续开发引用<br><span style="font-size:0.82rem;color:#9aa7a0;">带虚线下划线的名词可鼠标悬停查看解释</span></footer>
+  </main>
+
+  <script>
+    (() => {
+      const GLOSSARY = {
+        "世界-动作模型": "世界模型的一种：既预测环境未来的画面变化，又同时输出机器人该做的动作。缩写 WAM。",
+        "World-Action Model": "世界-动作模型：既预测环境未来、又生成动作的模型。缩写 WAM。",
+        "WAM": "World-Action Model 的缩写，即世界-动作模型。",
+        "世界模型": "让 AI 在“脑内”预测环境接下来会怎样变化的模型，相当于给机器一份可以推演未来的想象力。",
+        "ScoutWAM": "本团队已有的紧凑型世界-动作模型（2.06B 参数），是 ScoutXWAM 的基础。",
+        "ScoutXWAM": "在 ScoutWAM 上扩展的新一代模型，目标是获得空间智能并迁移到真实机器人。",
+        "空间智能": "理解三维几何、物体位置关系与运动的能力，而不只是认出画面里有什么。",
+        "benchmark": "标准测试基准：在公认数据集上打分，用来横向比较不同模型的好坏。",
+        "LIBERO": "常用的机器人操作能力测试基准，含 Spatial / Object / Goal / LIBERO-10 等子集。",
+        "Fast-WAM": "作为对比的另一款世界-动作模型基线（6.70B 参数）。",
+        "rollout": "让模型从起点一步步推演/执行到结束的一整段过程，常用来做一次评测。",
+        "GPU-hour": "一块 GPU 跑一小时的算力单位，用来衡量计算开销。",
+        "PSNR": "峰值信噪比：衡量重建图像与真实图像的接近程度，数值越高越清晰。",
+        "可供性": "affordance：物体能被怎样操作的属性，例如“杯子可抓、门可推”。",
+        "affordance": "可供性：物体所提供的可操作方式（可抓 / 可推 / 可放等）。",
+        "几何先验": "预先告诉模型“世界要符合三维几何规律”的约束，帮助它别只学表面像素。",
+        "RGB-D": "普通彩色图（RGB）再加上每个像素的距离信息（深度 D），即“彩色 + 深度”图。",
+        "深度适配分支": "模型里一个专门估计深度、把表征拉向正确几何结构的小分支。",
+        "异步噪声调度": "让“视频”和“动作”两路在扩散去噪时按各自节奏加/去噪声，而不强行同步。",
+        "场景流": "scene flow：画面中每个点在三维空间里如何随时间移动的运动场。",
+        "scene flow": "场景流：三维空间中各点随时间移动的运动向量场。",
+        "去噪": "扩散模型的核心步骤：从一堆随机噪声里逐步还原出干净的结果。",
+        "隐变量": "latent：数据被压缩后的紧凑内部表示，模型在这个空间里运算更高效。",
+        "隐空间": "数据被编码后的紧凑内部表示空间，模型在其中做推理。",
+        "逆深度": "深度的倒数（1/距离）：近处数值大、远处数值小，便于神经网络回归。",
+        "速度场": "流匹配/扩散里预测的“朝干净结果移动的方向和快慢”，用来一步步去噪。",
+        "Causal VAE": "因果变分自编码器：把视频按时间顺序压缩成隐变量的编码器。",
+        "MLP": "多层感知机：最基础的一种全连接神经网络。",
+        "视角嵌入": "给每路相机贴上的可学习标签，让模型分得清不同相机视角。",
+        "多视角": "从多个相机视角同时观察同一场景。",
+        "DiT": "Diffusion Transformer：把 Transformer 用作扩散模型主干的模块。",
+        "attend": "注意力机制里“关注/参考”某部分信息的动作。",
+        "数据金字塔": "分层的数据策略：底层量大而泛、顶层少而精，逐层聚焦到目标任务。",
+        "4D 想象空间": "在三维空间（3D）之上再加时间维度里推演未来的想象空间。",
+        "想象空间": "模型内部推演“接下来会发生什么”的虚拟空间。",
+        "3D 重建": "从图像恢复出场景的三维结构。",
+        "4D 重建": "三维结构再加上随时间的变化，即“3D + 时间”的动态重建。",
+        "时空推理": "同时对空间结构和时间演化进行推断。",
+        "多模态": "同时处理图像、深度、动作、语言等多种不同形式的数据。",
+        "DROID-1K Spatial": "本方案从 DROID 里精选出的 1000 条、强调空间信息的子集。",
+        "DROID-1K": "DROID-1K Spatial 数据集的简称。",
+        "DROID": "大规模真实机器人操作数据集（语料）。",
+        "Scout-GELLO": "用 GELLO 遥操作平台采集的、针对 Scout 机器人的专属数据集。",
+        "GELLO": "一种低成本的机器人遥操作/示范数据采集装置。",
+        "real-to-sim-to-real": "“真机采集 → 仿真扩充 → 回真机验证”的闭环数据流水线。",
+        "本体感知": "proprioception：机器人对自身关节角度、位姿等内部状态的感知。",
+        "proprioception": "本体感知：机器人对自身关节/位姿等内部状态的感知。",
+        "DGX Spark": "NVIDIA 的一款小型 AI 开发/训练计算机。",
+        "RTX 4090": "NVIDIA 高端消费级显卡，常用于本地训练与推理。",
+        "checkpoint": "训练过程中保存下来的模型快照，可随时加载复用。",
+        "留出集": "held-out：训练时故意不用、专门留作最终检验的数据。",
+        "Held-out": "留出集：训练不使用、专门用于最终验证的数据。",
+        "MAE": "平均绝对误差：预测与真值之差取绝对值再平均，越小越准。",
+        "RMSE": "均方根误差：对大误差更敏感的一种误差指标，越小越准。",
+        "SSIM": "结构相似性：衡量两张图在结构上的相似度，越接近 1 越像。",
+        "Normalized": "归一化：把数值缩放到统一区间，便于训练和比较。",
+        "归一化": "把不同量纲的数值缩放到统一区间，便于训练和比较。",
+        "零样本": "zero-shot：模型在完全没见过该类数据的情况下直接上手。",
+        "zero-shot": "零样本：没针对该任务/数据训练过就直接使用。",
+        "具身特定": "针对某一具体机器人身体（传感器、关节、控制方式）量身定制。",
+        "具身": "embodiment：模型/智能所依附的具体机器人身体（传感器、关节、控制方式）。",
+        "后训练": "在通用预训练之后，针对具体机器人/任务做的进一步训练。",
+        "Franka": "一款常见的七轴协作机械臂，科研中广泛使用。",
+        "微调": "fine-tune：在已训练好的模型上，用少量新数据做小幅再训练。",
+        "运动学": "描述机器人关节角与末端位姿之间几何关系的学问。",
+        "闭环": "用实际反馈不断修正动作的控制方式（有反馈），区别于开环。",
+        "预训练": "先在大规模数据上训练出通用能力，作为后续微调的起点。",
+        "AgiBot World Beta": "智元发布的大规模具身操作数据集。",
+        "InternData-A1": "上海 AI 实验室的具身数据集系列（含 ALOHA / Genie / Lift2 等）。",
+        "ALOHA": "低成本双臂遥操作/数据采集平台。",
+        "RoboCasa": "面向家庭场景的大规模机器人仿真与数据生成环境。",
+        "MimicGen": "从少量人类示范自动扩增出大量演示数据的方法。",
+        "RoboTwin": "面向双臂协作的仿真数据生成基准。",
+        "RcAxes": "本项目里描述遥控杆量（俯仰/横滚/油门/偏航）的控制指令结构。"
+      };
+
+      const main = document.querySelector("main");
+      if (!main) return;
+
+      const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const isAscii = (s) => /^[\x00-\x7F]+$/.test(s);
+
+      const skip = (node) => {
+        let p = node.parentElement;
+        while (p && p !== main) {
+          const tag = p.tagName;
+          if (tag === "CODE" || tag === "SCRIPT" || tag === "STYLE") return true;
+          if (p.classList && (p.classList.contains("term") || p.classList.contains("toc") || p.classList.contains("source"))) return true;
+          p = p.parentElement;
+        }
+        return false;
+      };
+
+      const wrapTerm = (term, tip) => {
+        const body = escapeRe(term);
+        const source = isAscii(term)
+          ? "(?<![A-Za-z0-9])" + body + "(?![A-Za-z0-9])"
+          : body;
+        const testRe = new RegExp(source);
+
+        const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+        const targets = [];
+        let n;
+        while ((n = walker.nextNode())) {
+          if (skip(n)) continue;
+          if (testRe.test(n.nodeValue)) targets.push(n);
+        }
+
+        targets.forEach((textNode) => {
+          const str = textNode.nodeValue;
+          const g = new RegExp(source, "g");
+          const frag = document.createDocumentFragment();
+          let last = 0, m, wrapped = false;
+          while ((m = g.exec(str)) !== null) {
+            if (m.index > last) frag.appendChild(document.createTextNode(str.slice(last, m.index)));
+            const span = document.createElement("span");
+            span.className = "term";
+            span.setAttribute("data-tip", tip);
+            span.setAttribute("tabindex", "0");
+            span.textContent = m[0];
+            frag.appendChild(span);
+            last = m.index + m[0].length;
+            wrapped = true;
+            if (g.lastIndex === m.index) g.lastIndex++;
+          }
+          if (wrapped) {
+            if (last < str.length) frag.appendChild(document.createTextNode(str.slice(last)));
+            textNode.parentNode.replaceChild(frag, textNode);
+          }
+        });
+      };
+
+      // 长术语优先，避免被其子串抢先包裹
+      Object.keys(GLOSSARY)
+        .sort((a, b) => b.length - a.length)
+        .forEach((term) => wrapTerm(term, GLOSSARY[term]));
+
+      // 靠近视口左右边缘的提示改用左/右对齐，避免溢出
+      const adjustEdges = () => {
+        document.querySelectorAll(".term").forEach((el) => {
+          el.classList.remove("tip-left", "tip-right");
+          const r = el.getBoundingClientRect();
+          const vw = window.innerWidth;
+          if (r.left < 150) el.classList.add("tip-left");
+          else if (vw - r.right < 150) el.classList.add("tip-right");
+        });
+      };
+      adjustEdges();
+      window.addEventListener("resize", adjustEdges);
+    })();
+  </script>
+</body>
+</html>

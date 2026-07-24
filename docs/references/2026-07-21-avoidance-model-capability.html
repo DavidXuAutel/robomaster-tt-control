@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>避障方案 · 模型能力范围报告</title>
+  <style>
+    :root {
+      --green: #00b341;
+      --green-dark: #007744;
+      --ink: #16201b;
+      --muted: #566;
+      --line: rgba(0, 0, 0, 0.09);
+      --bg-soft: #f3f8f5;
+      --warn: #b26a00;
+      --warn-soft: #fff4e2;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: linear-gradient(180deg, #fff 0%, #f7fbf8 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Helvetica, Arial, sans-serif;
+      line-height: 1.75;
+    }
+    main { width: min(980px, calc(100% - 40px)); margin: 0 auto; padding: 56px 0 100px; }
+    .kicker {
+      color: var(--green-dark); font-size: 0.8rem; font-weight: 700;
+      letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 10px;
+    }
+    h1 { font-size: clamp(2rem, 5vw, 3.1rem); font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; margin: 0 0 14px; }
+    .source {
+      margin: 0 0 34px; padding: 14px 18px; border-left: 4px solid var(--green);
+      border-radius: 0 12px 12px 0; background: var(--bg-soft); color: var(--muted); font-size: 0.9rem;
+    }
+    .source code { color: var(--green-dark); word-break: break-all; }
+    h2 {
+      margin: 52px 0 8px; padding-top: 26px; border-top: 1px solid var(--line);
+      font-size: clamp(1.4rem, 3vw, 2rem); font-weight: 600; letter-spacing: -0.02em;
+    }
+    h3 { margin: 30px 0 8px; font-size: 1.18rem; font-weight: 650; }
+    p { margin: 10px 0; }
+    ul, ol { padding-left: 1.4rem; }
+    li { margin: 5px 0; }
+    a { color: var(--green-dark); }
+    code {
+      padding: 1px 6px; border-radius: 6px; background: rgba(0, 119, 68, 0.09);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 0.86em;
+    }
+    strong { color: #16201b; }
+    .lead {
+      margin: 18px 0 8px; padding: 20px 22px; border: 1px solid var(--line);
+      border-radius: 16px; background: rgba(255, 255, 255, 0.8); font-size: 1.03rem;
+    }
+    .metric-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px; margin: 24px 0;
+    }
+    .metric-card {
+      padding: 18px; border: 1px solid var(--line); border-radius: 14px;
+      background: rgba(255, 255, 255, 0.85);
+    }
+    .metric-card strong {
+      display: block; margin-bottom: 6px; color: var(--green-dark);
+      font-size: 1.7rem; font-weight: 600; letter-spacing: -0.03em; line-height: 1;
+    }
+    .metric-card span { color: var(--muted); font-size: 0.86rem; }
+    table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 0.92rem; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--green-dark); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+    tbody tr:nth-child(even) { background: rgba(0, 119, 68, 0.028); }
+    .can td:first-child { color: var(--green-dark); font-weight: 600; }
+    .cannot td:first-child { color: var(--warn); font-weight: 600; }
+    .takeaway {
+      margin: 22px 0; padding: 20px 24px; border-radius: 16px;
+      background: var(--green-dark); color: #fff;
+    }
+    .takeaway strong { display: block; margin-bottom: 6px; color: #8ff0b4; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; }
+    .takeaway p { margin: 0; color: rgba(255, 255, 255, 0.9); }
+    .warn-box {
+      margin: 22px 0; padding: 16px 20px; border-radius: 14px;
+      border: 1px solid rgba(178,106,0,0.28); background: var(--warn-soft); color: #6b4400; font-size: 0.94rem;
+    }
+    .warn-box strong { color: var(--warn); }
+    .flow { display: grid; gap: 12px; margin: 22px 0; }
+    .flow-step {
+      display: grid; grid-template-columns: 40px 1fr; gap: 14px; align-items: start;
+      padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px; background: #fff;
+    }
+    .flow-num {
+      display: inline-grid; place-items: center; width: 32px; height: 32px;
+      border-radius: 50%; background: var(--green-dark); color: #fff; font-size: 0.8rem; font-weight: 700;
+    }
+    .flow-step h4 { margin: 2px 0 4px; font-size: 1rem; }
+    .flow-step p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+    footer { margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--line); color: #8a978f; font-size: 0.85rem; text-align: center; }
+    .toc { margin: 8px 0 10px; padding: 18px 22px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,0.8); }
+    .toc strong { display: block; margin-bottom: 8px; color: var(--green-dark); font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; }
+    .toc ol { margin: 0; }
+
+    /* 术语悬停释义 */
+    .term { border-bottom: 1px dashed var(--green-dark); cursor: help; position: relative; }
+    .term:hover, .term:focus { background: rgba(0, 179, 65, 0.10); outline: none; }
+    .term::after {
+      content: attr(data-tip);
+      position: absolute; left: 50%; bottom: calc(100% + 9px); transform: translateX(-50%);
+      width: max-content; max-width: 300px; padding: 10px 13px; border-radius: 10px;
+      background: #16201b; color: #fff; font-size: 0.82rem; font-weight: 400; line-height: 1.55;
+      letter-spacing: 0; text-align: left; white-space: normal;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+      opacity: 0; visibility: hidden; transition: opacity 0.15s ease; z-index: 60; pointer-events: none;
+    }
+    .term::before {
+      content: ""; position: absolute; left: 50%; bottom: calc(100% + 3px); transform: translateX(-50%);
+      border: 6px solid transparent; border-top-color: #16201b;
+      opacity: 0; visibility: hidden; transition: opacity 0.15s ease; z-index: 60; pointer-events: none;
+    }
+    .term:hover::after, .term:focus::after,
+    .term:hover::before, .term:focus::before { opacity: 1; visibility: visible; }
+    .term.tip-left::after { left: 0; transform: none; }
+    .term.tip-right::after { left: auto; right: 0; transform: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="kicker">内部技术评估 · 无人机避障方案</p>
+    <h1>避障方案 · 模型能力范围报告</h1>
+    <div class="source">
+      对象：RoboMaster TT 半自动视觉避障方案（<code>2026-07-17-tt-visual-avoidance-design</code>）中的感知与决策部分。<br>
+      日期：2026-07-21 · 用途：向大众说清楚"这套兜底方案里的模型到底能做什么、不能做什么、边界在哪"。<br>
+      说明：数字取自方案设计文档与现网运行记录（4090 远端推理 ~106ms/9fps）。术语见虚线下划线，鼠标悬停查看释义。
+    </div>
+
+    <div class="toc">
+      <strong>目录</strong>
+      <ol>
+        <li>30 秒速读</li>
+        <li>方案里到底有几个"模型"？</li>
+        <li>Depth Anything V2 Small：能力范围</li>
+        <li>从"深度图"到"避障决策"：一路丢了多少信息</li>
+        <li>反应式控制律：它不是模型，是规则</li>
+        <li>系统级能力范围总表</li>
+        <li>对"喂 WAM 训练"意味着什么</li>
+      </ol>
+    </div>
+
+    <h2>1 · 30 秒速读</h2>
+    <div class="lead">
+      这套兜底方案的"智能"只来自 <strong>一个</strong> 神经网络：<span class="term" data-tip="Depth Anything V2，2024 年开源的单目深度估计模型。Small 版基于 DINOv2-Small 主干，约 24.8M 参数，主打轻量+零样本泛化。">Depth Anything V2 Small</span>。它做的事只有一件——<strong>从一张普通 RGB 照片猜出"哪儿近哪儿远"</strong>。其余全是<span class="term" data-tip="用固定 if/else 阈值规则做决策，不含可学习参数，不是神经网络。">写死的启发式规则</span>：把深度切三块、取中位数、比阈值、锁方向。所以整套方案的能力天花板，基本等于"一个单目相对深度模型 + 一套三分区反应规则"能到的高度：<strong>能安全地'别撞上'，不能'认路/去某处/穿窄缝/量距离'</strong>。
+    </div>
+
+    <div class="metric-grid">
+      <div class="metric-card"><strong>1 个</strong><span>方案中真正的神经网络模型（DA-V2 Small）</span></div>
+      <div class="metric-card"><strong>~24.8M</strong><span>DA-V2 Small 参数量（轻量级）</span></div>
+      <div class="metric-card"><strong>96×128</strong><span>下传的近度网格分辨率（float16）</span></div>
+      <div class="metric-card"><strong>~9 fps</strong><span>端到端感知帧率（含 WiFi+推理 ~106ms）</span></div>
+      <div class="metric-card"><strong>0 米</strong><span>能给出的绝对距离（只有相对近远，无尺度）</span></div>
+      <div class="metric-card"><strong>3 区</strong><span>决策粒度：左 / 中 / 右</span></div>
+    </div>
+
+    <h2>2 · 方案里到底有几个"模型"？</h2>
+    <p>先破一个常见误解：这套方案<strong>不是一个端到端的避障大模型</strong>，而是"一个感知模型 + 一堆规则"的组合。分清这点，才能准确理解它的能力边界。</p>
+    <table>
+      <thead><tr><th>组成部分</th><th>是不是"模型"</th><th>它负责什么</th></tr></thead>
+      <tbody>
+        <tr><td>Depth Anything V2 Small</td><td>✅ 是（神经网络）</td><td>唯一的可学习模型：RGB → 逐像素<span class="term" data-tip="Inverse Depth。网络直接输出的是深度的倒数（近处值大、远处值小），需再处理才成为直观的距离概念。">逆深度</span></td></tr>
+        <tr><td><span class="term" data-tip="把逆深度做帧内 2%~98% 分位数归一化到 [0,1]，值越大表示越近越挡路。">近度归一化</span> + 降采样</td><td>❌ 否（数值处理）</td><td>把网络输出压成统一语义的 96×128 小网格</td></tr>
+        <tr><td><code>AvoidanceController</code></td><td>❌ 否（if/else 规则）</td><td>切三区、取中位、比阈值、锁方向、算刹车量</td></tr>
+        <tr><td>三态开关 + <span class="term" data-tip="Watchdog：一个只做安全兜底的监控逻辑，超时/失联就强制悬停并解除自动。">看门狗</span></td><td>❌ 否（状态机）</td><td>安全层：确认才接管、异常自动悬停</td></tr>
+      </tbody>
+    </table>
+    <div class="takeaway">
+      <strong>关键结论</strong>
+      <p>整套方案的"感知智能"完全押在 DA-V2 Small 一个模型上。它看不清的东西（玻璃、白墙、逆光），后面再多规则也救不回来——<strong>规则只能加工深度，不能创造深度</strong>。</p>
+    </div>
+
+    <h2>3 · Depth Anything V2 Small：能力范围</h2>
+    <p>DA-V2 是 2024 年开源的<span class="term" data-tip="单目深度估计：只用一个普通摄像头（单张 RGB 图）估计场景深度，不需要双目、结构光或激光雷达。">单目深度估计</span>模型，Small 版走"轻量 + <span class="term" data-tip="Zero-shot：不需在目标场景上专门训练，拿来就能用，靠大规模预训练获得的泛化能力。">零样本泛化</span>"路线，适合本项目"控制端不装重依赖、推理放远端 GPU"的部署。它的能力是有明确边界的：</p>
+
+    <h3>✅ 它能做到的</h3>
+    <table class="can">
+      <tbody>
+        <tr><td>相对深度</td><td>判断"画面里谁离我更近、谁更远"，同一帧内的<span class="term" data-tip="只知道 A 比 B 近，但不知道 A 到底几米。相对深度足够做'别撞上'的比较判断。">相对远近</span>排序相当稳。</td></tr>
+        <tr><td>零样本上手</td><td>不用在无人机场景专门训练，室内外、多种物体拿来就能给出合理深度。</td></tr>
+        <tr><td>大块障碍</td><td>墙、纸箱、家具、门框等<strong>有纹理的大块不透明物体</strong>，近了会明显"变红"（近度升高）。</td></tr>
+        <tr><td>轻量快速</td><td>Small 版在 4090 上单帧推理快，配合降采样网格，端到端约 9fps，够做慢速避障。</td></tr>
+      </tbody>
+    </table>
+
+    <h3>⚠️ 它做不到 / 会失效的</h3>
+    <table class="cannot">
+      <tbody>
+        <tr><td>绝对距离</td><td><strong>给不了米。</strong> 输出经<span class="term" data-tip="每帧各自把最近~最远拉伸到 [0,1]，所以'0.7'这个数在不同帧对应的真实距离并不相同。">帧内归一化</span>，同一个"0.7"在不同帧对应的真实距离不同——<span class="term" data-tip="Metric scale：带真实物理单位（米）的尺度。单目相对深度天生没有，需靠 Mission Pad 位姿或标定补。">度量尺度</span>缺失。</td></tr>
+        <tr><td>透明/反光面</td><td>玻璃、纯白反光墙、镜面——<strong>深度模型看穿或看错</strong>，近度不升高，避障可能直接撞上去。这是首要安全盲区。</td></tr>
+        <tr><td>低纹理面</td><td>大片纯色墙、均匀天花板，缺纹理线索，深度估计不稳、跳动。</td></tr>
+        <tr><td>细小/线状障碍</td><td>电线、绳、栏杆、细杆——像素占比小，降采样后基本被抹掉，<strong>看不见</strong>。</td></tr>
+        <tr><td>逆光/弱光</td><td>强逆光、暗光下 RGB 质量差，深度随之退化。</td></tr>
+        <tr><td>语义理解</td><td>它只懂"远近"，<span class="term" data-tip="Semantic：识别'这是人/门/桌子'的能力。DA-V2 不做语义分割，只出深度。">不懂"那是什么"</span>——分不清人、门、可穿越的门帘还是实墙。</td></tr>
+        <tr><td>时序/运动</td><td>单帧模型，<strong>无记忆、不建模运动</strong>，不预测障碍会不会动过来。</td></tr>
+      </tbody>
+    </table>
+
+    <div class="warn-box">
+      <strong>安全底线：</strong> 因为透明/反光/细线三类盲区真实存在，这套方案<strong>永远不能当唯一安全保障</strong>——键盘人工接管和看门狗才是第一道防线。挡板必须"大、不透明、有纹理"，也是这个原因。
+    </div>
+
+    <h2>4 · 从"深度图"到"避障决策"：一路丢了多少信息</h2>
+    <p>模型看到的信息很丰富，但到最后驱动飞机时，只剩三个数。理解这条"信息漏斗"，就理解了决策的真实精度：</p>
+    <div class="flow">
+      <div class="flow-step"><div class="flow-num">1</div><div><h4>逐像素逆深度（原始）</h4><p>DA-V2 输出一整张高分辨率逆深度图，信息最全。</p></div></div>
+      <div class="flow-step"><div class="flow-num">2</div><div><h4>→ 近度网格 96×128（降采样）</h4><p>归一化 + <span class="term" data-tip="Downsample：把高分辨率图缩成小网格，降低传输量、便于处理，但丢掉细节。">降采样</span>，细小物体在这一步开始丢失。</p></div></div>
+      <div class="flow-step"><div class="flow-num">3</div><div><h4>→ 只取中部水平带 [0.30, 0.80]</h4><p>忽略天花板和地面，只看正前方一条横带——上下方向的信息被裁掉。</p></div></div>
+      <div class="flow-step"><div class="flow-num">4</div><div><h4>→ 左 / 中 / 右 三区各取中位数</h4><p>整条带压成 3 个数。空间分辨率降到"只知道大概偏左还是偏右"。</p></div></div>
+      <div class="flow-step"><div class="flow-num">5</div><div><h4>→ 3 个阈值比较 → 一个动作</h4><p>危险度取三区 max，比 <code>clear/stop</code> 阈值，输出 巡航 / 拐弯 / 悬停。</p></div></div>
+    </div>
+    <div class="takeaway">
+      <strong>这说明</strong>
+      <p>最终决策粒度只有"左/中/右 + 快/慢/停"。它<strong>够用来躲一堵墙</strong>，但天生做不了"从两个箱子中间的缝穿过去"这类需要精细空间推理的动作——不是参数没调好，是信息在漏斗里被主动丢掉了。</p>
+    </div>
+
+    <h2>5 · 反应式控制律：它不是模型，是规则</h2>
+    <p><code>AvoidanceController</code> 是纯 numpy 的 if/else，没有任何可学习参数。它的能力边界由"<span class="term" data-tip="Reactive：只根据当前这一帧的观测立即反应，不规划未来、不记历史、没有目标点。">反应式</span>"三个字决定：</p>
+    <ul>
+      <li><strong>三种行为</strong>：通畅→减速巡航前进；变近→朝更空一侧<span class="term" data-tip="Hysteresis / commit：一旦选定往左或往右绕，就锁住不翻转，直到前方重新全通畅，避免左右反复横跳。">锁向</span>偏航拐开；被围→原地悬停。</li>
+      <li><strong>无地图</strong>：不知道自己在哪、去过哪，不构建环境地图。</li>
+      <li><strong>无目标</strong>：没有"目的地"概念。会绕开障碍飞向开阔处，<strong>不会飞向某个指定点、不会回家</strong>。</li>
+      <li><strong>无记忆</strong>：除了"当前锁定的绕行方向"，不记任何历史。</li>
+      <li><strong>不横移</strong>：只用偏航 + 小幅前进绕障（<code>roll=0</code>），不做侧向平移。</li>
+    </ul>
+    <p>这些<strong>是刻意的设计选择，不是缺陷</strong>——反应式避障就是要简单、可预测、安全。"认路、去目标、穿窄缝"这些是导航/规划的活，是留给 WAM 的，不该往这个控制器里塞。</p>
+
+    <h2>6 · 系统级能力范围总表</h2>
+    <table>
+      <thead><tr><th>能力</th><th>支持？</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr class="can"><td>躲开正前方大块障碍</td><td>✅</td><td>核心能力，有纹理不透明物体</td></tr>
+        <tr class="can"><td>接近减速 / 被围悬停</td><td>✅</td><td>线性刹车 + BLOCKED 悬停</td></tr>
+        <tr class="can"><td>朝空旷侧拐弯绕行</td><td>✅</td><td>锁向不横跳（真机待逐一验证）</td></tr>
+        <tr class="cannot"><td>测出"离墙几米"</td><td>❌</td><td>相对深度，无度量尺度</td></tr>
+        <tr class="cannot"><td>躲玻璃 / 白墙 / 电线</td><td>❌</td><td>深度模型盲区，安全隐患</td></tr>
+        <tr class="cannot"><td>飞向指定目标点 / 认路</td><td>❌</td><td>反应式无目标无地图 → WAM 的活</td></tr>
+        <tr class="cannot"><td>从窄缝中穿过</td><td>❌</td><td>三区粒度不足以精细过缝</td></tr>
+        <tr class="cannot"><td>预测动态障碍</td><td>❌</td><td>单帧无时序建模</td></tr>
+        <tr class="cannot"><td>识别"那是什么"</td><td>❌</td><td>只出深度，无语义</td></tr>
+      </tbody>
+    </table>
+
+    <h2>7 · 对"喂 WAM 训练"意味着什么</h2>
+    <p>这套方案产出的感知数据，恰好能和 ScoutXWAM 的输入约定对上，但也要看清差距：</p>
+    <ul>
+      <li><strong>✅ 深度可作几何先验</strong>：ScoutXWAM 用<span class="term" data-tip="Geometric prior：把深度作为额外监督信号，引导模型学到一致的 3D 结构，而非只学'看着像'。">深度当几何先验</span>引导空间智能，DA-V2 出的<span class="term" data-tip="RGB + Depth：彩色图配深度图。ScoutXWAM 的输入正是成对的多视角 RGB-D。">RGB-D</span>正好能对接这套输入约定。</li>
+      <li><strong>⚠️ 相对 vs 绝对</strong>：DA-V2 是相对深度，ScoutXWAM 训练里的深度更希望是稳定的几何信号——喂之前要说清"这是相对深度"，尺度靠 Mission Pad 位姿另行锚定。</li>
+      <li><strong>⚠️ 单目单视角</strong>：ScoutXWAM 用<strong>成对多视角</strong> RGB-D，Tello 只有<strong>一个</strong>前视相机。单视角能用，但覆盖的几何信息比多视角少。</li>
+      <li><strong>⚠️ 帧率与同步</strong>：9fps 且<span class="term" data-tip="RTT：往返时延。WiFi+远端推理导致深度帧比 RGB 帧晚到，训练前必须按时间戳对齐。">深度帧比 RGB 晚到</span>，作训练数据前必须按时间戳严格对齐，否则'看到的'和'当时的动作'对不上。</li>
+    </ul>
+    <div class="takeaway">
+      <strong>一句话</strong>
+      <p>这套避障方案对 WAM 的价值，<strong>不在它的决策有多聪明</strong>（它很朴素），而在于它<strong>能当安全网，让无人机在封闭环境里安全地自主飞、把成对的 RGB-D + 动作 + 位姿数据源源不断采回来</strong>——避障是"采数据的司机"，WAM 才是"要培养的大脑"。</p>
+    </div>
+
+    <footer>
+      内部技术评估 · 避障方案模型能力范围 · 2026-07-21<br>
+      配套：<code>docs/design/2026-07-17-tt-visual-avoidance-design.md</code> · <code>docs/references/2026-07-20-scoutxwam-world-model-analysis.md</code>
+    </footer>
+  </main>
+</body>
+</html>

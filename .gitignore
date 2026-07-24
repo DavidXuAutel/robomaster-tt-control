@@ -16,8 +16,8 @@ logs_*.log
 gesture_profiles/
 *.bak-*
 *.orig*
-_old_gesture_*/
+*_old_gesture_*/
 .merge-backup-*/
-.pytest_cache/
-.superpowers/
 tt_control.bak-*/
+.pytest_cache/
+tmp/
