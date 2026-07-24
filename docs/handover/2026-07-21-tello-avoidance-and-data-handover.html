@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tello 无人机 · 避障能力与数据交接</title>
+  <style>
+    :root {
+      --green: #00b341; --green-dark: #007744; --ink: #16201b; --muted: #566;
+      --line: rgba(0,0,0,0.09); --bg-soft: #f3f8f5; --warn: #b26a00; --warn-soft: #fff4e2;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; color:var(--ink); background:linear-gradient(180deg,#fff,#f7fbf8);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Helvetica,Arial,sans-serif; line-height:1.75; }
+    main { width:min(1000px,calc(100% - 40px)); margin:0 auto; padding:56px 0 100px; }
+    .kicker { color:var(--green-dark); font-size:.8rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase; margin-bottom:10px; }
+    h1 { font-size:clamp(2rem,5vw,3rem); font-weight:600; letter-spacing:-.03em; line-height:1.1; margin:0 0 14px; }
+    .source { margin:0 0 34px; padding:14px 18px; border-left:4px solid var(--green); border-radius:0 12px 12px 0;
+      background:var(--bg-soft); color:var(--muted); font-size:.9rem; }
+    .source code { color:var(--green-dark); word-break:break-all; }
+    h2 { margin:52px 0 8px; padding-top:26px; border-top:1px solid var(--line); font-size:clamp(1.4rem,3vw,1.9rem); font-weight:600; letter-spacing:-.02em; }
+    h3 { margin:28px 0 8px; font-size:1.15rem; font-weight:650; }
+    p { margin:10px 0; }
+    ul,ol { padding-left:1.4rem; } li { margin:5px 0; }
+    code { padding:1px 6px; border-radius:6px; background:rgba(0,119,68,.09);
+      font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace; font-size:.86em; }
+    pre { background:#0e1613; color:#d6efe0; padding:16px 18px; border-radius:12px; overflow:auto; font-size:.82rem; line-height:1.5; }
+    pre code { background:none; color:inherit; padding:0; }
+    strong { color:#16201b; }
+    .lead { margin:18px 0 8px; padding:20px 22px; border:1px solid var(--line); border-radius:16px; background:rgba(255,255,255,.8); font-size:1.03rem; }
+    .metric-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:24px 0; }
+    .metric-card { padding:18px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.85); }
+    .metric-card strong { display:block; margin-bottom:6px; color:var(--green-dark); font-size:1.6rem; font-weight:600; letter-spacing:-.03em; line-height:1; }
+    .metric-card span { color:var(--muted); font-size:.85rem; }
+    table { width:100%; border-collapse:collapse; margin:18px 0; font-size:.92rem; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { color:var(--green-dark); font-size:.78rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
+    tbody tr:nth-child(even) { background:rgba(0,119,68,.028); }
+    .can td:first-child { color:var(--green-dark); font-weight:600; }
+    .cannot td:first-child { color:var(--warn); font-weight:600; }
+    .takeaway { margin:22px 0; padding:20px 24px; border-radius:16px; background:var(--green-dark); color:#fff; }
+    .takeaway strong { display:block; margin-bottom:6px; color:#8ff0b4; font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; }
+    .takeaway p { margin:0; color:rgba(255,255,255,.92); }
+    .warn-box { margin:22px 0; padding:16px 20px; border-radius:14px; border:1px solid rgba(178,106,0,.28); background:var(--warn-soft); color:#6b4400; font-size:.94rem; }
+    .warn-box strong { color:var(--warn); }
+    footer { margin-top:60px; padding-top:24px; border-top:1px solid var(--line); color:#8a978f; font-size:.85rem; text-align:center; }
+    .toc { margin:8px 0 10px; padding:18px 22px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.8); }
+    .toc strong { display:block; margin-bottom:8px; color:var(--green-dark); font-size:.75rem; letter-spacing:.1em; text-transform:uppercase; }
+    .toc ol { margin:0; }
+    .term { border-bottom:1px dashed var(--green-dark); cursor:help; position:relative; }
+    .term:hover,.term:focus { background:rgba(0,179,65,.10); outline:none; }
+    .term::after { content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 9px); transform:translateX(-50%);
+      width:max-content; max-width:300px; padding:10px 13px; border-radius:10px; background:#16201b; color:#fff;
+      font-size:.82rem; font-weight:400; line-height:1.55; text-align:left; white-space:normal;
+      box-shadow:0 12px 32px rgba(0,0,0,.24); opacity:0; visibility:hidden; transition:opacity .15s; z-index:60; pointer-events:none; }
+    .term::before { content:""; position:absolute; left:50%; bottom:calc(100% + 3px); transform:translateX(-50%);
+      border:6px solid transparent; border-top-color:#16201b; opacity:0; visibility:hidden; transition:opacity .15s; z-index:60; pointer-events:none; }
+    .term:hover::after,.term:focus::after,.term:hover::before,.term:focus::before { opacity:1; visibility:visible; }
+    .term.tip-left::after { left:0; transform:none; } .term.tip-right::after { left:auto; right:0; transform:none; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="kicker">交接材料 · 异构协同 / 单机无人机</p>
+    <h1>Tello 无人机 · 避障能力与数据交接</h1>
+    <div class="source">
+      交付对象：大众(世界模型 / 数据飞轮方向) · 日期：2026-07-21<br>
+      内容：本方案下 Tello 无人机的<strong>避障能力边界</strong>、飞行产生的<strong>数据与作用</strong>、以及<strong>数据格式</strong>。<br>
+      配套详料：<code>docs/references/2026-07-21-avoidance-model-capability.html</code>(能力细节) · <code>docs/design/2026-07-21-single-drone-solidify-and-data-delivery-design.md</code>(方案)。术语见虚线下划线,鼠标悬停查看。
+    </div>
+
+    <div class="toc">
+      <strong>目录</strong>
+      <ol>
+        <li>本轮测试目标(1 个验证 + 2 类数据)</li>
+        <li>定位：无人机在数据飞轮里是什么角色</li>
+        <li>避障能力边界(能做什么 / 做不到什么)</li>
+        <li>飞行产生的数据 &amp; 两大作用</li>
+        <li>数据格式(episode 结构 / 字段 / 动作语义)</li>
+        <li>两类飞行：采集飞行 vs 校正飞行</li>
+        <li>待大众确认的对接点</li>
+      </ol>
+    </div>
+
+    <h2>0 · 本轮测试目标(一次测试 = 1 个验证 + 2 类数据)</h2>
+    <div class="lead">
+      本轮 Tello 避障测试可概括为<strong>三个目标 =「1 个验证目标 + 2 类数据产出」</strong>。
+    </div>
+    <h3>目标一 · 验证避障能力边界</h3>
+    <p>验证「<strong>单目相机 + Depth Anything V2 Small + 反应式控制律</strong>」在真机上的能力与失效边界:接近减速 / 拐弯绕障(TURN)/ 被围悬停(BLOCKED)三种行为成立、失败降级链可触发、盲区(玻璃/白墙/细线)确认、参数整定与重复性(≥5 次一致)。</p>
+    <h3>目标二 · 产出两类数据</h3>
+    <table>
+      <thead><tr><th></th><th>2a 仿真轨迹校正数据</th><th>2b 自由避障飞行视频数据</th></tr></thead>
+      <tbody>
+        <tr><td>来自哪种飞行</td><td>校正飞行(同向 pad、直线、<strong>不转向</strong>)</td><td>避障飞行(自主避障、含转向,pad 可选)</td></tr>
+        <tr><td>产出</td><td>真机位姿 + 动作(<code>frames.csv</code>)</td><td><code>video.mp4</code> + <code>frames.csv</code>(动作+本体状态)</td></tr>
+        <tr><td>给谁用</td><td><code>sim_match_report.py</code> 出可信度报告</td><td>喂世界模型做具身特定后训练</td></tr>
+        <tr><td>作用</td><td>证明"<strong>仿真是真机的可信替身</strong>"(对准/校正)</td><td>让 WAM 学<strong>无人机的因果动力学</strong></td></tr>
+      </tbody>
+    </table>
+    <div class="takeaway">
+      <strong>三者关系</strong>
+      <p>目标一与 2b 在同一批避障飞行里同时完成(飞时开 <code>--record</code> 即采数据);2a 是单独的受控校正飞行——避障要转向会破坏 Mission Pad 轨迹拼接,故校正须"不转向 + 同向 pad"单独飞。</p>
+    </div>
+
+    <h2>1 · 定位：无人机在数据飞轮里是什么角色</h2>
+    <div class="lead">
+      Tello 无人机是<strong>同一套"数据飞轮 + 世界模型(WAM)"方法论里、更廉价更安全的第二个具身载体</strong>。它做两件事:
+      <strong>① 用视觉避障当安全网</strong>,让飞机能不炸机地自主飞;
+      <strong>② 每次飞行同步产出训练级数据</strong>(视频 + 轨迹),供仿真校正与世界模型微调。
+      <br><br>
+      换句话说:<strong>避障是"采数据的司机",WAM 才是要培养的大脑。</strong>与机械臂(Franka+GELLO)那条腿同构——给同一个世界模型多贡献一种异构具身的数据与一个安全试验台。
+    </div>
+
+    <h2>2 · 避障能力边界</h2>
+    <p>本方案的"感知智能"只来自<strong>一个</strong>神经网络:<span class="term" data-tip="Depth Anything V2 Small：2024 开源单目深度估计模型，Small 版约 24.8M 参数，轻量+零样本泛化。">Depth Anything V2 Small</span>(<span class="term" data-tip="单目深度估计：只用一个普通前视摄像头估计场景深度，无需双目/结构光/激光雷达。">单目深度</span>,跑在远端 4090 GPU 微服务)。其余是写死的<span class="term" data-tip="按固定阈值 if/else 决策的启发式控制律，无可学习参数，不是神经网络。">反应式规则</span>:把深度切左/中/右三区、比阈值、锁向绕行。</p>
+
+    <div class="metric-grid">
+      <div class="metric-card"><strong>单目相对深度</strong><span>看得出谁近谁远，但<span class="term" data-tip="相对深度只知 A 比 B 近，不知具体几米。度量尺度需 Mission Pad 位姿另行提供。">给不出"米"</span></span></div>
+      <div class="metric-card"><strong>~9 fps</strong><span>端到端感知帧率(含 WiFi+推理 ~106ms)</span></div>
+      <div class="metric-card"><strong>3 区</strong><span>决策粒度：左 / 中 / 右</span></div>
+      <div class="metric-card"><strong>反应式</strong><span>无地图、无目标、无记忆</span></div>
+    </div>
+
+    <h3>✅ 能做到</h3>
+    <table class="can">
+      <tbody>
+        <tr><td>躲大块障碍</td><td>躲开正前方<strong>有纹理、不透明</strong>的大块障碍(墙、纸箱、家具、门框):近了明显"变红"→ 触发避让。</td></tr>
+        <tr><td>接近减速</td><td>越近前进杆量越小(线性刹车),不硬冲。</td></tr>
+        <tr><td>朝空旷侧拐弯</td><td>向更空的一侧<span class="term" data-tip="一旦选定往左/右绕就锁定不翻转，直到前方重新全通畅，避免左右横跳。">锁向偏航</span>绕行。</td></tr>
+        <tr><td>被围悬停</td><td>左中右都近 → 原地悬停(BLOCKED),不乱撞。</td></tr>
+      </tbody>
+    </table>
+
+    <h3>⚠️ 做不到 / 会失效</h3>
+    <table class="cannot">
+      <tbody>
+        <tr><td>测绝对距离</td><td>相对深度,无米制尺度(尺度靠 Mission Pad)。</td></tr>
+        <tr><td>玻璃/白墙/反光/细线</td><td>深度模型<strong>看穿或看错</strong> → 近度不升高,可能直接撞。<strong>首要安全盲区。</strong></td></tr>
+        <tr><td>飞向目标点 / 认路</td><td>反应式无目标无地图,只会"别撞上、往开阔处走",<strong>不会去指定位置、不会回家</strong>。这是 WAM 的职责。</td></tr>
+        <tr><td>穿窄缝</td><td>三区粒度不足以精细过缝。</td></tr>
+        <tr><td>预测动态障碍 / 识别物体</td><td>单帧无时序;只出深度、无语义(分不清人/门/门帘)。</td></tr>
+      </tbody>
+    </table>
+
+    <div class="warn-box">
+      <strong>安全底线：</strong>因透明/反光/细线盲区真实存在,避障<strong>永不作为唯一安全保障</strong>——人工键盘接管 + 看门狗(挂载超时/感知失联自动悬停)是第一防线。挡板须"大、不透明、有纹理"。
+    </div>
+
+    <div class="takeaway">
+      <strong>一句话边界</strong>
+      <p>它能"安全地别撞上有纹理的大块障碍",做不了"量距离 / 认路 / 去目标 / 穿窄缝 / 躲玻璃"。<strong>导航与精细操作是 WAM 的活,避障只负责安全网。</strong></p>
+    </div>
+
+    <h2>3 · 飞行产生的数据 &amp; 两大作用</h2>
+    <p>每次飞行产出一个 <strong>episode</strong>:<strong>视频(MP4)+ 轨迹数据(frames.csv)+ 深度网格</strong>。两大用途:</p>
+
+    <h3>作用一：仿真校正(对准/可信度锚定)</h3>
+    <p>用真机记录的<strong>动作</strong>重放仿真运动学,量化"仿真轨迹 vs 真机轨迹"的偏差,产出<span class="term" data-tip="逐轴 MAE/RMSE、航向误差、终点误差、路径长度比 + 真机实线vs仿真虚线叠图。">可信度报告</span>。这是"仿真是真机可信替身"的量化证据,是后续仿真增广、想象 rollout 的地基。</p>
+
+    <h3>作用二：世界模型微调(具身特定后训练)</h3>
+    <p>飞行的 <strong>(视频, 动作, 本体状态)</strong> 序列 = 世界模型学习<span class="term" data-tip="给定动作预测未来观测/深度会怎么变——动作是因，未来画面是果。">无人机因果动力学</span>所需的(观测,动作,转移)三元组。教模型"给这个动作,画面就这样流动",把通用 WAM 适配到无人机本体。</p>
+
+    <table>
+      <thead><tr><th>数据用途</th><th>避障自主飞的数据是否合适</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr class="can"><td>训世界模型(空间/动力学)</td><td>✅ 合适</td><td>要的是多样(观测,动作,转移)覆盖,动作谁产的不重要</td></tr>
+        <tr class="can"><td>仿真校正</td><td>✅ 合适</td><td>真机轨迹是校准仿真的真值锚</td></tr>
+        <tr class="cannot"><td>训动作策略/模仿学习</td><td>✕ 价值低</td><td>需人遥操作的有目的演示(本方案暂不涉及)</td></tr>
+      </tbody>
+    </table>
+
+    <div class="warn-box">
+      <strong>两个要点：</strong>
+      ① <strong>视频不是"只能回看"</strong>——对世界模型它是核心训练输入(视频经 VAE 编码后预测未来)。
+      ② <strong>尺度锚(Mission Pad)只在"校正"时需要</strong>;采世界模型数据可无 pad(要的是动作+画面变化的对齐)。单目深度本身无米制尺度。
+    </div>
+
+    <h2>4 · 数据格式</h2>
+    <p>一次飞行 = 一个 episode 目录。<strong>视频是主观测,frames.csv 是逐帧索引兼轨迹,深度为辅助</strong>。对齐 DROID/LeRobot"MP4 + 表格"的通行做法。</p>
+    <pre><code>logs/episodes/ep_&lt;YYYYMMDD_HHMMSS&gt;/
+├── meta.json      回合级元数据(含 video 信息 / 尺度锚 / 动作来源 / 结局)
+├── video.mp4      H.264(CRF18);第 N 帧 &lt;-&gt; frames.csv 第 N 行(严格 1:1)
+├── frames.csv     逐帧索引 + 轨迹(核心)
+└── depth/000001.npy   96×128 float16 近度网格(按 ts 去重,不重复落盘)</code></pre>
+
+    <h3>4.1 <code>frames.csv</code> 关键字段(一帧一行,<code>t_mono_ms</code> 为对齐基准)</h3>
+    <table>
+      <thead><tr><th>字段</th><th>含义</th></tr></thead>
+      <tbody>
+        <tr><td><code>t_mono_ms</code> / <code>video_frame</code></td><td>单调时钟毫秒(真实时刻,对齐基准) / 对应视频 0 基帧号</td></tr>
+        <tr><td><code>pos_x/y/z_cm</code>, <code>yaw_deg</code></td><td>真机位姿真值(相对 Mission Pad,<strong>尺度锚</strong>);<code>pad_id&lt;0</code> 时此行位姿不可比</td></tr>
+        <tr><td><code>act_roll/pitch/throttle/yaw</code></td><td><strong>动作</strong>:RC 杆量(<span class="term" data-tip="Tello 遥控杆量，范围 -100~100，无量纲，非米/速度。">归一化 -100~100</span>,换算见下)</td></tr>
+        <tr><td><code>vgx/vgy/vgz</code>, <code>pitch_deg/roll_deg</code>, <code>height_cm</code>, <code>bat_pct</code></td><td>本体状态:速度 / 姿态 / 高度 / 电量</td></tr>
+        <tr><td><code>depth_path</code>, <code>has_depth</code>, <code>depth_rtt_ms</code>, <code>depth_age_ms</code></td><td>对齐的深度网格 / 是否有效 / 推理耗时 / <span class="term" data-tip="配对深度相对本帧的滞后毫秒，用于筛查不同步坏帧。">深度滞后</span></td></tr>
+        <tr><td><code>ctrl_state</code>, <code>near_left/mid/right</code></td><td>决策状态(CRUISE/TURN/BLOCKED/MANUAL) / 左中右近度</td></tr>
+      </tbody>
+    </table>
+
+    <h3>4.2 动作语义(训练必读)</h3>
+    <p><code>act_*</code> 是归一化杆量,转真实速度用同一套运动学常数:</p>
+    <pre><code>v_forward = (act_pitch/100) · VMAX      # VMAX  = 0.6 m/s
+v_right   = (act_roll /100) · VMAX
+v_up      = (act_throttle/100) · VZMAX  # VZMAX = 0.5 m/s
+yaw_rate  = (act_yaw /100) · YAWRATE    # YAWRATE= 70 °/s</code></pre>
+
+    <h3>4.3 校正输出(仿真可信度报告)</h3>
+    <p>由 <code>sim_match_report.py</code> 产出,与 episode 同目录:</p>
+    <pre><code>match_report.json   逐轴 MAE/RMSE(m) · 航向 MAE(deg) · 终点误差(m) · 路径长度比
+match_report.png    真机实线 vs 仿真(动作重放)虚线 俯视叠图</code></pre>
+
+    <h3>4.4 同步保证</h3>
+    <ul>
+      <li>单一单调时钟 <code>t_mono_ms</code> 为唯一对齐基准;</li>
+      <li>视频帧与 CSV 行<strong>严格 1:1</strong>(帧↔动作对齐靠行号,不靠 MP4 名义帧率);</li>
+      <li>深度按 <code>ts</code> 去重 + 记 <code>depth_age_ms</code>,如实暴露 RGB↔深度滞后,便于筛查坏帧。</li>
+    </ul>
+
+    <h2>5 · 两类飞行：采集飞行 vs 校正飞行</h2>
+    <p>因为避障会偏航转向,而 Mission Pad 轨迹拼接假设"不旋转",两类目的<strong>分开飞</strong>:</p>
+    <table>
+      <thead><tr><th>类型</th><th>目的</th><th>Mission Pad</th><th>动作</th></tr></thead>
+      <tbody>
+        <tr><td>校正飞行(少量)</td><td>标定仿真可信度</td><td>沿直线铺<strong>同向</strong> pad、间距 ≤0.5m、机头对准</td><td>前进/后退等<strong>不转向</strong>的简单动作</td></tr>
+        <tr><td>避障/采集飞行(大量)</td><td>喂世界模型微调</td><td>可有可无(有则记)</td><td>避障自主飞(含转向)</td></tr>
+      </tbody>
+    </table>
+    <p style="color:var(--muted);font-size:.9rem">注:避障用前视相机、pad 用下视相机,两者独立可同时开;但避障转向会破坏 pad 拼接,故精确绝对轨迹只在"校正飞行"里取。</p>
+
+    <h2>6 · 待大众确认的对接点</h2>
+    <ol>
+      <li><strong>深度分辨率</strong>:世界模型是自带深度分支、只吃 RGB(则现状 96×128 相对近度即可),还是要高分辨率/原始逆深度(需给感知服务加 raw 输出模式)?</li>
+      <li><strong>数据 schema</strong>:是否要严格对齐大众侧已有的 DROID-1K Spatial / Scout-GELLO 字段命名与目录?若有定义,可直接对齐 <code>frames.csv</code>,省返工。</li>
+      <li><strong>WAM 对无人机的接口</strong>:期望输入(RGB? RGB-D? 多视角?)与输出(速度场? 离散动作? 频率?)。无人机侧已预留 <code>ExternalModelPolicy</code> 适配位:把动作增量映射为 RC 四通道杆量,仲裁优先级 <strong>键盘 &gt; WAM &gt; 避障 &gt; 悬停</strong>,接口一确认即可接入。</li>
+    </ol>
+
+    <footer>
+      Tello 无人机 · 避障能力与数据交接 · 2026-07-21<br>
+      配套:避障模型能力范围报告 · 单机做扎实与数据交付设计方案
+    </footer>
+  </main>
+</body>
+</html>
