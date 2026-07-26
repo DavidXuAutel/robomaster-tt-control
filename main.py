@@ -201,9 +201,15 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     return 2
 
+                # da_v2_service 需要 server/.venv (有 torch); 找不到则回退 sys.executable
+                _server_python = (
+                    da_v2_path.parent / ".venv" / "bin" / "python"
+                )
+                if not _server_python.exists():
+                    _server_python = pathlib.Path(sys.executable)
                 _depth_proc = subprocess.Popen(
                     [
-                        sys.executable,
+                        str(_server_python),
                         str(da_v2_path),
                         "--host",
                         "127.0.0.1",

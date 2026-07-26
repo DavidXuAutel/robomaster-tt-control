@@ -586,6 +586,9 @@ class App:
         self._last_rc = RcAxes()
         self._last_rc_time = time.time()
         self._auto = "OFF"  # 悬停即关闭半自动
+        self._auto_since = None
+        self._fsm.reset()  # 清 _orbit_active，避免再挂 AUTO 续上旧环绕
+        self._fsm_state = AvoidState.PREFLIGHT
         if self.client and self.connected:
             self.client.rc(0, 0, 0, 0)
             self._hint = "Hover"
@@ -686,16 +689,22 @@ class App:
         if self._auto == "OFF":
             self._auto = "ARMED"
             self._auto_since = None
+            self._fsm.reset()
+            self._fsm_state = AvoidState.PREFLIGHT
             self._hint = "AUTO ARMED - press V again to ENGAGE"
         elif self._auto == "ARMED":
             self._auto = "ON"
             self._auto_since = time.time()
             self._controller.reset()
+            self._fsm.reset()  # 干净 APPROACH，禁止续上暂停前的 _orbit_active
+            self._fsm_state = AvoidState.PREFLIGHT
             self._hint = "AUTO ON - WASD overrides, SPACE/ESC/L to stop"
         else:  # ON -> 暂停回 ARMED
             self._auto = "ARMED"
             self._auto_since = None
             self._last_rc = RcAxes()
+            self._fsm.reset()
+            self._fsm_state = AvoidState.PREFLIGHT
             if self.client:
                 self.client.rc(0, 0, 0, 0)
             self._hint = "AUTO paused (ARMED)"

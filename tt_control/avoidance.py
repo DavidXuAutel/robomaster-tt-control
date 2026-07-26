@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Optional
 
 import numpy as np
 
@@ -152,7 +153,8 @@ class OrbitParams:
     min_yaw: int = 0      # 不做最小钳位，小误差不转
     min_pitch: int = 5
 
-    # 接近检测：中区超过此值认为太近（危险）
+    # 接近检测：中区或侧区超过此值认为太近（危险）
+    # 环绕横移时侧向才是主碰撞面，故左右区同样刹停（2026-07-26）
     danger_thresh: float = 0.78
 
     # 失锁：中区低于此值认为椅子丢掉了
@@ -200,10 +202,9 @@ class OrbitController:
 
         1. 椅子居中 (|pos| < deadband) → 慢速横移 + 微调yaw
         2. 椅子偏了 → 停横移，全力yaw拉回中央
-        3. 椅子丢了 → 停一切，悬停等待
+        3. 椅子丢了 / 危险 → 停一切，悬停等待
         """
-        # 距离参考（中区中位数，判断远近足够）
-        _, mid, _ = self._zone_nearness(nearness)
+        left, mid, right = self._zone_nearness(nearness)
 
         # ── 1) 椅子水平位置（重心法）───────────────────
         chair_pos = self._chair_horizontal(nearness)  # [-1,1]，0=正中
@@ -228,27 +229,38 @@ class OrbitController:
             roll = 0
             orbit_phase = "search"  # 找不到椅子
 
-        # ── 4) 距离保持 ──────────────────────────────
-        dist_err = self.p.target_nearness - mid  # 正=太远需前进,负=太近需后退
-        if abs(dist_err) <= self.p.distance_deadband:
+        # ── 4) 距离保持（按椅子列近度，勿用中区——椅子偏了时 mid 是背景）──
+        if chair_pos is None:
             pitch = 0
+            target_near = mid
         else:
-            pitch_raw = int(round(dist_err * self.p.pitch_distance_gain * 20))
-            pitch = max(-self.p.max_pitch, min(self.p.max_pitch, pitch_raw))
-            if abs(pitch) < self.p.min_pitch and abs(pitch_raw) >= 1:
-                pitch = self.p.min_pitch if pitch_raw > 0 else -self.p.min_pitch
+            target_near = self._nearness_at_pos(nearness, chair_pos)
+            dist_err = self.p.target_nearness - target_near  # 正=太远需前进
+            if abs(dist_err) <= self.p.distance_deadband:
+                pitch = 0
+            else:
+                pitch_raw = int(round(dist_err * self.p.pitch_distance_gain * 20))
+                pitch = max(-self.p.max_pitch, min(self.p.max_pitch, pitch_raw))
+                if abs(pitch) < self.p.min_pitch and abs(pitch_raw) >= 1:
+                    pitch = self.p.min_pitch if pitch_raw > 0 else -self.p.min_pitch
 
         # ── 5) 状态判定 ──────────────────────────────
+        # 中区或侧区过近都 DANGER（横移时侧向是主碰撞面）
         state = "ORBIT"
-        if mid > self.p.danger_thresh:
+        if max(left, mid, right) > self.p.danger_thresh:
             state = "DANGER"
-        elif chair_pos is None and mid < self.p.lost_thresh:
+        elif chair_pos is None:
+            # 无可靠目标即 LOST（不要求 mid < lost_thresh，避免墙面 mid 中等时永不失锁）
             state = "LOST"
+
+        # LOST / DANGER：强制零杆（宽限期内也不得前进）
+        if state in ("LOST", "DANGER"):
+            pitch = roll = yaw = 0
 
         return OrbitDecision(
             axes=RcAxes(pitch=pitch, roll=roll, yaw=yaw),
             state=state,
-            zones=(0.0, mid, 0.0),
+            zones=(left, mid, right),
             yaw_correction=yaw,
             pitch_correction=pitch,
             chair_pos=chair_pos,
@@ -270,11 +282,29 @@ class OrbitController:
         col_nearness = np.median(band, axis=0)
         # 过滤背景噪声：近度低于 0.10 的列不参与
         weights = np.maximum(col_nearness - 0.10, 0.0)
-        total = weights.sum()
+        total = float(weights.sum())
         if total < 1e-6:
+            return None
+        # 拒绝均匀场（墙/地板当假椅子）：需有明显峰值列
+        peak = float(weights.max())
+        mean = total / float(weights.size)
+        if peak < 0.12 or peak < mean * 2.0:
             return None
         center = float(np.average(np.arange(w, dtype=np.float64), weights=weights))
         return (center / max(1, w - 1)) * 2.0 - 1.0
+
+    @staticmethod
+    def _nearness_at_pos(nearness: np.ndarray, chair_pos: float) -> float:
+        """取椅子水平位置附近列的中位近度，供距离保持使用。"""
+        h, w = nearness.shape
+        y0 = int(h * 0.30)
+        y1 = max(y0 + 1, int(h * 0.80))
+        col = int(round((chair_pos + 1.0) * 0.5 * (w - 1)))
+        col = max(0, min(w - 1, col))
+        half = max(1, w // 20)
+        c0 = max(0, col - half)
+        c1 = min(w, col + half + 1)
+        return float(np.median(nearness[y0:y1, c0:c1]))
 
     @staticmethod
     def _zone_nearness(nearness: np.ndarray) -> tuple[float, float, float]:

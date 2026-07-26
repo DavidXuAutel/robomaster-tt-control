@@ -113,13 +113,14 @@ class AvoidanceFSM:
 
         self._state = AvoidState.PREFLIGHT
         self._state_entered: float = 0.0
-        self._auto_engaged: float = 0.0
+        # None = 未挂载；不可用 0.0 作哨兵（仿真/单测 now=0 会每帧误触发「首次挂载」清掉 orbit）
+        self._auto_engaged: Optional[float] = None
         self._initial_yaw: Optional[float] = None
         self._pass_clear_count: int = 0
         self._danger_history: list[float] = []
         self._last_depth_ts: float = 0.0
         self._abort_reason: str = ""
-        self._orbit_lost_since: float = 0.0  # ORBIT 失锁计时
+        self._orbit_lost_since: Optional[float] = None  # ORBIT 失锁计时；None=未失锁
         self._orbit_active: bool = False   # 环绕滞回：一旦进入即保持，避免 mid 波动导致进出振荡
 
     # ── 属性 ──────────────────────────────────────────────────
@@ -164,11 +165,11 @@ class AvoidanceFSM:
         # 1) AUTO 未开启 → 悬停，复位
         if not auto_on:
             self._state = AvoidState.HOVER
-            self._auto_engaged = 0.0
+            self._auto_engaged = None
             self._initial_yaw = None
             self._pass_clear_count = 0
             self._orbit_active = False
-            self._orbit_lost_since = 0.0
+            self._orbit_lost_since = None
             return FsmDecision(
                 axes=RcAxes(),
                 state=self._state,
@@ -176,7 +177,7 @@ class AvoidanceFSM:
             )
 
         # 2) AUTO 首次挂载 → 记录初始 yaw，进入 APPROACH
-        if self._auto_engaged == 0.0:
+        if self._auto_engaged is None:
             self._auto_engaged = now
             self._initial_yaw = self._read_yaw(telemetry)
             self._state = AvoidState.APPROACH
@@ -185,7 +186,7 @@ class AvoidanceFSM:
             self._danger_history.clear()
             self._abort_reason = ""
             self._orbit_active = False
-            self._orbit_lost_since = 0.0
+            self._orbit_lost_since = None
 
         # 3) 检查 AUTO 全局超时
         if now - self._auto_engaged > self.p.max_auto_engaged_s:
@@ -307,7 +308,14 @@ class AvoidanceFSM:
             if mid > self.p.orbit_enter_nearness:
                 self._orbit_active = True
                 return self._run_orbit(nearness, now, elapsed)
-            # 还不够近 → 无视 avoidance 指令，继续直飞靠近
+            # 还不够近 → 继续直飞靠近；但侧向/遇障急停不得前冲（Codex P0）
+            if dec.state == "BLOCKED" or max(zones) > self._ctrl.p.estop_thresh:
+                return FsmDecision(
+                    axes=RcAxes(),
+                    state=self._state,
+                    sub_state=f"approach_hold danger={max(zones):.2f}",
+                    state_elapsed_s=elapsed,
+                )
             return FsmDecision(
                 axes=RcAxes(pitch=self._ctrl.p.cruise_speed),
                 state=self._state,
@@ -332,31 +340,35 @@ class AvoidanceFSM:
         """
         orbit_dec = self._orbit.decide(nearness)
 
-        # DANGER → 悬停保护
+        # DANGER → 悬停 + 解除 AUTO（须填 abort_reason，app 才 _disengage_auto）
         if orbit_dec.state == "DANGER":
             self._orbit_active = False
-            self._orbit_lost_since = 0.0
+            self._orbit_lost_since = None
+            self._abort_reason = "orbit_danger"
             self._state = AvoidState.HOVER
             self._ctrl.reset()
             return FsmDecision(
                 axes=RcAxes(), state=self._state,
+                abort_reason=self._abort_reason,
                 sub_state="orbit_danger", state_elapsed_s=0.0,
             )
 
-        # LOST 超时 → 悬停
+        # LOST 超时 → 悬停 + 解除 AUTO
         if orbit_dec.state == "LOST":
-            if self._orbit_lost_since == 0.0:
+            if self._orbit_lost_since is None:
                 self._orbit_lost_since = now
             if now - self._orbit_lost_since > self.p.orbit_lost_timeout_s:
                 self._orbit_active = False
-                self._orbit_lost_since = 0.0
+                self._orbit_lost_since = None
+                self._abort_reason = "orbit_lost"
                 self._state = AvoidState.HOVER
                 return FsmDecision(
                     axes=RcAxes(), state=self._state,
+                    abort_reason=self._abort_reason,
                     sub_state="orbit_lost", state_elapsed_s=0.0,
                 )
         else:
-            self._orbit_lost_since = 0.0
+            self._orbit_lost_since = None
 
         return FsmDecision(
             axes=orbit_dec.axes, state=self._state,
@@ -573,29 +585,36 @@ class AvoidanceFSM:
             )
 
         dec = self._orbit.decide(nearness)
-        mid = dec.zones[1]  # 中区近度用于距离/状态判断
 
-        # 太近 → 悬停保护
+        # 太近 → 悬停 + 解除 AUTO（与 _run_orbit 对齐）
         if dec.state == "DANGER":
+            self._orbit_active = False
+            self._orbit_lost_since = None
+            self._abort_reason = "orbit_danger"
             self._state = AvoidState.HOVER
             self._ctrl.reset()
             return FsmDecision(
                 axes=RcAxes(), state=self._state,
+                abort_reason=self._abort_reason,
                 sub_state="orbit_danger", state_elapsed_s=0.0,
             )
 
         # 椅子丢失计时
         if dec.state == "LOST":
-            if self._orbit_lost_since == 0.0:
+            if self._orbit_lost_since is None:
                 self._orbit_lost_since = now
             if now - self._orbit_lost_since > self.p.orbit_lost_timeout_s:
+                self._orbit_active = False
+                self._orbit_lost_since = None
+                self._abort_reason = "orbit_lost"
                 self._state = AvoidState.HOVER
                 return FsmDecision(
                     axes=RcAxes(), state=self._state,
+                    abort_reason=self._abort_reason,
                     sub_state="orbit_lost", state_elapsed_s=0.0,
                 )
         else:
-            self._orbit_lost_since = 0.0
+            self._orbit_lost_since = None
 
         return FsmDecision(
             axes=dec.axes, state=self._state,
@@ -635,11 +654,11 @@ class AvoidanceFSM:
     def reset(self) -> None:
         """人工接管时复位。"""
         self._state = AvoidState.PREFLIGHT
-        self._auto_engaged = 0.0
+        self._auto_engaged = None
         self._initial_yaw = None
         self._pass_clear_count = 0
         self._danger_history.clear()
         self._abort_reason = ""
         self._ctrl.reset()
         self._orbit_active = False
-        self._orbit_lost_since = 0.0
+        self._orbit_lost_since = None

@@ -1,7 +1,7 @@
 # POI 绕飞飞前缺陷审查与修复方案
 
 日期：2026-07-26  
-状态：📝 方案待实施（审查完成，未改代码）  
+状态：✅ 飞前最小集已实施（2026-07-26；单测 `tests/test_orbit.py` 通过）  
 范围：`OrbitController` + `AvoidanceFSM` 环绕路径 + `app.py` AUTO 挂载
 
 ## 1. 背景
@@ -106,10 +106,19 @@
 | Codex 短跑 consult | 5 条候选全 AGREE；严重度略偏软（LOST 标 P1） |
 | 综合定级 | LOST 前进、abort 缺口按 **P0**；暂停复位按 **P1** |
 
-## 7. 决策
+## 7. 决策与落地
 
-- **下次复现前先修 §3 第一步，再飞。**  
-- 假横移 / 侧向 / 冻结图传可飞后迭代。
+- ~~下次复现前先修 §3 第一步，再飞。~~ → **已落地**（含 Claude 修正：侧向 DANGER 升 P0、`chair_pos is None` 钳 pitch、LOST/DANGER 零杆、abort_reason、SPACE/V `fsm.reset()`）。
+- 假横移峰度阈值 / 冻结图传时间戳：仍可飞后迭代。
+
+### 7.1 代码改动摘要
+
+| 文件 | 改动 |
+|------|------|
+| `tt_control/avoidance.py` | LOST/DANGER 零杆；无目标即 LOST；均匀场拒假 POI；距离用椅子列近度；`max(L,M,R)` 侧向 DANGER |
+| `tt_control/avoidance_fsm.py` | abort_reason；`None` 哨兵；进环绕前侧向危险 `approach_hold` 不前冲 |
+| `tt_control/app.py` | `_hover` / V OFF→ARMED / ON→ARMED / ARMED→ON 均 `_fsm.reset()` |
+| `tests/test_orbit.py` | 安全路径单测 + `now=0` 回归 |
 
 ## 8. Claude Code 审核意见（2026-07-26）
 
