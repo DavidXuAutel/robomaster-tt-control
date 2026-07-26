@@ -30,7 +30,15 @@ def _open_socket(bind_ip: str = "") -> socket.socket:
 
 
 def _send(sock: socket.socket, addr: tuple[str, int], cmd: str) -> str:
-    print(f">>> {cmd}")
+    # 脱敏 ap 命令中的 Wi-Fi 密码
+    if cmd.startswith("ap "):
+        parts = cmd.split(" ", 2)
+        if len(parts) >= 3:
+            print(f">>> ap {parts[1]} ***")
+        else:
+            print(f">>> {cmd}")
+    else:
+        print(f">>> {cmd}")
     sock.sendto(cmd.encode(), addr)
     try:
         data, _ = sock.recvfrom(1024)
@@ -41,8 +49,8 @@ def _send(sock: socket.socket, addr: tuple[str, int], cmd: str) -> str:
     return reply
 
 
-def cmd_setup(ssid: str, password: str) -> int:
-    sock = _open_socket()
+def cmd_setup(ssid: str, password: str, bind_ip: str = "") -> int:
+    sock = _open_socket(bind_ip)
     try:
         addr = (TELLO_AP_IP, CMD_PORT)
         if _send(sock, addr, "command") != "ok":
@@ -140,12 +148,13 @@ def main() -> int:
     sp = sub.add_parser("setup", help="直连飞机热点时执行，发送 ap 组网指令")
     sp.add_argument("--ssid", default=None, help="路由器 Wi-Fi 名（默认读 wifi_config.json）")
     sp.add_argument("--password", default=None, help="路由器 Wi-Fi 密码（默认读 wifi_config.json）")
+    sp.add_argument("--bind-ip", default="", help="指定发命令的本机 IP（多网卡时使用）")
     sub.add_parser("find", help="连接路由器 Wi-Fi 时执行，扫描飞机局域网 IP")
     args = p.parse_args()
     if args.action == "setup":
         from wifi_config import get_config
         cfg = get_config(args.ssid, args.password)
-        return cmd_setup(cfg["router_ssid"], cfg["router_password"])
+        return cmd_setup(cfg["router_ssid"], cfg["router_password"], getattr(args, "bind_ip", ""))
     return cmd_find()
 
 

@@ -13,14 +13,15 @@ import cv2
 import numpy as np
 
 from tt_control.auto_safety import AutoWatchdog
-from tt_control.avoidance import AvoidanceController, AvoidParams
+from tt_control.avoidance import AvoidanceController, AvoidDecision, AvoidParams
+from tt_control.avoidance_fsm import AvoidanceFSM, AvoidState, FsmParams
 from tt_control.config import AppConfig, detect_local_ip
 from tt_control.control import HELP_TEXT, RcAxes, map_key
 from tt_control.episode_recorder import EpisodeRecorder
 from tt_control.flight_test import FlightTestRecorder
 from tt_control.inference import InferenceBackend, InferenceEvent, PassthroughBackend
 from tt_control.mujoco_twin import MujocoPadTwin
-from tt_control.status import is_drone_online
+from tt_control.status import is_drone_online, ping_host
 from tt_control.tello_client import TelloClient
 from tt_control.video_stream import VideoStream
 from tt_control.sim_drone import SimDrone, SimVideo
@@ -99,12 +100,36 @@ class App:
         self._auto = "OFF"
         self._auto_hud = ""
         self._auto_since: Optional[float] = None  # AUTO ON 起始墙钟（看门狗用）
-        self._watchdog = AutoWatchdog()
+        self._auto_dbg_ts: float = 0.0  # AUTO 决策诊断日志限流（每秒一次）
+        self._watchdog = AutoWatchdog(
+            max_engaged_s=120.0,  # 完整绕障任务在低速+高RTT下需60-90s，30s会中途掐断（2026-07-24实测）
+            depth_stale_s=20.0,  # 远程推理 RTT 波动大（1-8s），20s 安全余量
+        )
         self._controller = AvoidanceController(AvoidParams(
-            cruise_speed=config.avoid_cruise,
-            approach_pitch=config.avoid_approach_pitch,
-            yaw_speed=config.avoid_yaw,
+            cruise_speed=30,            # 接近阶段更自信地前飞（2026-07-24：20 太保守）
+            approach_pitch=25,          # 绕行初始弧线角更大，前进分量更多
+            turn_pitch=10,              # 贴近障碍时保持的最小前进量
+            strafe_speed=40,
+            yaw_speed=15,
+            clear_thresh=0.35,       # 椅子等宽障碍物触发阈值（柱子太细，median 无法检测）
+            stop_thresh=0.65,
         ))
+        self._fsm = AvoidanceFSM(controller=self._controller, params=FsmParams(
+            post_clear_s=4.0,
+            post_clear_pitch=15,
+            depth_stale_s=20.0,
+            max_approach_s=20.0,
+            max_turn_s=25.0,
+            max_pass_s=15.0,
+            min_turn_s=5.0,               # 横移至少 5 秒才允许切越障确认（2026-07-24 真机：3s 太短）
+            min_pass_s=2.0,               # 越障确认至少 2 秒再补横移
+            orbit_mode=True,               # 环绕模式：靠近后绕圈而非直飞绕过
+            orbit_enter_nearness=0.35,     # 提前切入环绕(≈2-3m)，给后退留缓冲空间
+            max_auto_engaged_s=120.0,
+            pass_consecutive_frames=4,    # 本地推理 ~8fps，4 帧≈0.5s 确认，兼顾快与稳
+            min_battery_pct=10,
+        ))
+        self._fsm_state = AvoidState.PREFLIGHT
         # 深度后端持有同一 controller 用于叠图标注「此刻会输出的杆量」
         if hasattr(self.inference, "controller"):
             self.inference.controller = self._controller
@@ -139,6 +164,10 @@ class App:
                 continue
             if self.config.sim:
                 online = True
+            elif self.client is not None:
+                # 已连接：用状态流新鲜度 + ping 判断，不发 UDP 探测
+                # （8889 由 TelloClient 独占；随机端口探测会抢走飞机的回复锁定）
+                online = self.client.state_age_s < 3.0 or ping_host(self.config.tello_ip)
             else:
                 local = self.config.local_ip or detect_local_ip()
                 online = is_drone_online(self.config.tello_ip, local_ip=local or "")
@@ -160,6 +189,9 @@ class App:
                 return
 
     def _click_button(self, name: str) -> None:
+        if name == "quit":
+            self._running = False
+            return
         if name == "connect":
             if self.connected:
                 threading.Thread(target=self._disconnect, daemon=True).start()
@@ -380,6 +412,8 @@ class App:
 
     def _cleanup_session(self, land: bool) -> None:
         self._auto = "OFF"
+        self._fsm.reset()
+        self._fsm_state = AvoidState.PREFLIGHT
         if self._recorder is not None:
             self._close_recorder("aborted", "session_cleanup")
         if self._flight_test_recorder:
@@ -407,6 +441,10 @@ class App:
         if self.video:
             self.video.stop()
             self.video = None
+        # 推理后端不应在断开时关闭——它不依赖飞机连接，只需视频帧。
+        # 关闭后重连无法重启 AsyncInferWorker，导致深度永久失效。
+        # （2026-07-24 真机验证：断开→重连后 depth=None 直到进程重启）
+        # self.inference.close()  # 已移除
         if self.client:
             self.client.close()
             self.client = None
@@ -625,6 +663,8 @@ class App:
         self._act_axes = RcAxes()
         self._act_state = "HOVER"
         self._last_rc = RcAxes()
+        self._fsm.reset()
+        self._fsm_state = AvoidState.PREFLIGHT
         if self.client:
             self.client.rc(0, 0, 0, 0)
         self._last_rc_send = time.time()
@@ -662,23 +702,51 @@ class App:
         self._last_key_label = f"V auto={self._auto}"
 
     def _auto_decision(self):
-        """读最新深度 → 控制律决策；无深度则 None。"""
+        """FSM 步进：读最新深度 + 遥测 → 状态机决策；无深度则走安全快速路径。"""
         be = self.inference
         depth = be.latest_depth() if hasattr(be, "latest_depth") else None
-        if depth is None:
+        nearness = depth.nearness if depth is not None else None
+        telemetry = self.client.state if self.client else {}
+
+        is_on = self._auto == "ON"
+        result = self._fsm.step(nearness, telemetry, is_on)
+        self._fsm_state = result.state
+
+        # 诊断：每秒一次打印深度链路状态，定位「悬停不走」（2026-07-24）
+        now_dbg = time.time()
+        if is_on and now_dbg - self._auto_dbg_ts >= 1.0:
+            self._auto_dbg_ts = now_dbg
+            fps = self.video.fps if self.video else -1.0
+            if depth is None:
+                depth_info = "depth=None"
+            else:
+                depth_info = f"depth_age={now_dbg - depth.ts:.2f}s"
+            logger.info(
+                "AUTO dbg: video_fps=%.1f %s fsm=%s sub=%r rc=%s",
+                fps, depth_info, result.state.value, result.sub_state,
+                result.axes.as_tuple(),
+            )
+
+        if result.abort_reason:
+            self._disengage_auto(result.abort_reason)
             return None
-        return self._controller.decide(depth.nearness)
+        return AvoidDecision(axes=result.axes, state=result.sub_state or result.state.value,
+                             zones=self._controller.zone_nearness(nearness) if nearness is not None else (0, 0, 0))
 
     def _loop(self) -> int:
         blank = np.zeros((720, 960, 3), dtype=np.uint8)
-        running = True
+        self._running = True
         last_draw = 0.0
-        while running:
+        while self._running:
             key = cv2.waitKeyEx(5)
+            # 用户点击窗口关闭按钮（macOS 红叉）→ 退出
+            if cv2.getWindowProperty(self.config.window_name, cv2.WND_PROP_VISIBLE) < 1:
+                self._running = False
+                continue
             if key != -1 and key != 255:
                 action = map_key(key, self.config.rc_speed)
                 if action.kind == "quit":
-                    running = False
+                    self._running = False
                     continue
                 self._dispatch_action(action, key)
 
@@ -927,7 +995,7 @@ class App:
                 a, b, c, d = dec.axes.as_tuple()
                 self.client.rc(a, b, c, d)
                 self._last_rc_send = now
-                self._auto_hud = dec.as_hud()
+                self._auto_hud = f"[{self._fsm_state.value}] {dec.as_hud()}"
                 self._act_axes = dec.axes
                 self._act_state = dec.state
 
@@ -1023,6 +1091,9 @@ class App:
             self._draw_button(frame, "test_arm", sx, by, arm_label, arm_color)
             by += BTN_H + 8
             self._draw_button(frame, "test_fail", sx, by, "TEST FAIL", (0, 0, 210))
+
+        by += BTN_H + 8
+        self._draw_button(frame, "quit", sx, by, "QUIT", (60, 60, 210))
 
         bat = self.client.state.get("bat", "?") if self.client else "?"
         alt = self.client.state.get("h", "?") if self.client else "?"

@@ -28,12 +28,21 @@ def ping_host(host: str, timeout_s: float = 1.0) -> bool:
 
 
 def udp_probe(host: str, port: int = 8889, local_ip: str = "", timeout_s: float = 1.0) -> bool:
-    """发送 command 探测；能收到任意应答则视为在线。"""
+    """发送 command 探测；能收到任意应答则视为在线。
+
+    必须从源端口 8889 发送：RMTT 组网模式会把命令回复锁定到首个握手的
+    IP:端口，随机源端口的探测包会把锁抢到即将关闭的临时端口，导致主
+    连接全部超时（2026-07-24 排障结论）。8889 被占用（说明主客户端已在
+    用它，探测无必要）时直接返回 False，绝不退化为随机端口。
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout_s)
     try:
-        if local_ip:
-            sock.bind((local_ip, 0))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((local_ip or "", port))
+        except OSError:
+            return False  # 8889 已被 TelloClient 占用，不能从别的端口发 command
         sock.sendto(b"command", (host, port))
         sock.recvfrom(1024)
         return True

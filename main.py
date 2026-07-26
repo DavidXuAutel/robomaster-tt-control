@@ -4,8 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import logging
+import pathlib
 import sys
+
+# 原生层崩溃（segfault 等）不会进 Python 日志，faulthandler 把 C 栈写到独立文件
+# （2026-07-24 真机飞行中 GUI 无迹闪退，疑似 cv2/av 重复 dylib 冲突）
+_crash_log = pathlib.Path(__file__).parent / "logs" / "faulthandler.log"
+_crash_log.parent.mkdir(exist_ok=True)
+faulthandler.enable(open(_crash_log, "a"))
 
 from tt_control.app import App
 from tt_control.config import AppConfig, detect_local_ip

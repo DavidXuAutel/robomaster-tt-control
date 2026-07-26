@@ -18,6 +18,7 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-17-tt-visual-avoidance-design.md` — 半自动视觉避障设计说明
 - `2026-07-17-tt-simulation-plan.md` — 视觉避障仿真方案（规格）
 - `2026-07-17-simulation-plan.html` — 仿真方案（可视化/汇报版）
+- `2026-07-25-wam-training-scenarios.md` — WAM 世界模型训练场景规划：21 个飞行场景分类 + 数据采集管线设计
 
 ### dev-notes/ — 开发过程笔记
 - `2026-07-18-avoidance-dev-notes.md` — 视觉避障离线开发说明
@@ -30,6 +31,9 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-20-sync-execution-report.md` — 手势控制上云同步执行报告
 - `2026-07-20-real-flight-test-checklist.md` — 视觉避障真机测试现场 Checklist（分层通用版）
 - `2026-07-20-single-machine-flight-checklist.md` — 单机（服务器一肩挑）挡板首飞傻瓜 Checklist
+- `2026-07-23-depth-server-api-handover.md` — 深度推理服务器远程访问与调用指南（面向大众）
+- `2026-07-25-orbit-avoidance-handover.md` — POI 环绕避障开发交接：视觉伺服居中 + 环绕飞行，含完整参数、调试记录、启动命令
+- `2026-07-25-capability-inventory.md` — 能力清单总览：11 个模块、所有键盘映射、FSM 状态、安全保护、参数表
 
 ### references/ — 外部参考
 - `2026-07-20-scoutxwam-world-model-analysis.md` / `.html` — ScoutXWAM 世界模型技术方案分析
