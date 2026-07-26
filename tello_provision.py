@@ -13,7 +13,7 @@
     - ap 密码仅在发 UDP 包时使用，日志及终端输出全部脱敏
     - 每一步均有超时保护，超时退出而非死循环
     - 纯标准库，无外部依赖
-    - 本脚本含 Wi-Fi 密码明文，入网后建议删除
+    - Wi-Fi 密码经 --router-password 或交互 getpass 传入，不硬编码
 """
 
 from __future__ import annotations
@@ -25,9 +25,9 @@ import subprocess
 import sys
 import time
 
-# ── 配置（CLI 可覆盖）────────────────────────────────────────────
+# ── 配置（CLI 可覆盖；密码禁止硬编码，空则 getpass）──────────────
 ROUTER_SSID = "DS"
-ROUTER_PASSWORD = "Owen1234"
+ROUTER_PASSWORD = ""
 TELLO_HOTSPOT = "TELLO-E9F873"
 
 TELLO_AP_IP = "192.168.10.1"
@@ -369,7 +369,7 @@ def main() -> int:
     print("║  本脚本不会自动切换 Wi-Fi，每一步由你手动操作。             ║")
     print("║  全程只需在 Terminal 和 Wi-Fi 菜单之间切换。               ║")
     print("║                                                          ║")
-    print("║  ⚠️  脚本含 Wi-Fi 密码明文，配网完成后建议删除。            ║")
+    print("║  密码仅内存使用，不写入日志。                              ║")
     print("╚══════════════════════════════════════════════════════════╝")
 
     # 0) 查接口

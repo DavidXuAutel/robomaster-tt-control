@@ -45,7 +45,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--depth-service",
         default="",
-        help="depth-anything 后端的推理服务地址（留空用内置默认 4090 地址）",
+        help="depth-anything 推理服务 URL（必填，或改用 --start-depth-service；禁止静默回落公网）",
     )
     p.add_argument(
         "--start-depth-service",
@@ -267,16 +267,30 @@ def main(argv: list[str] | None = None) -> int:
                 if ready:
                     log.info("深度推理服务就绪 ✓")
                     args.depth_service = service_url
-                elif _depth_proc is not None:
+                else:
+                    if _depth_proc is not None:
+                        log.error(
+                            "深度推理服务启动超时(2min), 已停止; "
+                            "请检查网络/模型下载状态后重试"
+                        )
+                        _depth_kill(_depth_proc)
+                        _depth_proc = None
                     log.error(
-                        "深度推理服务启动超时(2min), 已停止; "
-                        "请检查网络/模型下载状态后重试"
+                        "本地深度服务未就绪，拒绝回落公网默认地址；"
+                        "请修复后重试，或显式传入 --depth-service URL"
                     )
-                    _depth_kill(_depth_proc)
-                    _depth_proc = None
+                    return 2
 
     # ── 注册 atexit 清理（正常退出时触发） ─────────────────
     atexit.register(_depth_kill, _depth_proc)
+
+    # 深度后端必须显式指定服务地址，禁止静默回落公网
+    if args.inference in ("depth-anything", "da-v2", "depth") and not args.depth_service:
+        logging.error(
+            "深度后端需要 --depth-service URL，或使用 --start-depth-service；"
+            "已禁用静默回落公网默认地址"
+        )
+        return 2
 
     local_ip = args.local_ip or detect_local_ip()
     if not local_ip:
@@ -299,9 +313,9 @@ def main(argv: list[str] | None = None) -> int:
         avoid_approach_pitch=args.approach_pitch,
         avoid_yaw=args.yaw,
     )
-    # 手势后端通过 --inference gestures 选择；depth-anything 可注入远端服务地址
+    # 手势后端通过 --inference gestures 选择；depth-anything 注入显式服务地址
     kw = {}
-    if args.inference in ("depth-anything", "da-v2", "depth") and args.depth_service:
+    if args.inference in ("depth-anything", "da-v2", "depth"):
         kw["service_url"] = args.depth_service
     backend = create_backend(args.inference, **kw)
     return App(cfg, inference=backend).run()

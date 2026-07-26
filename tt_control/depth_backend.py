@@ -23,25 +23,31 @@ from tt_control.inference import InferenceBackend
 
 logger = logging.getLogger(__name__)
 
+# 仅供 offline_avoidance 等显式工具默认；飞行入口 main.py 不得静默回落至此
 DEFAULT_SERVICE = "https://depth.david-x.com/depth"
 
 
 @dataclass
 class DepthFrame:
     nearness: np.ndarray  # 小网格，float32，值越大越近
-    ts: float
+    ts: float  # 帧采集墙钟
 
 
 class DepthAnythingBackend(InferenceBackend):
     def __init__(
         self,
-        service_url: str = DEFAULT_SERVICE,
+        service_url: str,
         controller: Optional[AvoidanceController] = None,
         jpeg_quality: int = 80,
         timeout: float = 15.0,
         min_interval: float = 0.0,
         overlay: bool = True,
     ) -> None:
+        if not service_url:
+            raise ValueError(
+                "DepthAnythingBackend 需要显式 service_url"
+                "（--depth-service 或 --start-depth-service）"
+            )
         self.service_url = service_url
         self.controller = controller  # 仅用于叠图标注「此刻会输出什么杆量」
         self.jpeg_quality = int(jpeg_quality)
@@ -60,17 +66,13 @@ class DepthAnythingBackend(InferenceBackend):
     def latest_depth(self, max_age_s: float = 5.0) -> Optional[DepthFrame]:
         """主线程调用：返回最新推理结果（非阻塞）。
 
-        如果最近一次结果的时间戳超过 max_age_s（推理线程已长时间
-        未收到新帧，如断开后重连），返回 None 而非过期深度帧。
-        这样看门狗走「无深度宽限期」而非「过期深度立即掐断」路径。
-        （2026-07-24 真机现象：断开→重连后 stale>20s 立即掐 AUTO）
+        result.ts 为帧采集时刻。冻图反复推理不会刷新该时间戳，
+        超过 max_age_s 返回 None，让看门狗走「无深度」路径。
         """
         result = self._worker.latest_result()
         if result is None:
             return None
         if time.time() - result.ts > max_age_s:
-            # 推理结果已过期——大概率因为断开期间没喂新帧，
-            # worker 仍在用旧帧反复 POST。返回 None 让看门狗走宽限。
             return None
         return DepthFrame(nearness=result.nearness, ts=result.ts)
 
@@ -83,9 +85,12 @@ class DepthAnythingBackend(InferenceBackend):
     def last_error(self) -> str:
         return self._worker.stats.last_error
 
-    def infer(self, frame: np.ndarray) -> np.ndarray:
-        """主线程调用：喂帧给异步工作线程（非阻塞），返回叠图帧。"""
-        self._worker.feed_frame(frame)
+    def infer(self, frame: np.ndarray, frame_ts: Optional[float] = None) -> np.ndarray:
+        """主线程调用：喂帧给异步工作线程（非阻塞），返回叠图帧。
+
+        frame_ts: 帧采集墙钟；不传则用当前时间（无法检测冻图）。
+        """
+        self._worker.feed_frame(frame, ts=frame_ts)
 
         if not self.overlay:
             return frame
@@ -98,7 +103,10 @@ class DepthAnythingBackend(InferenceBackend):
     @property
     def status_text(self) -> str:
         s = self._worker.stats
-        parts = [f"RTT {s.rtt_ms:.0f}ms"]
+        url = self.service_url
+        if len(url) > 40:
+            url = url[:37] + "..."
+        parts = [url, f"RTT {s.rtt_ms:.0f}ms"]
         if s.consecutive_errors > 0:
             parts.append(f"err={s.consecutive_errors}")
         if s.last_frame_age_ms > 0:

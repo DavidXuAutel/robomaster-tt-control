@@ -25,6 +25,7 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-18-merge-notes.md` — 三会话代码合并集成说明
 - `2026-07-20-auto-watchdog-notes.md` — AUTO 半自动看门狗开发记录
 - `2026-07-26-orbit-preflight-bug-review.md` — POI 绕飞飞前缺陷审查与修复方案（P0/P1 + checklist）
+- `2026-07-26-preflight-safety-bugs-plan.md` — 第二轮飞前安全缺陷：新鲜度/急停/禁公网回落/分模块测试
 
 ### handover/ — 交接与同步
 - `2026-07-20-changes-and-sync-for-dazhong.md` — 代码变更与服务器同步说明（面向大众）

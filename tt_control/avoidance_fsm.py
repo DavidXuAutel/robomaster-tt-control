@@ -308,8 +308,9 @@ class AvoidanceFSM:
             if mid > self.p.orbit_enter_nearness:
                 self._orbit_active = True
                 return self._run_orbit(nearness, now, elapsed)
-            # 还不够近 → 继续直飞靠近；但侧向/遇障急停不得前冲（Codex P0）
-            if dec.state == "BLOCKED" or max(zones) > self._ctrl.p.estop_thresh:
+            # 还不够近 → 继续直飞靠近；侧障按 orbit danger 门限刹停
+            # （勿用 estop 0.82，否则与 orbit 0.78 之间存在侧刮带）
+            if dec.state == "BLOCKED" or max(zones) > self._orbit.p.danger_thresh:
                 return FsmDecision(
                     axes=RcAxes(),
                     state=self._state,
@@ -662,3 +663,4 @@ class AvoidanceFSM:
         self._ctrl.reset()
         self._orbit_active = False
         self._orbit_lost_since = None
+        self._last_depth_ts = 0.0

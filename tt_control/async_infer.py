@@ -37,7 +37,7 @@ _BROWSER_UA = (
 class DepthResult:
     """单次深度推理结果。"""
     nearness: np.ndarray   # 近度网格, float32, 值越大越近
-    ts: float              # 请求发起墙钟
+    ts: float              # 帧采集墙钟（新鲜度以此为准，非推理完成时刻）
     rtt_ms: float          # 往返耗时
     frame_age_ms: float    # 帧采集→请求发起的延迟
 
@@ -156,11 +156,13 @@ class AsyncInferWorker:
 
                 nearness = self._decode_response(raw)
                 rtt_ms = (time.time() - t0) * 1000.0
+                # 新鲜度锚在帧采集时刻：同一冻帧反复推理不得刷新 watchdog
+                result_ts = frame_ts if frame_ts > 0 else t0
 
                 with self._lock:
                     self._latest_result = DepthResult(
                         nearness=nearness,
-                        ts=t0,
+                        ts=result_ts,
                         rtt_ms=rtt_ms,
                         frame_age_ms=frame_age_ms,
                     )
@@ -169,6 +171,9 @@ class AsyncInferWorker:
                     self._stats.consecutive_errors = 0
                     self._stats.last_error = ""
                     self._stats.last_frame_age_ms = frame_age_ms
+                    # 消费掉已推理帧；无新帧时停转，避免冻图空转占满服务
+                    if self._latest_frame_ts == frame_ts:
+                        self._latest_frame = None
 
             except Exception as e:
                 self._record_error(str(e))

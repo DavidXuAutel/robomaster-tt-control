@@ -22,6 +22,7 @@ class VideoStream:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._frame: Optional[np.ndarray] = None
+        self._frame_ts: float = 0.0  # 最近一帧解码完成的墙钟
         self._lock = threading.Lock()
         self._fps = 0.0
         self._frame_count = 0
@@ -30,6 +31,12 @@ class VideoStream:
     @property
     def fps(self) -> float:
         return self._fps
+
+    @property
+    def frame_ts(self) -> float:
+        """最近一帧的采集/解码墙钟；尚无帧时为 0。"""
+        with self._lock:
+            return self._frame_ts
 
     def start(self) -> None:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -64,10 +71,11 @@ class VideoStream:
                     continue
                 for frame in frames:
                     img = frame.to_ndarray(format="bgr24")
+                    now = time.time()
                     with self._lock:
                         self._frame = img
+                        self._frame_ts = now
                     self._frame_count += 1
-                    now = time.time()
                     dt = now - self._fps_ts
                     if dt >= 1.0:
                         self._fps = self._frame_count / dt

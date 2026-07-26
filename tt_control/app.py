@@ -103,7 +103,8 @@ class App:
         self._auto_dbg_ts: float = 0.0  # AUTO 决策诊断日志限流（每秒一次）
         self._watchdog = AutoWatchdog(
             max_engaged_s=120.0,  # 完整绕障任务在低速+高RTT下需60-90s，30s会中途掐断（2026-07-24实测）
-            depth_stale_s=20.0,  # 远程推理 RTT 波动大（1-8s），20s 安全余量
+            # 本地推理 RTT 通常 <1s；新鲜度已锚帧采集时刻，3s 足够覆盖抖动且不盲飞
+            depth_stale_s=3.0,
         )
         self._controller = AvoidanceController(AvoidParams(
             cruise_speed=30,            # 接近阶段更自信地前飞（2026-07-24：20 太保守）
@@ -117,7 +118,7 @@ class App:
         self._fsm = AvoidanceFSM(controller=self._controller, params=FsmParams(
             post_clear_s=4.0,
             post_clear_pitch=15,
-            depth_stale_s=20.0,
+            depth_stale_s=3.0,
             max_approach_s=20.0,
             max_turn_s=25.0,
             max_pass_s=15.0,
@@ -787,13 +788,19 @@ class App:
                 )
             else:
                 t_mono = time.monotonic()
+                # 帧采集墙钟：冻图时时间戳不刷新，深度新鲜度以此为准
+                frame_ts = getattr(self.video, "frame_ts", None) or time.time()
                 # 录制原始图传（叠图前），限流命中才 copy，避免 30fps 无谓拷贝
                 raw = None
                 if self._recorder is not None and self._recorder.due(t_mono):
                     raw = frame.copy()
                 try:
                     if not self._gesture_test_complete:
-                        frame = self.inference.infer(frame)
+                        try:
+                            frame = self.inference.infer(frame, frame_ts=frame_ts)
+                        except TypeError:
+                            # 非深度后端（手势等）无 frame_ts 形参
+                            frame = self.inference.infer(frame)
                         for event in self.inference.drain_events():
                             self._handle_inference_event(event)
                 except Exception as e:

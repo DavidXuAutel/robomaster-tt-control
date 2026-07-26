@@ -184,6 +184,39 @@ def test_fsm_approach_holds_on_side_danger():
     assert "approach_hold" in r.sub_state
 
 
+def test_fsm_approach_holds_at_orbit_danger_band():
+    """侧区落在 orbit danger(0.78) 与 estop(0.82) 之间也必须 hold。"""
+    ctrl = AvoidanceController(AvoidParams(clear_thresh=0.35, estop_thresh=0.82, cruise_speed=30))
+    fsm = AvoidanceFSM(
+        controller=ctrl,
+        params=FsmParams(
+            orbit_mode=True,
+            orbit_enter_nearness=0.50,
+            max_approach_s=60,
+            max_auto_engaged_s=120,
+            depth_stale_s=20,
+            min_battery_pct=5,
+        ),
+    )
+    n = _grid(0.10)
+    n[:, : n.shape[1] // 3] = 0.79  # 旧逻辑会 cruise，新逻辑必须 hold
+    r = fsm.step(n, _tel(), True, now=50.0)
+    assert r.axes.is_zero()
+    assert "approach_hold" in r.sub_state
+
+
+def test_fsm_reset_clears_depth_ts():
+    ctrl = AvoidanceController()
+    fsm = AvoidanceFSM(
+        controller=ctrl,
+        params=FsmParams(orbit_mode=True, depth_stale_s=3.0, min_battery_pct=5),
+    )
+    fsm.step(_grid(0.10), _tel(), True, now=10.0)
+    assert fsm._last_depth_ts > 0
+    fsm.reset()
+    assert fsm._last_depth_ts == 0.0
+
+
 def test_fsm_now_zero_does_not_clear_orbit_latch():
     """回归：_auto_engaged 不可用 0.0 哨兵，否则 now=0 仿真每帧清 orbit → 退回 CRUISE 前冲。"""
     ctrl = AvoidanceController(AvoidParams(clear_thresh=0.35))

@@ -172,7 +172,25 @@ class TelloClient:
         return self.send("land", timeout=20.0)
 
     def emergency(self) -> None:
-        self.send("emergency", wait_response=False)
+        """急停：独立临时 socket 直发，不抢 _lock。
+
+        takeoff/land 可能持锁等待最长 20s；若 emergency 也走 send()，
+        ESC 会被堵住。急停无回执需求，临时源端口即可送达命令。
+        """
+        logger.warning(">>> emergency (bypass lock)")
+        sock: Optional[socket.socket] = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind((self.local_ip, 0))
+            sock.sendto(b"emergency", self.tello_addr)
+        except OSError as e:
+            logger.error("emergency send failed: %s", e)
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
 
     def rc(self, a: int = 0, b: int = 0, c: int = 0, d: int = 0) -> None:
         """a=roll, b=pitch, c=throttle, d=yaw；无应答。"""
