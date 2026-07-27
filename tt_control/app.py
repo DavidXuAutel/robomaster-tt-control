@@ -14,6 +14,7 @@ import numpy as np
 
 from tt_control.auto_safety import AutoWatchdog
 from tt_control.avoidance import AvoidanceController, AvoidDecision, AvoidParams, OrbitController, OrbitParams
+from tt_control.wander import WanderParams, WanderPolicy
 from tt_control.avoidance_fsm import AvoidanceFSM, AvoidState, FsmParams
 from tt_control.config import AppConfig, detect_local_ip
 from tt_control.control import HELP_TEXT, RcAxes, map_key
@@ -56,6 +57,7 @@ class App:
         avoid_params: Optional[AvoidParams] = None,
         orbit_params: Optional[OrbitParams] = None,
         fsm_params: Optional[FsmParams] = None,
+        wander_params: Optional[WanderParams] = None,
     ) -> None:
         self.config = config
         self.inference = inference or PassthroughBackend()
@@ -104,18 +106,45 @@ class App:
         self._auto_hud = ""
         self._auto_since: Optional[float] = None  # AUTO ON 起始墙钟（看门狗用）
         self._auto_dbg_ts: float = 0.0  # AUTO 决策诊断日志限流（每秒一次）
-        self._watchdog = AutoWatchdog(
-            max_engaged_s=120.0,
-            depth_stale_s=3.0,
-        )
         # 控制律 + 环绕 + 状态机（优先使用调用方传入的参数，回退 dataclass 默认值）
         _ap = avoid_params or AvoidParams()
         _op = orbit_params or OrbitParams()
         _fp = fsm_params or FsmParams()
+        # app 级 AUTO 看门狗与 FSM 共用配置。
+        # （2026-07-27：曾硬编码 120s，与 fsm.max_auto_engaged_s 是两套，
+        #  导致改配置后环绕仍在 120s 被 'engaged>120s' 踢掉）
+        self._watchdog = AutoWatchdog(
+            max_engaged_s=_fp.max_auto_engaged_s,
+            depth_stale_s=_fp.depth_stale_s,
+        )
         self._controller = AvoidanceController(_ap)
         self._orbit = OrbitController(_op)
-        self._fsm = AvoidanceFSM(controller=self._controller, params=_fp, orbit_ctrl=self._orbit)
+        self._wander_params = wander_params or WanderParams()
+        _wander = (
+            WanderPolicy(self._wander_params)
+            if _fp.wander_mode
+            else None
+        )
+        self._fsm = AvoidanceFSM(
+            controller=self._controller,
+            params=_fp,
+            orbit_ctrl=self._orbit,
+            wander=_wander,
+        )
         self._fsm_state = AvoidState.PREFLIGHT
+        self._wander_state = ""
+        self._wander_event = ""
+        self._episode_outcome: Optional[tuple[str, Optional[str]]] = None
+        if _fp.wander_mode and _fp.max_height_cm > 350:
+            logger.warning(
+                "wander_mode 建议 fsm.max_height_cm≤350（当前 %s）；上方无感知",
+                _fp.max_height_cm,
+            )
+        if _fp.wander_mode and _fp.min_battery_pct < 15:
+            logger.warning(
+                "wander_mode 建议 fsm.min_battery_pct≥15（当前 %s），留手动返场余量",
+                _fp.min_battery_pct,
+            )
         # 深度后端持有同一 controller 用于叠图标注「此刻会输出的杆量」
         if hasattr(self.inference, "controller"):
             self.inference.controller = self._controller
@@ -527,7 +556,19 @@ class App:
                     self.client.rc(0, 0, 0, 0)
                 except Exception:
                     pass
-                resp = self.client.land()
+                # Tello 需要约 50-100ms 退出 RC 模式才能正常接受 land 命令；
+                # 不给间隙的话 land 包可能被 Tello 当作 RC 窗口内的残余指令丢弃。
+                # （2026-07-26 真机：rc(0) 后立刻 land → 无人机不降落继续侧飞）
+                time.sleep(0.25)
+                # UDP 不可靠：land 包可能丢，短超时重试提高成功率
+                resp = None
+                for attempt in range(1, 4):
+                    resp = self.client.send("land", timeout=3.0)
+                    logger.info("land attempt %d/3: %s", attempt, resp)
+                    if resp == "ok":
+                        break
+                    if attempt < 3:
+                        time.sleep(0.3)
                 self._record_flight_test("command_land_result", response=resp)
                 if resp == "ok":
                     self._flying = False
@@ -599,12 +640,19 @@ class App:
             "scale_anchor": "mission_pad",
             "inference": self.inference.__class__.__name__,
         }
+        if self._fsm.p.wander_mode:
+            meta_base["scenario"] = "wander_explore"
         try:
             self._recorder = EpisodeRecorder(
                 pathlib.Path.cwd() / "logs" / "episodes",
                 meta_base=meta_base,
                 record_hz=self.config.record_hz,
             )
+            if self._fsm.p.wander_mode and self._fsm.wander is not None:
+                # episode 作用域：重 seed + 清零计数，保证 meta 可复现
+                self._fsm.wander.begin_episode()
+                self._recorder.note(**self._fsm.wander.stats_dict())
+            self._episode_outcome = None
             logger.info("episode recording -> %s", self._recorder.dir)
         except Exception as e:
             logger.exception("start recorder failed: %s", e)
@@ -614,6 +662,11 @@ class App:
         if self._recorder is None:
             return
         try:
+            if self._fsm.p.wander_mode and self._fsm.wander is not None:
+                self._recorder.note(**self._fsm.wander.stats_dict())
+            # 先发生的 abort（如 wander_danger）优先于随后的 completed 降落
+            if self._episode_outcome is not None:
+                outcome, reason = self._episode_outcome
             self._recorder.set_outcome(outcome, reason)
             path = self._recorder.close()
             logger.info("episode saved: %s (%d frames)", path, self._recorder.n_frames)
@@ -621,6 +674,7 @@ class App:
             logger.exception("close recorder failed")
         finally:
             self._recorder = None
+            self._episode_outcome = None
 
     def _record_frame(self, rgb: np.ndarray, t_mono: float) -> None:
         """把一帧观测+当前动作+状态交给录制器（录制器内部限流去重）。"""
@@ -634,7 +688,7 @@ class App:
                 zones = self._controller.zone_nearness(depth.nearness)
             except Exception:
                 zones = None
-        rec.capture(
+        wrote = rec.capture(
             t_mono=t_mono,
             rgb=rgb,
             depth=depth,
@@ -643,10 +697,15 @@ class App:
             act=self._act_axes,
             ctrl_state=self._act_state,
             zones=zones,
+            wander_state=self._wander_state,
+            wander_event=self._wander_event,
         )
+        # 事件只落盘一次；限流跳过时保留到下一采样点
+        if wrote:
+            self._wander_event = ""
 
     def _disengage_auto(self, reason: str) -> None:
-        """看门狗触发：悬停、解除 AUTO 回 ARMED、HUD 显因、录制器记因。"""
+        """看门狗/策略 abort：悬停、解除 AUTO 回 ARMED、HUD 显因、录制器记因。"""
         self._auto = "ARMED"
         self._auto_since = None
         self._act_axes = RcAxes()
@@ -661,6 +720,9 @@ class App:
         self._hint = f"AUTO auto-disengaged: {reason} (press V to re-engage)"
         if self._recorder is not None:
             self._recorder.note(auto_disengage=reason)
+            # wander abort 必须如实落盘 outcome，禁止随后落地写成 completed
+            if reason.startswith("wander_") and self._episode_outcome is None:
+                self._episode_outcome = ("aborted", reason)
         logger.warning("AUTO watchdog disengage: %s", reason)
 
     def _toggle_auto(self) -> None:
@@ -704,8 +766,17 @@ class App:
         telemetry = self.client.state if self.client else {}
 
         is_on = self._auto == "ON"
-        result = self._fsm.step(nearness, telemetry, is_on)
+        depth_ts = getattr(depth, "ts", None) if depth is not None else None
+        result = self._fsm.step(nearness, telemetry, is_on, depth_ts=depth_ts)
         self._fsm_state = result.state
+        if self._fsm.p.wander_mode:
+            self._wander_state = self._fsm.last_wander_state
+            evt = self._fsm.consume_wander_event()
+            if evt:
+                self._wander_event = evt
+            # 录制 ctrl_state 用短状态名（非 HUD 拼接串），便于 action_source 统计
+            if self._wander_state:
+                self._act_state = self._wander_state
 
         # 诊断：每秒一次打印深度链路状态，定位「悬停不走」（2026-07-24）
         now_dbg = time.time()
@@ -716,10 +787,13 @@ class App:
                 depth_info = "depth=None"
             else:
                 depth_info = f"depth_age={now_dbg - depth.ts:.2f}s"
+            wander_info = ""
+            if self._fsm.p.wander_mode:
+                wander_info = f" wander={self._wander_state} evt={self._fsm.last_wander_event!r}"
             logger.info(
-                "AUTO dbg: video_fps=%.1f %s fsm=%s sub=%r rc=%s",
+                "AUTO dbg: video_fps=%.1f %s fsm=%s sub=%r rc=%s%s",
                 fps, depth_info, result.state.value, result.sub_state,
-                result.axes.as_tuple(),
+                result.axes.as_tuple(), wander_info,
             )
 
         if result.abort_reason:
@@ -916,6 +990,15 @@ class App:
         if kind == "land":
             self._last_key_label = "L land"
             self._auto = "OFF"
+            self._auto_since = None
+            self._last_rc = RcAxes()
+            self._fsm.reset()
+            self._fsm_state = AvoidState.PREFLIGHT
+            # 不要在主线程调 client.rc(0,0,0,0) —— 那条命令的 ok 回执
+            # 会和 async land 线程的 land 回执形成 UDP 竞态，导致 land 收到
+            # 的是 rc 的 ok 而非 land 的 ok。（2026-07-26 真机：按钮可降落、
+            # 键盘 L 不可降落的根因。按钮路径没有这条多余的 rc 调用。）
+            # rc(0,0,0,0) + land 的发送统一在 _run_flight_cmd 的 async 线程中完成。
             self._async_flight_cmd("land")
             return
         if kind == "emergency":
@@ -998,7 +1081,10 @@ class App:
                 self._last_rc_send = now
                 self._auto_hud = f"[{self._fsm_state.value}] {dec.as_hud()}"
                 self._act_axes = dec.axes
-                self._act_state = dec.state
+                if self._fsm.p.wander_mode and self._wander_state:
+                    self._act_state = self._wander_state
+                else:
+                    self._act_state = dec.state
 
     def _draw_button(
         self,

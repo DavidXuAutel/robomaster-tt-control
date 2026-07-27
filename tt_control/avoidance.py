@@ -125,28 +125,43 @@ class OrbitParams:
     direction: int = 1
 
     # 目标 nearness（场景相对量，非米制）：椅子列近度保持在此值附近
-    target_nearness: float = 0.69
+    target_nearness: float = 0.55
 
     # 距离控制死区：nearness 在此范围内不做前后调整
     distance_deadband: float = 0.05
 
-    # 环绕横移杆量（只在椅子居中时才横移，椅子偏了先停住让yaw拉回中央）
+    # 环绕横移杆量（随椅子偏离比例 taper，见 centering_deadband）
     orbit_roll: int = 10
 
     # 椅子居中偏航增益：chair_pos ∈ [-1,1] → yaw 杆量
-    yaw_centering_gain: float = 200.0
+    # （2026-07-27 真机：200 过猛，偏 0.25 就打满 → 来回摇头；降到 80）
+    yaw_centering_gain: float = 80.0
 
-    # 横移门槛：|chair_pos| < 此值才允许横移，否则停横移全力yaw居中
-    centering_deadband: float = 0.12
+    # roll taper 半宽：|chair_pos| 从 0 到此值，roll 从满杆线性降到 0。
+    # （2026-07-27 真机：0.12 太窄 → roll 在 0↔满之间开关振荡；加宽到 0.25）
+    centering_deadband: float = 0.25
+
+    # yaw 前馈：横移环绕时椅子必然向横移反方向漂移，前馈一个与 roll
+    # 成比例的反向 yaw，不必等椅子偏出去 P 修正才转头。
+    # ff_yaw = -roll * yaw_ff_ratio（roll 含方向符号）
+    yaw_ff_ratio: float = 0.6
 
     # 距离控制增益：(target - chair_near) → pitch 杆量比例
-    pitch_distance_gain: float = 2.5
+    # （2026-07-27 真机：2.5 太弱，tn 只到 0.5~0.6 从未达到目标 0.69 → 半径偏大）
+    pitch_distance_gain: float = 4.0
 
-    # 杆量限制
-    max_yaw: int = 50
+    # 杆量限制（max_yaw=50 对慢速环绕过大，是摇头主因之一）
+    max_yaw: int = 25
     max_pitch: int = 35
     min_yaw: int = 0
     min_pitch: int = 5
+
+    # ── 抗摇头（2026-07-27）────────────────────────────
+    # 椅子位置/距离 EMA 平滑：新帧权重（1.0=不平滑）。深度约 5Hz、
+    # 控制约 24Hz，0.4 的时间常数只有 ~80ms，滤不掉深度帧级跳变 → 0.25。
+    pos_smooth_alpha: float = 0.25
+    # yaw 死区：|chair_pos| 低于此值不打 yaw P 修正（前馈仍生效）
+    yaw_deadband: float = 0.05
 
     # 接近检测：中区或侧区超过此值认为太近（危险；亦为相对量）
     danger_thresh: float = 0.78
@@ -159,9 +174,11 @@ class OrbitParams:
     acquire_peak_ratio: float = 1.6
     track_peak_ratio: float = 1.35
     min_peak: float = 0.12
-    acquire_frames: int = 2
+    acquire_frames: int = 1
     track_roi_half: float = 0.35   # 归一化坐标半宽
-    max_pos_jump: float = 0.45
+    # （2026-07-27 真机：0.45 放过了 ±0.3 级检测跳变 → yaw 甩头 + tn 尖刺
+    #  → orbit_danger 误 abort；合法帧间移动约 0.1 级，收紧到 0.30）
+    max_pos_jump: float = 0.30
 
 
 @dataclass
@@ -202,11 +219,15 @@ class OrbitController:
         self._tracked = False
         self._last_pos: Optional[float] = None
         self._acquire_count = 0
+        self._pos_filt: Optional[float] = None  # EMA 平滑后的椅子位置
+        self._tn_filt: Optional[float] = None   # EMA 平滑后的椅子列近度
 
     def reset(self) -> None:
         self._tracked = False
         self._last_pos = None
         self._acquire_count = 0
+        self._pos_filt = None
+        self._tn_filt = None
 
     def decide(self, nearness: np.ndarray) -> OrbitDecision:
         """每帧调用，返回环绕杆量。"""
@@ -214,27 +235,55 @@ class OrbitController:
 
         chair_pos, reject_reason = self._lock_target(nearness)
 
+        # 位置 EMA 平滑：检测重心逐帧抖动（±0.05 级），直接进 P 控制
+        # 会被增益放大成来回打杆（2026-07-27 真机：靠近椅子后摇头）。
         if chair_pos is not None:
-            yaw_raw = chair_pos * self.p.yaw_centering_gain
-            yaw = int(round(max(-self.p.max_yaw, min(self.p.max_yaw, yaw_raw))))
-        else:
-            yaw = 0
+            if self._pos_filt is None:
+                self._pos_filt = chair_pos
+            else:
+                a = self.p.pos_smooth_alpha
+                self._pos_filt = a * chair_pos + (1.0 - a) * self._pos_filt
+            chair_pos = self._pos_filt
 
-        if chair_pos is not None and abs(chair_pos) < self.p.centering_deadband:
-            roll = self.p.direction * self.p.orbit_roll
-            orbit_phase = "strafe"
-        elif chair_pos is not None:
-            roll = 0
-            orbit_phase = "center"
+        # 比例混合：椅子越正，横移越多；椅子越偏，横移越少、yaw 占比越大。
+        # 避免二元开关造成的「横移推开→yaw拉回→再横移推开」振荡。
+        # （2026-07-27 真机：binary deadband → 椅子左右摇摆出视野 → LOST）
+        if chair_pos is not None:
+            abs_pos = abs(chair_pos)
+            if abs_pos < self.p.centering_deadband:
+                # 线性 taper：中心 full roll，taper 边缘 roll=0
+                roll_frac = 1.0 - (abs_pos / self.p.centering_deadband)
+                roll = int(round(self.p.direction * self.p.orbit_roll * roll_frac))
+                orbit_phase = "orbit"
+            else:
+                roll = 0
+                orbit_phase = "center"
         else:
             roll = 0
             orbit_phase = "search"
+
+        # yaw = 环绕前馈 + 居中 P 修正。
+        # 前馈：横移必然让椅子向反方向漂移，与 roll 成比例地持续轻转，
+        # 不必等椅子偏出去 P 才拉回（P 死区内前馈仍生效）。
+        if chair_pos is not None and abs(chair_pos) >= self.p.yaw_deadband:
+            yaw_corr = int(round(chair_pos * self.p.yaw_centering_gain))
+        else:
+            yaw_corr = 0
+        ff_yaw = -int(round(roll * self.p.yaw_ff_ratio))
+        yaw = int(max(-self.p.max_yaw, min(self.p.max_yaw, ff_yaw + yaw_corr)))
 
         if chair_pos is None:
             pitch = 0
             target_near = mid
         else:
-            target_near = self._nearness_at_pos(nearness, chair_pos)
+            # 距离也做 EMA：tn 单帧尖刺（0.5→0.89）曾驱动 pitch ±10 前后猛冲
+            raw_tn = self._nearness_at_pos(nearness, chair_pos)
+            if self._tn_filt is None:
+                self._tn_filt = raw_tn
+            else:
+                a = self.p.pos_smooth_alpha
+                self._tn_filt = a * raw_tn + (1.0 - a) * self._tn_filt
+            target_near = self._tn_filt
             dist_err = self.p.target_nearness - target_near
             if abs(dist_err) <= self.p.distance_deadband:
                 pitch = 0
@@ -243,6 +292,9 @@ class OrbitController:
                 pitch = max(-self.p.max_pitch, min(self.p.max_pitch, pitch_raw))
                 if abs(pitch) < self.p.min_pitch and abs(pitch_raw) >= 1:
                     pitch = self.p.min_pitch if pitch_raw > 0 else -self.p.min_pitch
+            # 椅子明显偏离中央时距离读数不可靠，禁止向前冲（后退保命仍允许）
+            if orbit_phase == "center" and pitch > 0:
+                pitch = 0
 
         state = "ORBIT"
         if max(left, mid, right) > self.p.danger_thresh:
@@ -258,7 +310,7 @@ class OrbitController:
             axes=RcAxes(pitch=pitch, roll=roll, yaw=yaw),
             state=state,
             zones=(left, mid, right),
-            yaw_correction=yaw,
+            yaw_correction=yaw_corr,
             pitch_correction=pitch,
             chair_pos=chair_pos,
             orbit_phase=orbit_phase,

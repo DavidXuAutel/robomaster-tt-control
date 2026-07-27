@@ -1,0 +1,20 @@
+{
+  "//_meta": "随机漫游采数配置。用法: main.py --config configs/wander.json ...",
+
+  "fsm": {
+    "//_comment": "与 orbit 互斥；高度硬顶 350、电量留返场余量",
+    "orbit_mode": false,
+    "wander_mode": true,
+    "max_auto_engaged_s": 86400.0,
+    "min_battery_pct": 15,
+    "max_height_cm": 350,
+    "depth_stale_s": 3.0
+  },
+
+  "wander": {
+    "//_comment": "其余字段回退 default.json / dataclass 默认值；首飞可将 cruise_pitch_max 压到 15",
+    "seed": 0,
+    "cruise_pitch_min": 12,
+    "cruise_pitch_max": 15
+  }
+}

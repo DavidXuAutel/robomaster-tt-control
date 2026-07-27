@@ -18,6 +18,7 @@ from typing import Any
 
 from tt_control.avoidance import AvoidParams, OrbitParams
 from tt_control.avoidance_fsm import FsmParams
+from tt_control.wander import WanderParams
 
 logger = logging.getLogger(__name__)
 
@@ -67,3 +68,8 @@ def build_orbit_params(cfg: dict[str, Any] | None = None) -> OrbitParams:
 def build_fsm_params(cfg: dict[str, Any] | None = None) -> FsmParams:
     """从配置构建状态机参数，缺失字段使用 dataclass 默认值。"""
     return FsmParams(**(_section(cfg or {}, "fsm")))
+
+
+def build_wander_params(cfg: dict[str, Any] | None = None) -> WanderParams:
+    """从配置构建漫游参数，缺失字段使用 dataclass 默认值。"""
+    return WanderParams(**(_section(cfg or {}, "wander")))

@@ -17,6 +17,7 @@ import numpy as np
 
 from tt_control.avoidance import AvoidanceController, AvoidDecision, AvoidParams, OrbitController, OrbitDecision, OrbitParams
 from tt_control.control import RcAxes
+from tt_control.wander import WanderDecision, WanderPolicy
 
 
 class AvoidState(Enum):
@@ -65,6 +66,12 @@ class FsmParams:
     orbit_enter_nearness: float = 0.30  # 中区超过此值 → 进入 ORBIT 阶段
     orbit_lost_timeout_s: float = 5.0   # 失锁 episode 超过 N 秒 → 悬停（闪断不复位）
     orbit_relock_frames: int = 5        # 失锁后需连续 N 帧有效锁定才清 episode
+    # DANGER 去抖：需持续 N 秒才 abort，期间零杆悬停（等价安全）。
+    # （2026-07-27 真机：tn 单帧尖刺 0.89 → 立即 orbit_danger 误 abort → 侧面悬停）
+    orbit_danger_hold_s: float = 0.4
+
+    # 随机漫游（Wander）：与 orbit_mode 互斥；开启后 APPROACH 整段交给 WanderPolicy
+    wander_mode: bool = False
 
     # 全局安全
     min_battery_pct: int = 30
@@ -107,10 +114,20 @@ class AvoidanceFSM:
         controller: Optional[AvoidanceController] = None,
         params: Optional[FsmParams] = None,
         orbit_ctrl: Optional[OrbitController] = None,
+        wander: Optional[WanderPolicy] = None,
     ) -> None:
         self._ctrl = controller or AvoidanceController()
         self._orbit = orbit_ctrl or OrbitController()
         self.p = params or FsmParams()
+        if self.p.wander_mode and self.p.orbit_mode:
+            raise ValueError("wander_mode 与 orbit_mode 互斥，不可同时为 True")
+        self._wander = wander if wander is not None else (
+            WanderPolicy() if self.p.wander_mode else None
+        )
+        self._depth_frame_ts: Optional[float] = None
+        self._last_wander_state: str = ""
+        self._last_wander_event: str = ""  # 粘滞，供 HUD/dbg
+        self._wander_event_frame: str = ""  # 仅本帧，供录制
 
         self._state = AvoidState.PREFLIGHT
         self._state_entered: float = 0.0
@@ -123,6 +140,7 @@ class AvoidanceFSM:
         self._abort_reason: str = ""
         self._orbit_lost_since: Optional[float] = None  # ORBIT 失锁 episode 起点；None=未失锁
         self._orbit_relock_count: int = 0  # 失锁后连续有效帧计数
+        self._orbit_danger_since: Optional[float] = None  # DANGER 去抖起点；None=无危险
         self._orbit_active: bool = False   # 环绕滞回：一旦进入即保持，避免 mid 波动导致进出振荡
 
     # ── 属性 ──────────────────────────────────────────────────
@@ -147,10 +165,13 @@ class AvoidanceFSM:
         telemetry: dict[str, str],
         auto_on: bool,
         now: Optional[float] = None,
+        *,
+        depth_ts: Optional[float] = None,
     ) -> FsmDecision:
         """每帧调用：输入近度图 + 遥测 + AUTO 开关，返回决策。"""
         if now is None:
             now = time.time()
+        self._depth_frame_ts = depth_ts
 
         # 0) 全局安全检查
         abort = self._check_safety(telemetry, now)
@@ -173,7 +194,13 @@ class AvoidanceFSM:
             self._orbit_active = False
             self._orbit_lost_since = None
             self._orbit_relock_count = 0
+            self._orbit_danger_since = None
             self._orbit.reset()
+            if self._wander is not None:
+                self._wander.reset()
+            self._last_wander_state = ""
+            self._last_wander_event = ""
+            self._wander_event_frame = ""
             return FsmDecision(
                 axes=RcAxes(),
                 state=self._state,
@@ -192,7 +219,13 @@ class AvoidanceFSM:
             self._orbit_active = False
             self._orbit_lost_since = None
             self._orbit_relock_count = 0
+            self._orbit_danger_since = None
             self._orbit.reset()
+            if self._wander is not None:
+                self._wander.reset()
+            self._last_wander_state = ""
+            self._last_wander_event = ""
+            self._wander_event_frame = ""
 
         # 3) 检查 AUTO 全局超时
         if now - self._auto_engaged > self.p.max_auto_engaged_s:
@@ -231,7 +264,7 @@ class AvoidanceFSM:
         elapsed = now - self._state_entered
 
         if self._state == AvoidState.APPROACH:
-            return self._step_approach(nearness, now, elapsed)
+            return self._step_approach(nearness, now, elapsed, telemetry)
         elif self._state == AvoidState.AVOID_TURN:
             return self._step_avoid_turn(nearness, now, elapsed)
         elif self._state == AvoidState.PASS_OBSTACLE:
@@ -254,16 +287,28 @@ class AvoidanceFSM:
     # ── 各状态实现 ────────────────────────────────────────────
 
     def _step_approach(
-        self, nearness: "np.ndarray", now: float, elapsed: float
+        self,
+        nearness: "np.ndarray",
+        now: float,
+        elapsed: float,
+        telemetry: dict[str, str],
     ) -> FsmDecision:
+        # 漫游模式：整段接管 APPROACH，不进入 orbit / AVOID_TURN
+        if self.p.wander_mode:
+            return self._step_wander(nearness, telemetry, now, elapsed)
+
         # 深度未就绪 → 悬停等待首帧
         if nearness is None:
             return FsmDecision(
                 axes=RcAxes(), state=self._state, sub_state="wait_depth",
                 state_elapsed_s=elapsed,
             )
-        # 状态超时（环绕模式下跳过：ORBIT 可持续数分钟，由自身 LOST/DANGER 保护）
-        if not (self.p.orbit_mode and self._orbit_active) and elapsed > self.p.max_approach_s:
+        # 状态超时（环绕激活/漫游模式下跳过：长时任务由自身 danger/超时保护）
+        if (
+            not self.p.wander_mode
+            and not (self.p.orbit_mode and self._orbit_active)
+            and elapsed > self.p.max_approach_s
+        ):
             self._abort_reason = f"approach >{self.p.max_approach_s:.0f}s"
             self._state = AvoidState.HOVER
             return FsmDecision(
@@ -275,8 +320,8 @@ class AvoidanceFSM:
         zones = self._ctrl.zone_nearness(nearness)
         mid = zones[1]
 
-        # 死胡同检测（环绕模式下跳过：靠近椅子是正常行为，近度必然上升）
-        if not self.p.orbit_mode:
+        # 死胡同检测（环绕/漫游模式下跳过：靠近障碍是常态）
+        if not self.p.orbit_mode and not self.p.wander_mode:
             danger = max(zones)
             self._danger_history.append(danger)
             if len(self._danger_history) > self.p.dead_end_frames:
@@ -310,31 +355,58 @@ class AvoidanceFSM:
             )
 
         # 检测到障碍 → 绕行 or 环绕
+        #
+        # 先试探一次 orbit。如果 OrbitController 能检测到目标（椅子）→ 激活环绕；
+        # 如果检测不到（墙面/均匀障碍）且避障控制器说有障碍 → 回退经典 AVOID_TURN 横移。
+        # 两个分支都不会死锁：要么环绕成功，要么侧移绕行。
+        # （2026-07-26 真机：必须同时支持「椅子环绕」和「墙面绕行」）
         if self.p.orbit_mode:
             if mid > self.p.orbit_enter_nearness:
-                # 未锁定前不 latch：继续靠近，避免 flat 拒识后零杆→orbit_lost
                 orbit_dec = self._orbit.decide(nearness)
                 if orbit_dec.state == "ORBIT":
                     self._orbit_active = True
                     return self._finish_orbit_decision(orbit_dec, now, elapsed)
                 if orbit_dec.state == "DANGER":
                     return self._finish_orbit_decision(orbit_dec, now, elapsed)
-                if max(zones) > self._orbit.p.danger_thresh:
+
+                # ACQUIRE：OrbitController 还在收集确认帧（acquire_frames）。
+                # 此时不能回退 AVOID_TURN —— 那会把椅子当成普通障碍绕过去。
+                # 保持缓进，给 orbit 多几帧时间锁定目标。
+                # （2026-07-26 真机：首帧 ACQUIRE 直接掉进 AVOID_TURN → 横移绕过椅子）
+                if orbit_dec.state == "ACQUIRE":
                     return FsmDecision(
-                        axes=RcAxes(),
+                        axes=RcAxes(pitch=self._ctrl.p.approach_pitch),
                         state=self._state,
-                        sub_state=f"approach_hold danger={max(zones):.2f}",
+                        sub_state=f"pre_orbit {orbit_dec.reject_reason} M{mid:.2f}",
                         state_elapsed_s=elapsed,
                     )
-                rej = orbit_dec.reject_reason or orbit_dec.state
+
+                # LOST：当前帧确实没检测到椅子特征（峰均比不足 / 无峰值）。
+                # 如果 mid 只是略超 orbit_enter_nearness → 可能椅子还太远，
+                #   保持缓进让椅子在深度图中更显著；
+                # 如果 mid 已经较高 → 说明离障碍很近但仍无椅子峰 → 是墙面，
+                #   回退 AVOID_TURN 横移绕行。
+                # （2026-07-26 真机：mid=0.42 时 LOST 就 AVOID_TURN → 没机会靠近）
+                _orbit_fallback = self.p.orbit_enter_nearness + 0.15
+                if mid > _orbit_fallback and dec.state in ("STRAFE_L", "STRAFE_R", "BLOCKED"):
+                    self._state = AvoidState.AVOID_TURN
+                    self._state_entered = now
+                    self._pass_clear_count = 0
+                    return FsmDecision(
+                        axes=dec.axes, state=self._state, sub_state=dec.state,
+                        state_elapsed_s=0.0,
+                    )
+                # LOST 但还不够近 → 缓进靠近，让椅子更显著
                 return FsmDecision(
                     axes=RcAxes(pitch=self._ctrl.p.approach_pitch),
                     state=self._state,
-                    sub_state=f"pre_orbit {rej} M{mid:.2f}",
+                    sub_state=f"pre_orbit LOST M{mid:.2f}",
                     state_elapsed_s=elapsed,
                 )
-            # 还不够近 → 继续直飞靠近；侧障按 orbit danger 门限刹停
-            # （勿用 estop 0.82，否则与 orbit 0.78 之间存在侧刮带）
+            # 还不够近 → 缓进靠近，不横移（mid 尚未超过 orbit 阈值前，
+            # AvoidController 可能已在 STRAFE，直接传杆量会导致绕过椅子不环绕）
+            # 改用 approach_pitch 缓进，等 mid 超过阈值后 orbit 优先尝试。
+            # （2026-07-26 真机：间隙区间传 STRAFE → 绕过椅子不环绕）
             if dec.state == "BLOCKED" or max(zones) > self._orbit.p.danger_thresh:
                 return FsmDecision(
                     axes=RcAxes(),
@@ -343,9 +415,9 @@ class AvoidanceFSM:
                     state_elapsed_s=elapsed,
                 )
             return FsmDecision(
-                axes=RcAxes(pitch=self._ctrl.p.cruise_speed),
+                axes=RcAxes(pitch=self._ctrl.p.approach_pitch),
                 state=self._state,
-                sub_state=f"approach_orbit M{mid:.2f}",
+                sub_state=f"approach_approach M{mid:.2f}",
                 state_elapsed_s=elapsed,
             )
         self._state = AvoidState.AVOID_TURN
@@ -370,20 +442,32 @@ class AvoidanceFSM:
     def _finish_orbit_decision(
         self, orbit_dec: OrbitDecision, now: float, elapsed: float
     ) -> FsmDecision:
-        """共享：DANGER 立即 abort；LOST episode 超时；重获需连续锁定。"""
+        """共享：DANGER 持续超过去抖时长才 abort；LOST episode 超时；重获需连续锁定。"""
         if orbit_dec.state == "DANGER":
-            self._orbit_active = False
-            self._orbit_lost_since = None
-            self._orbit_relock_count = 0
-            self._abort_reason = "orbit_danger"
-            self._state = AvoidState.HOVER
-            self._ctrl.reset()
-            self._orbit.reset()
+            # 去抖：单帧近度尖刺（检测重心落在错误列）不 abort，
+            # 零杆悬停等确认；持续超过 hold 时长才判真危险。
+            if self._orbit_danger_since is None:
+                self._orbit_danger_since = now
+            if now - self._orbit_danger_since >= self.p.orbit_danger_hold_s:
+                self._orbit_active = False
+                self._orbit_lost_since = None
+                self._orbit_relock_count = 0
+                self._orbit_danger_since = None
+                self._abort_reason = "orbit_danger"
+                self._state = AvoidState.HOVER
+                self._ctrl.reset()
+                self._orbit.reset()
+                return FsmDecision(
+                    axes=RcAxes(), state=self._state,
+                    abort_reason=self._abort_reason,
+                    sub_state="orbit_danger", state_elapsed_s=0.0,
+                )
             return FsmDecision(
                 axes=RcAxes(), state=self._state,
-                abort_reason=self._abort_reason,
-                sub_state="orbit_danger", state_elapsed_s=0.0,
+                sub_state=f"orbit_danger_hold | {orbit_dec.as_hud()}",
+                state_elapsed_s=elapsed,
             )
+        self._orbit_danger_since = None
 
         if orbit_dec.state == "LOST":
             if self._orbit_lost_since is None:
@@ -653,6 +737,69 @@ class AvoidanceFSM:
             )
         return self._finish_orbit_decision(self._orbit.decide(nearness), now, elapsed)
 
+    def _step_wander(
+        self,
+        nearness: Optional["np.ndarray"],
+        telemetry: dict[str, str],
+        now: float,
+        elapsed: float,
+    ) -> FsmDecision:
+        """漫游模式：APPROACH 整段交给 WanderPolicy。"""
+        if self._wander is None:
+            self._abort_reason = "wander_mode without WanderPolicy"
+            self._state = AvoidState.HOVER
+            return FsmDecision(
+                axes=RcAxes(), state=self._state,
+                abort_reason=self._abort_reason, state_elapsed_s=elapsed,
+            )
+        if nearness is None:
+            return FsmDecision(
+                axes=RcAxes(), state=self._state, sub_state="wait_depth",
+                state_elapsed_s=elapsed,
+            )
+        dec: WanderDecision = self._wander.decide(
+            nearness, telemetry, now, depth_ts=self._depth_frame_ts,
+        )
+        self._last_wander_state = dec.state
+        self._wander_event_frame = dec.event
+        if dec.event:
+            self._last_wander_event = dec.event
+        if dec.abort_reason:
+            self._abort_reason = dec.abort_reason
+            self._state = AvoidState.HOVER
+            self._wander.reset()
+            return FsmDecision(
+                axes=RcAxes(), state=self._state,
+                abort_reason=dec.abort_reason,
+                sub_state=dec.as_hud(),
+                state_elapsed_s=elapsed,
+            )
+        yaw_tag = f" | {dec.yaw_mode}" if dec.yaw_mode else ""
+        return FsmDecision(
+            axes=dec.axes,
+            state=self._state,
+            sub_state=f"{dec.state}{yaw_tag} | {dec.sub_state} | {dec.event}".strip(" |"),
+            state_elapsed_s=elapsed,
+        )
+
+    @property
+    def wander(self) -> Optional[WanderPolicy]:
+        return self._wander
+
+    @property
+    def last_wander_state(self) -> str:
+        return self._last_wander_state
+
+    @property
+    def last_wander_event(self) -> str:
+        return self._last_wander_event
+
+    def consume_wander_event(self) -> str:
+        """取出本帧事件码（录制用）；粘滞 last_wander_event 不受影响。"""
+        e = self._wander_event_frame
+        self._wander_event_frame = ""
+        return e
+
     # ── 辅助 ──────────────────────────────────────────────────
 
     def _check_safety(self, telemetry: dict[str, str], now: float) -> str:
@@ -695,4 +842,11 @@ class AvoidanceFSM:
         self._orbit_active = False
         self._orbit_lost_since = None
         self._orbit_relock_count = 0
+        self._orbit_danger_since = None
         self._last_depth_ts = 0.0
+        if self._wander is not None:
+            self._wander.reset()
+        self._last_wander_state = ""
+        self._last_wander_event = ""
+        self._wander_event_frame = ""
+        self._depth_frame_ts = None

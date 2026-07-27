@@ -14,7 +14,7 @@ RoboMaster TT 视觉避障项目的 Agent 入口文档。每次新 Agent 进入�
 |------|------|----------|
 | 手动飞行 (键盘/GUI) | ✅ | `tt_control/control.py`, `tt_control/app.py` |
 | 半自动视觉避障 (遇障横移绕行) | ✅ | `tt_control/avoidance.py` (AvoidanceController) |
-| POI 环绕飞行 (视觉伺服居中+绕圈) | ✅ | `tt_control/avoidance.py` (OrbitController) |
+| POI 环绕飞行 (视觉伺服居中+绕圈) | ✅ 07-27 真机长时验证 (2min+ 无 abort) | `tt_control/avoidance.py` (OrbitController) |
 | FSM 状态机 (APPROACH→AVOID_TURN→...→ORBIT) | ✅ | `tt_control/avoidance_fsm.py` |
 | 深度推理 (Depth Anything V2, 本地 MPS) | ✅ | `server/da_v2_service.py`, `tt_control/depth_backend.py` |
 | 手势控制 (手掌起飞+打响指降落) | ✅ | `tt_control/gesture_control.py` |
@@ -25,7 +25,9 @@ RoboMaster TT 视觉避障项目的 Agent 入口文档。每次新 Agent 进入�
 
 ### 下一步计划
 
-1. **P0 - 随机探索采集**：在 FSM 上叠加随机动作 + 安全约束，最大化工况覆盖
+1. **P0 - 随机探索采集（Wander）**：设计已定稿 →
+   `docs/design/2026-07-27-wander-explore-design.md`（实现规格书，
+   只允许 Claude 修改；实现方 DeepSeek/Grok 照规格执行，含分工与验收阶梯）
 2. **P0 - 固定路线重复采集**：预设几条路线，不同光照/布局下重复采数
 3. **P1 - 走廊跟随 / 动态目标跟踪 / 贴墙飞行**：复用现有视觉伺服逻辑
 
@@ -37,6 +39,19 @@ RoboMaster TT 视觉避障项目的 Agent 入口文档。每次新 Agent 进入�
 2. **禁止** 自行 `da_v2_service.py &` 再 `--depth-service http://127.0.0.1:8890/...` 做本地真机测试——外挂进程不会随 main 退出，易 residual 占 GPU/内存。
 3. 仅当主人明确要求连远端/已有常驻服务时，才许用 `--depth-service URL`；结束测试后必须确认对应端口已释放。
 4. 测试结束自检：`lsof -nP -iTCP:8899,8890 -sTCP:LISTEN` 应无本项目深度服务。
+
+## 环绕（Orbit）模块修改守则（必须遵守）
+
+POI 环绕模块（`tt_control/avoidance.py` 的 OrbitController、
+`tt_control/avoidance_fsm.py` 的 orbit 路径、`configs/default.json` 的
+orbit/fsm 节）经过 5 天真机调试，每个参数和结构都对应一次真机事故。
+
+- **改这些文件前必读**：`docs/design/2026-07-27-orbit-control-principles.md`
+  （安全不变量 + 历史坑 + 参数安全范围 + 修改守则）。
+- **该原则文件只允许 Claude (Claude Code) 修改**，其他 Agent 一律只读。
+  文件已 chmod 444，不要改回可写。
+- 改动必须逐条对照原则文件的「安全不变量」，并保持
+  `tests/test_orbit.py` + `tests/test_avoidance.py` 全绿。
 
 ## 快速启动
 
@@ -103,5 +118,6 @@ server/
 | `docs/handover/2026-07-25-capability-inventory.md` | 全部 11 个模块的详细能力清单 |
 | `docs/handover/2026-07-25-orbit-avoidance-handover.md` | 环绕飞行开发交接（参数/调试/排障） |
 | `docs/design/2026-07-25-wam-training-scenarios.md` | WAM 训练 21 个场景规划 + 数据采集设计 |
+| `docs/design/2026-07-27-wander-explore-design.md` | 随机漫游（Wander）实现规格书（仅 Claude 可改） |
 | `docs/design/2026-07-17-tt-visual-avoidance-design.md` | 避障系统设计说明 |
 | `docs/README.md` | 完整文档索引 |

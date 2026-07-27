@@ -78,9 +78,47 @@ def test_orbit_strafe_when_centered():
     n = _chair(0.55, x0=50, x1=78)  # 偏中
     d = _decide_locked(c, n)
     assert d.state == "ORBIT"
-    assert d.orbit_phase in ("strafe", "center")
-    if d.orbit_phase == "strafe":
-        assert d.axes.roll == OrbitParams().orbit_roll
+    assert d.orbit_phase in ("orbit", "center")
+    if d.orbit_phase == "orbit":
+        # 比例混合：椅子居中时 taper 接近 1.0，roll ≈ orbit_roll
+        assert abs(d.axes.roll) > 0
+        assert abs(d.axes.roll) <= abs(OrbitParams().orbit_roll)
+
+
+def test_orbit_yaw_deadband_when_centered():
+    """椅子基本居中时无 P 修正，yaw 只剩环绕前馈（抗摇头）。"""
+    c = OrbitController()
+    n = _chair(0.55, x0=50, x1=78)  # 重心 ≈ 画面中央
+    d = _decide_locked(c, n)
+    assert d.state == "ORBIT"
+    assert d.yaw_correction == 0     # 死区内不打 P 修正
+    p = OrbitParams()
+    ff = -int(round(p.direction * p.orbit_roll * p.yaw_ff_ratio))
+    assert d.axes.yaw == ff          # 只剩与 roll 反向的环绕前馈
+
+
+def test_orbit_pos_smoothing_damps_flicker():
+    """位置单帧跳变不得立即产生反向大 yaw（EMA 平滑抗摇头）。"""
+    c = OrbitController()
+    right = _chair(0.55, x0=63, x1=90)   # pos ≈ +0.20
+    d0 = _decide_locked(c, right)
+    assert d0.state == "ORBIT"
+    assert d0.axes.yaw > 0
+    left = _chair(0.55, x0=38, x1=65)    # 单帧跳到 pos ≈ -0.20
+    d1 = c.decide(left)
+    assert d1.state == "ORBIT"
+    # 无平滑时会立刻反向满杆；平滑后 P 修正不得反向
+    assert d1.yaw_correction >= 0
+
+
+def test_orbit_yaw_capped_at_max():
+    """目标偏得很远时 yaw 也不得超过 max_yaw 限幅。"""
+    c = OrbitController()
+    n = _grid(0.08)
+    n[:, 100:125] = 0.55  # 目标在最右侧
+    d = _decide_locked(c, n)
+    assert d.chair_pos is not None
+    assert abs(d.axes.yaw) <= OrbitParams().max_yaw
 
 
 def test_acquire_is_not_lost_episode():
@@ -106,8 +144,8 @@ def test_broad_target_tracks_after_acquire():
     assert d1.chair_pos is not None
 
 
-def test_pre_orbit_no_latch_keeps_approach():
-    """mid 过进入阈值但目标未锁定时，不得 latch，应继续靠近。"""
+def test_pre_orbit_lost_uniform_falls_to_avoid():
+    """均匀近场且足够近：orbit 检测不到目标 + AvoidController STRAFE → AVOID_TURN。"""
     ctrl = AvoidanceController(AvoidParams(clear_thresh=0.35, approach_pitch=25, cruise_speed=30))
     fsm = AvoidanceFSM(
         controller=ctrl,
@@ -121,18 +159,67 @@ def test_pre_orbit_no_latch_keeps_approach():
             min_battery_pct=5,
         ),
     )
-    # 均匀近场：M 高但峰均比不够 → 拒识
-    flat = _grid(0.40)
-    r = fsm.step(flat, _tel(), True, now=5000.0)
+    t0 = 5000.0
+    # 均匀近场且 mid=0.55 > orbit_enter_nearness+0.15(0.50)：
+    # orbit 试 → LOST + STRAFE + mid 够高 → 回退 AVOID_TURN
+    flat = _grid(0.55)
+    r = fsm.step(flat, _tel(), True, now=t0)
+    assert not fsm._orbit_active      # 未激活环绕
+    assert r.state == AvoidState.AVOID_TURN
+    assert r.axes.roll != 0            # 横移绕行
+
+
+def test_pre_orbit_lost_low_nearness_keeps_approaching():
+    """mid 刚超 orbit_enter 但不够高 → 保持缓进，不急于 AVOID_TURN。"""
+    ctrl = AvoidanceController(AvoidParams(clear_thresh=0.35, approach_pitch=25, cruise_speed=30))
+    fsm = AvoidanceFSM(
+        controller=ctrl,
+        params=FsmParams(
+            orbit_mode=True,
+            orbit_enter_nearness=0.35,
+            max_approach_s=60,
+            max_auto_engaged_s=120,
+            depth_stale_s=20,
+            min_battery_pct=5,
+        ),
+    )
+    t0 = 5000.0
+    # 均匀近场但 mid=0.42 < orbit_enter_nearness+0.15(0.50)：
+    # orbit 试 → LOST 但不够近 → 保持缓进，不 AVOID_TURN
+    flat = _grid(0.42)
+    r = fsm.step(flat, _tel(), True, now=t0)
     assert not fsm._orbit_active
-    assert r.abort_reason == ""
-    assert r.axes.pitch == 25
+    assert r.state == AvoidState.APPROACH        # 仍在前探
+    assert r.axes.roll == 0                       # 不横移
+    assert r.axes.pitch > 0                       # 前进靠近
     assert "pre_orbit" in r.sub_state
-    # 再喂几帧仍不应 orbit_lost
-    r2 = fsm.step(flat, _tel(), True, now=5001.5)
+
+
+def test_pre_orbit_acquire_keeps_approaching():
+    """ACQUIRE 状态（orbit 收集确认帧）→ 保持缓进，不回退 AVOID_TURN。"""
+    ctrl = AvoidanceController(AvoidParams(clear_thresh=0.35, approach_pitch=25, cruise_speed=30))
+    orbit = OrbitController(OrbitParams(acquire_frames=3))
+    fsm = AvoidanceFSM(
+        controller=ctrl,
+        orbit_ctrl=orbit,
+        params=FsmParams(
+            orbit_mode=True,
+            orbit_enter_nearness=0.35,
+            max_approach_s=60,
+            max_auto_engaged_s=120,
+            depth_stale_s=20,
+            min_battery_pct=5,
+        ),
+    )
+    t0 = 5000.0
+    # 椅子状近度（有峰），首帧 orbit 说 ACQUIRE（acquire_frames=3）
+    chair = _chair(0.55, x0=50, x1=78)
+    r = fsm.step(chair, _tel(), True, now=t0)
     assert not fsm._orbit_active
-    assert r2.abort_reason == ""
-    assert r2.axes.pitch == 25
+    assert r.state == AvoidState.APPROACH        # 保持缓进，不回退
+    assert r.axes.roll == 0                       # 不横移
+    assert r.axes.pitch > 0                       # 缓进等 orbit 收帧
+    assert "pre_orbit" in r.sub_state
 
 
 def test_pre_orbit_latches_after_lock():
@@ -175,10 +262,45 @@ def test_fsm_orbit_danger_aborts_auto():
         fsm.step(_chair(0.55), _tel(), True, now=t + i * 0.05)
     assert fsm._orbit_active
     danger = _chair(0.85)
-    r2 = fsm.step(danger, _tel(), True, now=t + 0.2)
+    # 去抖：首帧 danger 只零杆悬停，不 abort
+    r1 = fsm.step(danger, _tel(), True, now=t + 0.2)
+    assert r1.abort_reason == ""
+    assert r1.axes.is_zero()
+    assert "orbit_danger_hold" in r1.sub_state
+    # 持续超过 orbit_danger_hold_s(默认0.4s) → abort
+    r2 = fsm.step(danger, _tel(), True, now=t + 0.8)
     assert r2.state == AvoidState.HOVER
     assert r2.abort_reason == "orbit_danger"
     assert r2.axes.is_zero()
+
+
+def test_fsm_orbit_danger_spike_recovers():
+    """单帧 danger 尖刺（检测误落近列）不得 abort，恢复后继续环绕。"""
+    ctrl = AvoidanceController(AvoidParams(clear_thresh=0.35, cruise_speed=30))
+    fsm = AvoidanceFSM(
+        controller=ctrl,
+        params=FsmParams(
+            orbit_mode=True,
+            orbit_enter_nearness=0.35,
+            max_approach_s=60,
+            max_auto_engaged_s=120,
+            depth_stale_s=20,
+            min_battery_pct=5,
+        ),
+    )
+    t = 6000.0
+    for i in range(3):
+        fsm.step(_chair(0.55), _tel(), True, now=t + i * 0.05)
+    assert fsm._orbit_active
+    # 单帧尖刺 → 零杆但不 abort
+    r_spike = fsm.step(_chair(0.85), _tel(), True, now=t + 0.2)
+    assert r_spike.abort_reason == ""
+    assert r_spike.axes.is_zero()
+    # 下一帧恢复正常 → 继续环绕，去抖计时清零
+    r_ok = fsm.step(_chair(0.55), _tel(), True, now=t + 0.3)
+    assert r_ok.abort_reason == ""
+    assert fsm._orbit_active
+    assert fsm._orbit_danger_since is None
 
 
 def test_fsm_orbit_lost_grace_zero_then_abort():

@@ -29,6 +29,7 @@ from tt_control.flight_config import (
     build_avoid_params,
     build_fsm_params,
     build_orbit_params,
+    build_wander_params,
     load_config,
 )
 from tt_control.inference import create_backend
@@ -169,6 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     _avoid_params = build_avoid_params(_flight_cfg)
     _orbit_params = build_orbit_params(_flight_cfg)
     _fsm_params = build_fsm_params(_flight_cfg)
+    _wander_params = build_wander_params(_flight_cfg)
 
     # 本地深度默认走受管子进程：退出时 atexit 可清理。外挂服务需显式 --depth-service。
     _DEPTH_INFER = ("depth-anything", "da-v2", "depth")
@@ -368,16 +370,17 @@ def main(argv: list[str] | None = None) -> int:
     log.info(
         "飞行参数: 避障(cruise=%d approach=%d yaw=%d) "
         "环绕(target_nearness=%.2f dir=%s) "
-        "fsm(orbit_mode=%s depth_stale=%.1f)",
+        "fsm(orbit_mode=%s wander_mode=%s depth_stale=%.1f)",
         _avoid_params.cruise_speed, _avoid_params.approach_pitch, _avoid_params.yaw_speed,
         _orbit_params.target_nearness,
         "cw" if _orbit_params.direction > 0 else "ccw",
-        _fsm_params.orbit_mode, _fsm_params.depth_stale_s,
+        _fsm_params.orbit_mode, _fsm_params.wander_mode, _fsm_params.depth_stale_s,
     )
     return App(cfg, inference=backend,
                avoid_params=_avoid_params,
                orbit_params=_orbit_params,
-               fsm_params=_fsm_params).run()
+               fsm_params=_fsm_params,
+               wander_params=_wander_params).run()
 
 
 if __name__ == "__main__":
