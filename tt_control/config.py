@@ -34,9 +34,8 @@ class AppConfig:
     enable_record: bool = False  # 飞行中同步录制 episode(RGB+深度+动作+状态)
     record_hz: float = 10.0      # 录制采样频率(限流,避免 30fps 全存)
     # 避障控制律可调参(默认 = AvoidParams 默认;现场可 CLI 覆盖调保守)
-    avoid_cruise: int = 25       # 通畅时前进杆量
-    avoid_approach_pitch: int = 16  # 接近区边转边前进的前进量(调小=更"原地转")
-    avoid_yaw: int = 35          # 转向杆量
+    # NOTE: 避障 / 环绕 / 状态机参数已移至 configs/default.json，
+    # 通过 --config 或飞行配置管线加载。
 
 
 def detect_local_ip(preferred_prefix: str = "192.168.10.") -> str:

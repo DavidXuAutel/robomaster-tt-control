@@ -40,10 +40,16 @@ _LO_HI = (2.0, 98.0)  # 归一化分位数
 
 def load_model() -> None:
     global _PIPE
-    device = 0 if torch.cuda.is_available() else -1
-    logger.info("loading %s on %s ...", MODEL_ID, "cuda:0" if device == 0 else "cpu")
+    # 设备优先级：CUDA(4090) > MPS(Apple 芯片本地跑) > CPU
+    if torch.cuda.is_available():
+        device = 0
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = -1
+    logger.info("loading %s on %s ...", MODEL_ID, device)
     _PIPE = pipeline("depth-estimation", model=MODEL_ID, device=device)
-    logger.info("model ready (cuda=%s)", torch.cuda.is_available())
+    logger.info("model ready (device=%s)", device)
 
 
 def infer_nearness(jpeg: bytes) -> np.ndarray:

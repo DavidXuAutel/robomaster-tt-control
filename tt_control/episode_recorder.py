@@ -55,10 +55,16 @@ FRAME_FIELDS = [
     "vgx", "vgy", "vgz", "pitch_deg", "roll_deg", "bat_pct",
     "act_roll", "act_pitch", "act_throttle", "act_yaw", "ctrl_state",
     "near_left", "near_mid", "near_right",
+    # wander 追加列（只许尾部追加，勿插中间）
+    "wander_state", "wander_event",
 ]
 
 # 由控制律输出的自动决策状态（用于统计 action_source）
-_AUTO_STATES = {"CRUISE", "TURN_L", "TURN_R", "BLOCKED", "STOP"}
+_AUTO_STATES = {
+    "CRUISE", "TURN_L", "TURN_R", "BLOCKED", "STOP",
+    "WANDER_CRUISE", "WANDER_TURN", "WANDER_VERIFY", "WANDER_PANO",
+    "DANGER_HOLD", "WANDER_RETREAT",
+}
 
 
 def _num(state: dict, key: str):
@@ -189,6 +195,8 @@ class EpisodeRecorder:
         act: Any = None,
         ctrl_state: str = "",
         zones: Optional[Sequence[float]] = None,
+        wander_state: str = "",
+        wander_event: str = "",
     ) -> bool:
         """落盘一帧。返回 True 表示已记录，False 表示被限流跳过或已关闭。"""
         with self._lock:
@@ -274,6 +282,8 @@ class EpisodeRecorder:
                 "near_left": zl,
                 "near_mid": zm,
                 "near_right": zr,
+                "wander_state": wander_state or "",
+                "wander_event": wander_event or "",
             })
             self._csv.flush()
             return True

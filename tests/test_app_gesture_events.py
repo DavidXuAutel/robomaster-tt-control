@@ -30,6 +30,13 @@ class _FakeFlightClient(_FakeClient):
         self.state["h"] = "0"
         return "ok"
 
+    def send(self, cmd: str, timeout: float = 3.0):
+        # app._run_flight_cmd("land") 走 client.send("land") 重试路径
+        self.calls.append(("send", cmd))
+        if cmd == "land":
+            self.state["h"] = "0"
+        return "ok"
+
     def height_cm(self):
         return int(self.state["h"])
 

@@ -245,10 +245,15 @@ class SimVideo:
         self._running = False
         self._n = 0
         self._t0 = time.time()
+        self._frame_ts: float = 0.0
 
     @property
     def fps(self) -> float:
         return 30.0
+
+    @property
+    def frame_ts(self) -> float:
+        return self._frame_ts
 
     def start(self) -> None:
         self._running = True
@@ -258,6 +263,7 @@ class SimVideo:
         if not self._running:
             return None
         self._n += 1
+        self._frame_ts = time.time()
         img = np.full((self.H, self.W, 3), 40, dtype=np.uint8)
         # 网格背景
         for gx in range(0, self.W, 80):

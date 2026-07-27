@@ -10,11 +10,7 @@
 from __future__ import annotations
 
 import logging
-import struct
-import threading
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
@@ -22,110 +18,100 @@ import cv2
 import numpy as np
 
 from tt_control.avoidance import AvoidanceController, AvoidDecision
+from tt_control.async_infer import AsyncInferWorker
 from tt_control.inference import InferenceBackend
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SERVICE = "http://10.229.20.125:8899/depth"
+# 仅供 offline_avoidance 等显式工具默认；飞行入口 main.py 不得静默回落至此
+DEFAULT_SERVICE = "https://depth.david-x.com/depth"
 
 
 @dataclass
 class DepthFrame:
     nearness: np.ndarray  # 小网格，float32，值越大越近
-    ts: float
-
-
-class DepthServiceError(RuntimeError):
-    pass
+    ts: float  # 帧采集墙钟
 
 
 class DepthAnythingBackend(InferenceBackend):
     def __init__(
         self,
-        service_url: str = DEFAULT_SERVICE,
+        service_url: str,
         controller: Optional[AvoidanceController] = None,
         jpeg_quality: int = 80,
-        timeout: float = 2.0,
+        timeout: float = 15.0,
         min_interval: float = 0.0,
         overlay: bool = True,
     ) -> None:
+        if not service_url:
+            raise ValueError(
+                "DepthAnythingBackend 需要显式 service_url"
+                "（--depth-service 或 --start-depth-service）"
+            )
         self.service_url = service_url
         self.controller = controller  # 仅用于叠图标注「此刻会输出什么杆量」
         self.jpeg_quality = int(jpeg_quality)
-        self.timeout = timeout
-        self.min_interval = min_interval  # >0 时限流，两次请求间复用上一帧深度
         self.overlay = overlay
 
-        self._lock = threading.Lock()
-        self._latest: Optional[DepthFrame] = None
-        self._last_req = 0.0
-        self._infer_ms = 0.0
+        self._worker = AsyncInferWorker(
+            service_url=service_url,
+            timeout=timeout,
+            jpeg_quality=jpeg_quality,
+        )
+        self._worker.start()
         self._err: str = ""
-        self._probed = False
 
     # --- 感知 ---
-    def _request_depth(self, frame: np.ndarray) -> np.ndarray:
-        ok, buf = cv2.imencode(
-            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
-        )
-        if not ok:
-            raise DepthServiceError("JPEG 编码失败")
-        req = urllib.request.Request(
-            self.service_url,
-            data=buf.tobytes(),
-            headers={"Content-Type": "image/jpeg"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read()
-        except (urllib.error.URLError, OSError) as e:
-            raise DepthServiceError(f"连接 {self.service_url} 失败: {e}") from e
-        if len(raw) < 8:
-            raise DepthServiceError(f"响应过短: {len(raw)}B")
-        h, w = struct.unpack("<II", raw[:8])
-        expect = 8 + h * w * 2
-        if len(raw) != expect:
-            raise DepthServiceError(f"响应长度不符: {len(raw)} != {expect}")
-        grid = np.frombuffer(raw[8:], dtype=np.float16).reshape(h, w).astype(np.float32)
-        return grid
 
-    def latest_depth(self) -> Optional[DepthFrame]:
-        with self._lock:
-            return self._latest
+    def latest_depth(self, max_age_s: float = 5.0) -> Optional[DepthFrame]:
+        """主线程调用：返回最新推理结果（非阻塞）。
 
-    @property
-    def last_error(self) -> str:
-        return self._err
+        result.ts 为帧采集时刻。冻图反复推理不会刷新该时间戳，
+        超过 max_age_s 返回 None，让看门狗走「无深度」路径。
+        """
+        result = self._worker.latest_result()
+        if result is None:
+            return None
+        if time.time() - result.ts > max_age_s:
+            return None
+        return DepthFrame(nearness=result.nearness, ts=result.ts)
 
     @property
     def infer_ms(self) -> float:
         """最近一次感知往返耗时（ms），录制器记录 depth_rtt_ms 用。"""
-        return self._infer_ms
+        return self._worker.stats.rtt_ms
 
-    def infer(self, frame: np.ndarray) -> np.ndarray:
-        now = time.time()
-        need = self.min_interval <= 0.0 or (now - self._last_req) >= self.min_interval
-        if need:
-            self._last_req = now
-            try:
-                t0 = time.time()
-                grid = self._request_depth(frame)
-                self._infer_ms = (time.time() - t0) * 1000.0
-                with self._lock:
-                    self._latest = DepthFrame(nearness=grid, ts=now)
-                self._err = ""
-                self._probed = True
-            except DepthServiceError as e:
-                self._err = str(e)
-                # 首帧就连不上直接抛，避免静默失败；后续偶发错误只记录、复用上一帧
-                if not self._probed:
-                    raise
-                logger.warning("depth infer error: %s", e)
+    @property
+    def last_error(self) -> str:
+        return self._worker.stats.last_error
+
+    def infer(self, frame: np.ndarray, frame_ts: Optional[float] = None) -> np.ndarray:
+        """主线程调用：喂帧给异步工作线程（非阻塞），返回叠图帧。
+
+        frame_ts: 帧采集墙钟；不传则用当前时间（无法检测冻图）。
+        """
+        self._worker.feed_frame(frame, ts=frame_ts)
 
         if not self.overlay:
             return frame
         return self._draw(frame)
+
+    def close(self) -> None:
+        """停止异步工作线程。"""
+        self._worker.stop()
+
+    @property
+    def status_text(self) -> str:
+        s = self._worker.stats
+        url = self.service_url
+        if len(url) > 40:
+            url = url[:37] + "..."
+        parts = [url, f"RTT {s.rtt_ms:.0f}ms"]
+        if s.consecutive_errors > 0:
+            parts.append(f"err={s.consecutive_errors}")
+        if s.last_frame_age_ms > 0:
+            parts.append(f"age={s.last_frame_age_ms:.0f}ms")
+        return " | ".join(parts)
 
     # --- 叠图 ---
     def _draw(self, frame: np.ndarray) -> np.ndarray:
@@ -134,7 +120,7 @@ class DepthAnythingBackend(InferenceBackend):
         if depth is None:
             cv2.putText(
                 frame,
-                (self._err or "waiting depth service...")[:60],
+                (self.last_error or "waiting depth service...")[:60],
                 (20, h - 20),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
@@ -157,7 +143,7 @@ class DepthAnythingBackend(InferenceBackend):
         decision: Optional[AvoidDecision] = None
         if self.controller is not None:
             decision = self.controller.decide(near)
-        line = f"infer {self._infer_ms:.0f}ms"
+        line = f"infer {self.infer_ms:.0f}ms"
         if decision is not None:
             line = f"{decision.as_hud()}  {line}"
         cv2.rectangle(frame, (0, h - 30), (w, h), (25, 25, 25), -1)

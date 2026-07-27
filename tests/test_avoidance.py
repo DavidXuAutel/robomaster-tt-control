@@ -17,14 +17,14 @@ def test_clear_cruises_forward():
     assert d.axes.yaw == 0 and d.axes.roll == 0
 
 
-def test_obstacle_left_turns_right():
+def test_obstacle_left_strafes_right():
     c = AvoidanceController()
     n = _grid(0.10)
     n[:, : n.shape[1] // 3] = 0.9          # 左区很近
     d = c.decide(n)
-    assert d.state in ("TURN_R", "TURN_L")
-    assert d.state == "TURN_R"             # 左更挡 → 向右绕
-    assert d.axes.yaw > 0
+    assert d.state == "STRAFE_R"           # 左更挡 → 向右横移让开
+    assert d.axes.roll > 0                 # roll 正 = 向右平移
+    assert d.axes.yaw == 0                 # 绕障不再靠偏航
 
 
 def test_boxed_in_hovers():
