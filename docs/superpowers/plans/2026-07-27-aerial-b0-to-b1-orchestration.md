@@ -82,9 +82,9 @@ from experiments.aerial.orchestration.checkpoint import is_complete_checkpoint
 def test_complete_requires_sha_and_stable_size(tmp_path):
     pt = tmp_path / "step_001000.pt"
     pt.write_bytes(b"abc")
-    assert is_complete_checkpoint(pt, settle_s=0.0) is False
+    assert is_complete_checkpoint(pt, settle_s=0.0, min_bytes=1) is False
     (tmp_path / "step_001000.pt.sha256").write_text("deadbeef  step_001000.pt\n")
-    assert is_complete_checkpoint(pt, settle_s=0.0) is True
+    assert is_complete_checkpoint(pt, settle_s=0.0, min_bytes=1) is True
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -138,12 +138,17 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-def is_complete_checkpoint(pt_path: Path, *, settle_s: float = 5.0) -> bool:
+def is_complete_checkpoint(
+    pt_path: Path,
+    *,
+    settle_s: float = 5.0,
+    min_bytes: int = 1_000_000_000,
+) -> bool:
     sha = Path(str(pt_path) + ".sha256")
     if not pt_path.is_file() or not sha.is_file():
         return False
     size1 = pt_path.stat().st_size
-    if size1 < 1_000_000_000:  # refuse tiny/partial aerial ckpts
+    if size1 < min_bytes:  # production default refuses tiny/partial aerial ckpts
         return False
     if settle_s > 0:
         time.sleep(settle_s)
@@ -167,7 +172,60 @@ git -C /Users/xudazhong/Projects/FastWAM/.worktrees/aerial-wam-phase1 commit -m 
 
 ---
 
-### Task 2: Eval queue
+### Task 2: Persist per-episode evaluation metrics
+
+**Files:**
+- Modify: `experiments/aerial/eval/run_closed_loop.py`
+- Modify: `experiments/aerial/tests/test_run_closed_loop_mock.py`
+
+**Interfaces:**
+- Produces: aggregate `SR` / `NE` / `SPL` / `n` plus `episodes: list[dict]`
+- Each episode record: `episode_id`, `success`, `NE`, `path_length`, `shortest_length`, `steps`
+
+- [ ] **Step 1: Write failing test**
+
+```python
+def test_evaluate_episodes_preserves_per_episode_metrics():
+    episodes = load_annotation(FIXTURE_ANN)[:2]
+    metrics = evaluate_episodes(
+        episodes,
+        bridge_name="mock",
+        policy_name="replay",
+        max_steps=50,
+        seed=42,
+    )
+    assert len(metrics["episodes"]) == 2
+    assert set(metrics["episodes"][0]) == {
+        "episode_id", "success", "NE", "path_length",
+        "shortest_length", "steps",
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=. pytest experiments/aerial/tests/test_run_closed_loop_mock.py::test_evaluate_episodes_preserves_per_episode_metrics -v`
+Expected: FAIL because aggregate output has no `episodes`.
+
+- [ ] **Step 3: Implement minimal episode records**
+
+In `evaluate_episodes`, accumulate one JSON-serializable record per completed episode. Use stable ID precedence `route_id`, `episode_id`, `id`, then the zero-based index string. Keep aggregate calculations unchanged and attach `metrics["episodes"] = episode_records`.
+
+- [ ] **Step 4: Run focused and existing eval tests**
+
+Run: `PYTHONPATH=. pytest experiments/aerial/tests/test_run_closed_loop_mock.py experiments/aerial/tests/test_metrics.py -v`
+Expected: PASS
+
+- [ ] **Step 5: Commit only the focused hunks**
+
+```bash
+git add -p experiments/aerial/eval/run_closed_loop.py
+git add experiments/aerial/tests/test_run_closed_loop_mock.py
+git commit -m "feat(aerial): persist per-episode closed-loop metrics"
+```
+
+---
+
+### Task 3: Eval queue
 
 **Files:**
 - Create: `experiments/aerial/orchestration/eval_queue.py`
@@ -249,7 +307,7 @@ git commit -m "feat(aerial): add idempotent FIFO eval queue"
 
 ---
 
-### Task 3: Baseline lock
+### Task 4: Baseline lock
 
 **Files:**
 - Create: `experiments/aerial/eval/lock_baseline.py`
@@ -265,13 +323,18 @@ git commit -m "feat(aerial): add idempotent FIFO eval queue"
 from experiments.aerial.eval.lock_baseline import select_baseline, build_lock_manifest
 
 def test_select_lowest_ne_tie_breaks_later_step():
-    chosen = select_baseline([
+    candidates = [
         {"step": 1000, "mean_ne": 150.0, "checkpoint": "a", "metrics_path": "a.json", "sha256": "1"},
         {"step": 4000, "mean_ne": 120.0, "checkpoint": "b", "metrics_path": "b.json", "sha256": "2"},
         {"step": 5000, "mean_ne": 120.0, "checkpoint": "c", "metrics_path": "c.json", "sha256": "3"},
-    ])
+    ]
+    chosen = select_baseline(candidates)
     assert chosen["step"] == 5000
-    man = build_lock_manifest(chosen, candidates=[...], stamp="20260727-072347-5k-2gpu-b0-to-joint-video")
+    man = build_lock_manifest(
+        chosen,
+        candidates=candidates,
+        stamp="20260727-072347-5k-2gpu-b0-to-joint-video",
+    )
     assert man["s1_ne"] == 96.0
     assert man["baseline_mean_ne"] == 120.0
 ```
@@ -313,7 +376,7 @@ git commit -m "feat(aerial): add dynamic baseline lock with S1_NE"
 
 ---
 
-### Task 4: Update compare_finetune for dynamic S1
+### Task 5: Update compare_finetune for dynamic S1
 
 **Files:**
 - Modify: `experiments/aerial/eval/compare_finetune.py`
@@ -339,7 +402,7 @@ git commit -m "fix(aerial): compare_finetune uses locked dynamic S1_NE"
 
 ---
 
-### Task 5: Eval worker script
+### Task 6: Eval worker script
 
 **Files:**
 - Create: `experiments/aerial/scripts/orch_eval_worker.sh`
@@ -377,7 +440,7 @@ git commit -m "feat(aerial): add serial orchestration eval worker"
 
 ---
 
-### Task 6: B0 wait + enqueue
+### Task 7: B0 wait + enqueue
 
 **Files:**
 - Create: `experiments/aerial/scripts/orch_b0_wait_and_enqueue.sh`
@@ -393,9 +456,14 @@ git commit -m "feat(aerial): add serial orchestration eval worker"
 def test_discover_only_complete_steps(tmp_path):
     weights = tmp_path / "checkpoints" / "weights"
     weights.mkdir(parents=True)
-    # create fake large files + sha for 1000 only
-    ...
-    found = discover_b0_checkpoints(weights)
+    pt = weights / "step_001000.pt"
+    pt.write_bytes(b"checkpoint")
+    (weights / "step_001000.pt.sha256").write_text(
+        "deadbeef  step_001000.pt\n",
+        encoding="utf-8",
+    )
+    (weights / "step_002000.pt").write_bytes(b"incomplete")
+    found = discover_b0_checkpoints(weights, min_bytes=1, settle_s=0.0)
     assert [c["step"] for c in found] == [1000]
 ```
 
@@ -419,7 +487,7 @@ git commit -m "feat(aerial): discover and enqueue B0 checkpoint evals"
 
 ---
 
-### Task 7: Supervisor phases LOCK → B1_GATES
+### Task 8: Supervisor phases LOCK → B1_GATES
 
 **Files:**
 - Create: `experiments/aerial/scripts/orch_b1_gates.sh`
@@ -453,7 +521,7 @@ git commit -m "feat(aerial): add supervisor lock and B1 gate phase"
 
 ---
 
-### Task 8: B1 train + ckpt watch enqueue
+### Task 9: B1 train + ckpt watch enqueue
 
 **Files:**
 - Create: `experiments/aerial/scripts/orch_b1_train.sh` (adapt from `run_b0_ft_4090.sh` → H100 `:31660`, task `aerial_joint_b0_ft_dagger`, λ_v=0)
@@ -490,7 +558,7 @@ git commit -m "feat(aerial): add B1 H100 train and checkpoint eval enqueue"
 
 ---
 
-### Task 9: S1 report + end-to-end supervisor wiring
+### Task 10: S1 report + end-to-end supervisor wiring
 
 **Files:**
 - Create: `experiments/aerial/scripts/orch_s1_report.sh`
@@ -534,7 +602,7 @@ git commit -m "feat(aerial): wire B0→B1 supervisor through S1 report"
 
 ---
 
-### Task 10: Deploy and arm on live hosts
+### Task 11: Deploy and arm on live hosts
 
 **Files:**
 - Create: `experiments/aerial/scripts/deploy_orchestration.md` (ops checklist only)
@@ -569,14 +637,15 @@ git -C /Users/xudazhong/Projects/robomaster-tt-control commit -m "Add B0→B1 or
 
 | Spec requirement | Task |
 |------------------|------|
-| Wait B0 complete + durable ckpts | Task 6, 10 |
-| Eval all B0 1k–5k, reuse existing | Task 2, 5, 6 |
-| Lock min mean NE + S1_NE | Task 3 |
-| B1 gates / BLOCKED no fabrication | Task 7 |
-| B1 train λ_v=0, 75/25, 1000/250 | Task 8 |
-| Sync eval each B1 ckpt, serial AirSim | Task 2, 5, 8 |
-| S1 report dynamic threshold | Task 4, 9 |
-| Idempotent recovery | Task 1, 2, 9 |
-| Host split / no robot net | Global + Task 10 |
+| Wait B0 complete + durable ckpts | Task 7, 11 |
+| Per-episode metrics for comparisons | Task 2 |
+| Eval all B0 1k–5k, reuse existing | Task 3, 6, 7 |
+| Lock min mean NE + S1_NE | Task 4 |
+| B1 gates / BLOCKED no fabrication | Task 8 |
+| B1 train λ_v=0, 75/25, 1000/250 | Task 9 |
+| Sync eval each B1 ckpt, serial AirSim | Task 3, 6, 9 |
+| S1 report dynamic threshold | Task 5, 10 |
+| Idempotent recovery | Task 1, 3, 10 |
+| Host split / no robot net | Global + Task 11 |
 
-No TBD placeholders remain. Hard-coded historical S1 constants are explicitly retired in Task 4.
+No TBD placeholders remain. Hard-coded historical S1 constants are explicitly retired in Task 5.
