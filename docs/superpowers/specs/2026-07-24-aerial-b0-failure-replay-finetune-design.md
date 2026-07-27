@@ -1,20 +1,25 @@
 # Aerial B0 失败回采与纠偏微调设计
 
 日期：2026-07-24  
-状态：已确认（r1）
-范围：AirSim seen 路线上的 B0 纠偏式 DAgger 回采，以及双 RTX 4090 微调
+状态：已确认（r2，基础设施与基线恢复更新）
+范围：AirSim seen 路线上的 B0-origin 纠偏式 DAgger 回采，以及双 H100 微调
 
 ## 1. 目标与成功标准
 
-从 B0 seen 评测最优 checkpoint 出发，使用 AirSim 闭环失败状态和 OpenFly annotation 路径专家构造纠偏数据，再进行一次受控微调。当前 1k–5k 选择结果中，`step_4000` 的 NE `135.94562291546043` 最低，因此 r1 锁定：
+从 B0-origin seen 评测最优 checkpoint 出发，使用 AirSim 闭环失败状态和 OpenFly annotation 路径专家构造纠偏数据，再进行一次受控微调。
 
-- 起始 checkpoint：B0 `step_004000.pt`；
-- 基线平均 NE：`135.94562291546043`；
-- S1 目标平均 NE：不高于 `108.75649833236835`。
+2026-07-24 的 B0 `step_001000`–`step_005000`（包括历史最优 `step_004000`）已随旧容器 `/tmp` 丢失，不能再作为可复现基线。当前只保留 B0 `m1b-20260722-012926/step_000500.pt`。因此 r2 将基线锁定改为前置门禁：
+
+1. 从该 B0 `step_000500` 恢复，完成 `lambda_action=1`、`lambda_video=1` 的 5000-step B0→joint-video 训练；
+2. 在固定 held-out seen-20 上评测该运行的可用 checkpoint；
+3. 以 mean NE 最低者锁定为 failure-replay 起始 checkpoint，并在 manifest 中记录 checkpoint 路径、SHA256、训练 stamp 和完整评测结果；
+4. 锁定后才计算 S1 数值阈值：`S1_NE = 0.8 × baseline_mean_NE`。
+
+历史 `step_004000` 的 mean NE `135.94562291546043` 仅保留为历史诊断数据，不参与 r2 模型选择、通过判定或恢复。
 
 第一阶段成功标准（S1）：
 
-- 在固定 held-out seen-20 上，最佳微调 checkpoint 的平均 NE 相对锁定的 B0 `step_4000` 基线降低至少 20%。
+- 在固定 held-out seen-20 上，最佳微调 checkpoint 的平均 NE 相对新锁定的 B0-origin joint-video 基线降低至少 20%。
 - 同时报告 SR、SPL、median NE 和逐 episode NE 差值。
 - held-out seen-20 不参与回采、训练或 checkpoint 选择之外的参数调节。
 - 在 seen 结果锁定前不运行 unseen 评测。
@@ -25,12 +30,14 @@ S1 不要求 SR 大于零；出现正 SR 作为额外结果报告。
 
 | 角色 | 主机 |
 |------|------|
-| B0 推理与失败回采客户端 | eval H100 `a25689@10.239.121.25:31126` |
+| B0→joint-video 基线训练 | `a25689@10.239.121.21:31126`（2×H100）+ `a25689@10.239.121.22:30682`（1×H100）+ `a25689@10.239.121.22:31660`（2×H100） |
+| 基线评测与失败回采客户端 | eval H100 `a25689@10.239.121.22:30682` |
 | AirSim 渲染 | RTX 4090 `yao@10.229.20.125:22`，RPC `10.229.20.125:41451` |
-| 纠偏微调 | 双 RTX 4090 `a25689@10.239.121.14:30879` |
-| 现有 B1 联合训练 | train H100 `a25689@10.239.121.25:31893` |
+| 纠偏微调 | 双 H100 `a25689@10.239.121.22:31660` |
 
-渲染、推理和微调保持分离。微调不占用正在进行 B1 训练的 H100。
+基线训练期间使用全部 5 张 H100。基线 checkpoint 锁定后，释放 `:30682` 用于评测/回采，使用 `:31660` 的双 H100 做纠偏微调。旧主机 `10.239.121.25:31893`、`10.239.121.25:31126` 和双 4090 `10.239.121.14:30879` 不再属于本设计。
+
+Ceph 只作为持久存储来源；训练所需代码、text embedding cache 和高频读取元数据优先同步到各 pod 的本地 `/tmp/aerial_cache`。跨节点训练的每个 rank 必须读取本机 `/tmp` 中校验一致的 embed cache，避免 Ceph MDS 阻塞。
 
 禁止通过 Desk API 修改机器人侧网络；本工作不访问或修改 `10.229.66.70`。
 
@@ -129,31 +136,32 @@ NE 仅作为评测和诊断字段，不参与接管触发。沿正确参考路�
 
 RPC 中断只重试当前 episode 一次。AirSim renderer 异常时，仅在 `10.229.20.125` 运行既有恢复脚本。
 
-## 7. 双 4090 微调
+## 7. 双 H100 微调
 
 ### 7.1 已验证资源
 
-`10.239.121.14:30879` 提供：
+`10.239.121.22:31660` 提供：
 
-- 2× RTX 4090，每卡约 24GB；
+- 2× H100；
 - torch `2.7.1+cu128`；
 - accelerate `1.12.0`；
 - DeepSpeed `0.18.5`；
-- 约 503GiB RAM；
-- 已存在 FastWAM 代码和 Python 环境。
+- 可访问共享 Ceph 中的 FastWAM 代码、Python 环境和保留的 B0 `step_000500`；
+- 本地 `/tmp` 可承载训练代码与 text embedding cache。
 
-H100 上当前全参 ZeRO-2 训练约使用 63GB/卡，不能直接照搬到 4090。
+当前全参 ZeRO-2 训练约使用 63GB/H100。优化器参数组必须使用已验证的 nanfix chunking：约 6B 参数拆为最多 7 组，每组不超过约 1B elements，避免单一超大参数组引发数值或初始化问题。
 
 ### 7.2 配方
 
-首选 DeepSpeed ZeRO-2 + optimizer CPU offload：
+首选 DeepSpeed ZeRO-2、无 CPU offload：
 
 - 2 GPU；
 - bf16；
 - micro-batch 1/GPU；
 - gradient accumulation 1；
 - 保持 gradient checkpointing；
-- 从锁定的 B0 `step_4000` 加载模型权重；
+- 从 §1 新锁定的 B0-origin joint-video baseline checkpoint 加载模型权重；
+- failure-replay 微调只优化纠偏动作监督：`lambda_action=1`、`lambda_video=0`；joint-video 仅用于重建和锁定基线，不改变首轮 correction 数据的训练目标；
 - 不恢复原 optimizer/scheduler；
 - learning rate `1e-5`；
 - warmup 50 steps；
@@ -165,23 +173,25 @@ H100 上当前全参 ZeRO-2 训练约使用 63GB/卡，不能直接照搬到 409
 
 启动 smoke 前必须通过 SHA256 清单同步并验证：
 
-- B0 `step_004000.pt`；
-- 与 B0 checkpoint 同目录的 `dataset_stats.json`；
+- 新锁定的 baseline checkpoint；
+- 与 baseline checkpoint 配套的 `dataset_stats.json`；
 - OpenFly 原始训练集和 correction dataset；
-- text embedding cache；
-- FastWAM 代码 commit 与 action-only 修复；
-- `aerial_joint_b0_novideo` task 配置、model 配置、data compatibility 配置；
-- DeepSpeed ZeRO-2 optimizer-offload 配置；
+- 201-shard text embedding cache；
+- FastWAM 代码 commit、action-only 修复与 nanfix optimizer chunking；
+- failure-replay task 配置、model 配置、data compatibility 配置；
+- DeepSpeed ZeRO-2 no-offload 配置；
 - collection manifest 与训练 sampling 配置。
+
+代码、embed cache 和必要元数据同步到 `/tmp/aerial_ft_cache`，禁止让训练热路径依赖已知可能进入 `ceph_mdsc_wait_request` 的 Ceph 目录。大 checkpoint 可保留在 Ceph，但 smoke 前必须完成一次有超时保护的顺序读取和 SHA256 校验。
 
 ### 7.3 显存门禁
 
 1. 先执行 1-step smoke。
 2. 记录两卡峰值显存、loss 和参数 finite 状态。
 3. 继续运行到 10 steps。
-4. 通过条件：峰值显存低于 23GB/卡，且无 OOM/NaN。
+4. 通过条件：峰值显存低于每卡物理显存的 90%，且 action loss、总 loss 和参数均 finite。
 5. 若 OOM，仅允许缩小通信 bucket并清理缓存后重试一次。
-6. 第二次仍失败则停止 ZeRO-2 路线，改为单独评审 ZeRO-3 + offload；不得反复撞显存或擅自改变训练目标。
+6. 第二次仍失败则停止 ZeRO-2 路线，改为单独评审 ZeRO-3；不得反复撞显存或擅自改变训练目标。
 
 ## 8. 评测与模型选择
 
@@ -194,7 +204,7 @@ H100 上当前全参 ZeRO-2 训练约使用 63GB/卡，不能直接照搬到 409
 - AirSim renderer；
 - policy action quantization。
 
-以平均 NE 最低的 checkpoint 作为候选。S1 的唯一主通过线是平均 NE 不高于 `108.75649833236835`，即相对锁定的 B0 `step_4000` 基线下降至少 20%。
+以平均 NE 最低的 checkpoint 作为候选。S1 的唯一主通过线是平均 NE 不高于 manifest 中记录的 `0.8 × baseline_mean_NE`。在新 baseline 评测完成前，不写入或沿用旧的固定数值阈值。
 
 训练标签保留连续动作，但 AirSim 执行使用最近 primitive，存在明确的 train/serve quantization gap。评测必须同时记录：
 
@@ -215,15 +225,16 @@ H100 上当前全参 ZeRO-2 训练约使用 63GB/卡，不能直接照搬到 409
 
 ## 9. 排程与恢复
 
-1. 使用已完成的 B0 1k–5k 指标锁定 `step_4000` 为基线。
-2. 等当前 B0 视频队列释放 eval H100 和 renderer。
-3. 将 `seen_airsim16_collection_source.json` 部署到固定路径，生成 collection-40 manifest 并完成防泄漏检查。
-4. 路径专家通过单测、mock 和 AirSim oracle-only 门禁。
-5. 回采 40 episodes 并验收 correction dataset。
-6. 通过 SHA256 校验复制 checkpoint、数据与配置到双 4090。
-7. 运行 1-step/10-step 显存 smoke。
-8. 运行最多 1000-step 微调。
-9. 回传三个 checkpoint，完成 held-out seen-20 评测并选择模型。
+1. 从保留的 B0 `m1b-20260722-012926/step_000500.pt` 启动 3-host/5-H100 B0→joint-video 训练：`lambda_action=1`、`lambda_video=1`、`max_steps=5000`、`save_every=1000`，并启用 nanfix optimizer chunking。
+2. 在 held-out seen-20 上评测该运行的可用 checkpoint，按最低 mean NE 锁定新 baseline，并写入路径、SHA256、stamp、指标和 `S1_NE`。
+3. 释放 `:30682` 作为 eval/collection 客户端；确认 renderer 可用。
+4. 将 `seen_airsim16_collection_source.json` 部署到固定路径，生成 collection-40 manifest 并完成防泄漏检查。
+5. 路径专家通过单测、mock 和 AirSim oracle-only 门禁。
+6. 回采 40 episodes 并验收 correction dataset。
+7. 通过 SHA256 校验将 baseline checkpoint、数据、embed cache 与配置同步到 `:31660` 的本地 `/tmp`。
+8. 运行双 H100 1-step/10-step 显存 smoke。
+9. 运行最多 1000-step 微调。
+10. 将三个 checkpoint 交给 `:30682`，完成 held-out seen-20 评测并选择模型。
 
 训练进程需保存明确状态文件。意外退出时只从最近完整 checkpoint 恢复；损坏或未完成产物不得参与同步和评测。
 

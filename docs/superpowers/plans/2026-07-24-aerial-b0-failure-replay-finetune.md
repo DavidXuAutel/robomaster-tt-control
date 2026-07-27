@@ -2,22 +2,26 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Collect 40-episode AirSim threshold-takeover DAgger corrections for B0, fine-tune on dual RTX 4090 with 75/25 original/correction sampling, and pass S1 (held-out seen-20 mean NE ≤ 108.75649833236835).
+**Goal:** Establish a reproducible B0-origin joint-video baseline, collect 40-episode AirSim threshold-takeover DAgger corrections, fine-tune on dual H100 with 75/25 original/correction sampling, and pass S1 (held-out seen-20 mean NE at least 20% below the newly locked baseline).
 
-**Architecture:** Reuse FastWAM aerial eval bridges/policies. Add a path expert + takeover controller that labels every state with continuous expert actions while B0 flies under threshold takeover. Export a separate LeRobot correction dataset, mix it with the existing OpenFly train_subset via a probability sampler, and resume B0 `step_004000` on `10.239.121.14:30879` with ZeRO-2 optimizer CPU offload.
+**Architecture:** First resume the surviving B0 `m1b-20260722-012926/step_000500.pt` into a 3-host/5-H100 joint-video run and lock its eval-best checkpoint as the new baseline. Reuse FastWAM aerial eval bridges/policies, add a path expert + takeover controller that labels every state with continuous expert actions, export a separate LeRobot correction dataset, mix it with OpenFly train_subset via a probability sampler, then fine-tune baseline model weights on `10.239.121.22:31660` with dual-H100 ZeRO-2 no-offload.
 
 **Tech Stack:** FastWAM (Hydra/Accelerate/DeepSpeed), OpenFly AirSim bridge, LeRobot v2.1 datasets, pytest, expect/SSH remotes.
 
 ## Global Constraints
 
-- Spec: `docs/superpowers/specs/2026-07-24-aerial-b0-failure-replay-finetune-design.md` (r1 confirmed).
-- Code worktree: `/Users/xudazhong/Projects/FastWAM/.worktrees/aerial-wam-phase1` (branch `feat/aerial-wam-phase1`); do not train on the B1 H100 (`:31893`).
-- Eval/collection host: `a25689@10.239.121.25:31126`; renderer: `yao@10.229.20.125` RPC `10.229.20.125:41451`; fine-tune host: `a25689@10.239.121.14:30879`.
-- Baseline lock: B0 `step_004000.pt`, baseline NE `135.94562291546043`, S1 NE ≤ `108.75649833236835`.
+- Spec: `docs/superpowers/specs/2026-07-24-aerial-b0-failure-replay-finetune-design.md` (r2 confirmed).
+- Code worktree: `/Users/xudazhong/Projects/FastWAM/.worktrees/aerial-wam-phase1` (branch `feat/aerial-wam-phase1`).
+- Baseline train topology: `a25689@10.239.121.21:31126` (2×H100), `a25689@10.239.121.22:30682` (1×H100), `a25689@10.239.121.22:31660` (2×H100).
+- Eval/collection host after baseline training: `a25689@10.239.121.22:30682`; renderer: `yao@10.229.20.125` RPC `10.229.20.125:41451`; fine-tune host: `a25689@10.239.121.22:31660` (2×H100).
+- Baseline bootstrap: surviving B0 `m1b-20260722-012926/step_000500.pt`; joint objective `lambda_action=1`, `lambda_video=1`; `max_steps=5000`; `save_every=1000`; nanfix optimizer chunking.
+- Baseline lock: eval-best checkpoint from that B0-origin joint-video run. Record its mean NE and set `S1_NE = 0.8 × baseline_mean_NE` in a manifest before collection or fine-tuning.
+- The lost B0 `step_001000`–`step_005000` files, including historical `step_004000`, are not valid inputs. Do not search for or reference them operationally.
+- Keep code, text embeds, and hot metadata in each pod's `/tmp/aerial_cache`; verify the 201-shard embed cache before launch. Avoid Ceph on the training hot path.
 - Held-out only: `/tmp/aerial_eval_cache/OpenFly-Platform/Annotation/seen_airsim16_m1a20.json`. Never collect from it.
-- Collection source must exist at `/tmp/aerial_eval_cache/OpenFly-Platform/Annotation/seen_airsim16_collection_source.json` before Task 2 proceeds past dry-run fixtures.
+- Collection source must exist at `/tmp/aerial_eval_cache/OpenFly-Platform/Annotation/seen_airsim16_collection_source.json` before Task 1 performs a real collection split.
 - Do not touch robot network / `10.229.66.70`.
-- Wait for current B0 video queue to finish before starting AirSim collection.
+- Do not start AirSim collection until the new baseline run finishes and the eval-best checkpoint is locked.
 
 ---
 
@@ -30,12 +34,49 @@
 | `experiments/aerial/takeover.py` | Threshold takeover state machine |
 | `experiments/aerial/eval/collect_dagger.py` | AirSim DAgger collector CLI |
 | `experiments/aerial/write_correction_lerobot.py` | Correction episode → LeRobot writer |
+| `experiments/aerial/eval/lock_baseline.py` | Select eval-best B0-origin checkpoint and freeze S1 threshold |
 | `experiments/aerial/eval/compare_finetune.py` | Held-out baseline vs FT report |
 | `src/fastwam/datasets/lerobot/weighted_source_dataset.py` | 75/25 source sampler wrapper |
 | `configs/data/aerial_openfly_b0_ft_mix.yaml` | Mixed data config |
 | `configs/task/aerial_joint_b0_ft_dagger.yaml` | FT task config |
 | `experiments/aerial/scripts/` | Remote sync/smoke/FT shell helpers |
 | `experiments/aerial/tests/test_*.py` | Unit tests for each module |
+
+---
+
+### Task 0: Rebuild and lock the B0-origin joint-video baseline
+
+**Files:**
+- Create: `experiments/aerial/scripts/run_b0_to_joint_video_5gpu.sh`
+- Create: `experiments/aerial/eval/lock_baseline.py`
+- Create: `experiments/aerial/tests/test_lock_baseline.py`
+
+**Interfaces:**
+- Consumes: surviving B0 `m1b-20260722-012926/step_000500.pt`, 201-shard text embed cache, held-out seen-20 result JSONs
+- Produces: 3-host/5-GPU training stamp and logs; `baseline_lock.manifest.json` containing checkpoint path/SHA256, train stamp, full metrics, `baseline_mean_ne`, and `s1_ne`
+
+- [ ] **Step 1: Validate all three train hosts**
+  - Confirm topology 2+1+2 H100 and TCP/NCCL reachability.
+  - Sync identical FastWAM code plus nanfix trainer to `/tmp/aerial_cache/FastWAM_train`.
+  - Sync and checksum 201 text-embed shards into each host's `/tmp/aerial_cache/data/text_embeds_cache/openfly`.
+  - Refuse launch if any rank resolves the embed path through Ceph.
+
+- [ ] **Step 2: Launch the baseline run**
+  - Resume model weights from B0 `step_000500.pt`.
+  - Set `lambda_action=1`, `lambda_video=1`, `max_steps=5000`, `save_every=1000`, bf16, ZeRO-2 no-offload.
+  - Use nanfix optimizer groups capped at approximately 1B elements/group.
+  - Verify the first reported `loss_action` and `loss_video` are finite; record topology, speed and ETA.
+  - If 5-GPU NCCL fails, record the error and fall back once to the maximum coherent reachable topology; do not silently change the objective.
+
+- [ ] **Step 3: Evaluate available baseline checkpoints**
+  - Run held-out seen-20 with fixed seed, max steps, success distance, renderer and action quantization.
+  - Do not use the lost historical `step_004000` metrics as a candidate.
+
+- [ ] **Step 4: Test and implement baseline lock**
+  - Select lowest finite mean NE, fail on missing/duplicate episode IDs, and compute `s1_ne = 0.8 * baseline_mean_ne`.
+  - Atomically write `baseline_lock.manifest.json` with checkpoint SHA256 and all selection inputs.
+
+- [ ] **Step 5: Tests PASS + commit** `feat(aerial): rebuild and lock joint-video baseline`
 
 ---
 
@@ -311,9 +352,9 @@ Atomic manifest update after each episode: `{"completed": [...], "failed": [...]
   - Freeze thresholds via `freeze_thresholds` into manifest
 
 - [ ] **Step 3: Shell helper**
-  - Poll `/tmp/aerial_eval_cache/logs/eval/b0_seen_videos.status` until `COMPLETED` or `FAILED`
+  - Require a valid `baseline_lock.manifest.json` and verify its checkpoint SHA256.
   - Refuse to start if collection source missing
-  - Launch `collect_dagger.py` with B0 `step_004000.pt`, collection-40 ann, frozen thresholds
+  - Launch `collect_dagger.py` with the locked B0-origin joint-video baseline checkpoint, collection-40 ann, and frozen thresholds
 
 - [ ] **Step 4: Commit** `feat(aerial): add oracle gate and collection launch scripts`
 
@@ -393,33 +434,36 @@ Trainer must log `data_source` counts every 50 steps; fail run if any complete 2
 
 ---
 
-### Task 7: Dual-4090 sync, smoke, and fine-tune
+### Task 7: Dual-H100 sync, smoke, and fine-tune
 
 **Files:**
-- Create: `experiments/aerial/scripts/sync_b0_ft_to_4090.sh`
-- Create: `experiments/aerial/scripts/smoke_b0_ft_4090.sh`
-- Create: `experiments/aerial/scripts/run_b0_ft_4090.sh`
-- Create: `experiments/aerial/scripts/accelerate_zero2_opt_offload_2proc.yaml` (copy/adapt from train H100)
+- Create: `experiments/aerial/scripts/sync_b0_ft_to_h100.sh`
+- Create: `experiments/aerial/scripts/smoke_b0_ft_h100.sh`
+- Create: `experiments/aerial/scripts/run_b0_ft_h100.sh`
+- Create: `experiments/aerial/scripts/accelerate_zero2_no_offload_2proc.yaml`
 
 **Interfaces:**
-- Sync SHA256 manifest listing: `step_004000.pt`, `dataset_stats.json`, train_subset, correction set, text embeds, code tarball/commit, Hydra configs, DeepSpeed/Accelerate yaml, collection manifest
+- Sync SHA256 manifest listing: locked baseline checkpoint and manifest, `dataset_stats.json`, train_subset, correction set, 201 text embeds, code tarball/commit, Hydra configs, DeepSpeed/Accelerate yaml, collection manifest
 
 - [ ] **Step 1: Sync script**
-  - `rsync`/scp from eval/train caches to `/tmp/aerial_ft_cache/` on `:30879`
+  - `rsync`/scp from eval/train caches to `/tmp/aerial_ft_cache/` on `10.239.121.22:31660`
   - Verify SHA256 list; refuse smoke if mismatch
+  - Ensure code, embeds and hot metadata resolve to local `/tmp`, not Ceph
+  - Permit the large checkpoint to remain on Ceph only after a bounded sequential-read and SHA256 check succeeds
 
 - [ ] **Step 2: Smoke**
   - `max_steps=1` then `max_steps=10`
-  - Accelerate config: DeepSpeed ZeRO-2, `offload_optimizer_device: cpu`, `num_processes: 2`, bf16
-  - Pass if peak mem < 23GiB/GPU and losses finite
-  - On OOM: one retry with smaller reduce/allgather buckets; second failure → STOP and escalate to ZeRO-3 review (do not keep retrying)
+  - Accelerate config: DeepSpeed ZeRO-2, no optimizer/parameter offload, `num_processes: 2`, bf16
+  - Keep nanfix optimizer groups capped at approximately 1B elements/group
+  - Pass if peak memory < 90% of physical H100 memory and losses/parameters are finite
+  - On OOM: one retry with smaller reduce/allgather buckets; second failure → STOP and escalate to ZeRO-3 review
 
 - [ ] **Step 3: Full FT**
-  - Resume **model weights only** from `step_004000.pt` (no optimizer state)
+  - Resume **model weights only** from the locked baseline checkpoint (no optimizer state)
   - Save `step_000250.pt`, `step_000500.pt`, `step_001000.pt`
   - Write `ft.status` with RUNNING/COMPLETED/FAILED
 
-- [ ] **Step 4: Commit scripts** `feat(aerial): add dual-4090 B0 FT sync and smoke runners`
+- [ ] **Step 4: Commit scripts** `feat(aerial): add dual-H100 B0 FT sync and smoke runners`
 
 ---
 
@@ -431,23 +475,23 @@ Trainer must log `data_source` counts every 50 steps; fail run if any complete 2
 - Create: `experiments/aerial/scripts/eval_ft_ckpts_seen20.sh`
 
 **Interfaces:**
-- Consumes baseline `step_004000.json` and FT result JSONs
+- Consumes `baseline_lock.manifest.json`, its baseline result JSON, and FT result JSONs
 - Produces `ft_selection_report.json` with mean/median NE, SR/SPL, per-episode deltas, improve/flat/regress counts, quantization gap stats if present
-- Exit code 0 only if best mean NE ≤ `108.75649833236835`
+- Exit code 0 only if best mean NE ≤ manifest `s1_ne`
 
 - [ ] **Step 1: Unit test** on fake metrics dicts
 
 ```python
 def test_s1_pass_and_fail():
-    report = summarize(baseline_ne=135.94562291546043, cand={"250": 120.0, "500": 100.0})
+    report = summarize(baseline_ne=150.0, cand={"250": 125.0, "500": 115.0})
     assert report["best_step"] == "500"
     assert report["s1_pass"] is True
 ```
 
 - [ ] **Step 2: Eval script**
-  - Run `run_closed_loop` for FT ckpts 250/500/1000 on held-out seen-20, seed 42, max_steps 100, task `aerial_joint_b0_novideo` (or FT task if identical action-only)
+  - Run `run_closed_loop` for FT ckpts 250/500/1000 on held-out seen-20, seed 42, max_steps 100, using the same model/data compatibility as the locked baseline
   - Record continuous vs primitive L2 gap counters during eval if policy exposes both
-  - Call `compare_finetune.py` against locked baseline
+  - Call `compare_finetune.py` against `baseline_lock.manifest.json`
 
 - [ ] **Step 3: If S1 fails**, write diagnosis scaffold listing failure bins; do **not** auto-expand data or start unseen
 
@@ -459,18 +503,18 @@ def test_s1_pass_and_fail():
 
 | Spec section | Task |
 |--------------|------|
-| §1 S1 NE lock / step_4000 | Task 7–8 |
-| §2 machine split | Global + Task 5/7 |
+| §1 rebuilt baseline / dynamic S1 lock | Task 0, Task 8 |
+| §2 3-host baseline + H100 eval/FT split | Global + Task 0/5/7 |
 | §3 leak-free collection files | Task 1, Task 5 ops note |
 | §4 path expert + oracle gates | Task 2, Task 5 |
 | §5 threshold freeze + takeover (no NE trigger) | Task 3, Task 5 |
 | §6 correction dataset + 20–30% hit rate | Task 4, Task 6 |
-| §7 4090 ZeRO-2 opt-offload + SHA sync + smoke | Task 7 |
+| §7 dual-H100 ZeRO-2 no-offload + nanfix + local cache smoke | Task 7 |
 | §8 compare + quantization gap | Task 8 |
-| §9 schedule / video wait | Task 5 script |
+| §9 baseline-first schedule | Task 0, Task 5 |
 | §10 no auto-expand on fail | Task 8 Step 3 |
 
-No TBD/placeholder steps remain. Weighted mix intentionally avoids `MultiLeRobotDataset` concat (would not enforce 75/25).
+No TBD/placeholder steps remain. The S1 numeric threshold is intentionally generated only after Task 0 locks a reproducible baseline; this is a gate, not an unspecified value. Weighted mix intentionally avoids `MultiLeRobotDataset` concat (would not enforce 75/25).
 
 ---
 
