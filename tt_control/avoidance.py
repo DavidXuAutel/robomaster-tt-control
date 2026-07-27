@@ -124,118 +124,118 @@ class OrbitParams:
     # 环绕方向：-1 逆时针 / +1 顺时针
     direction: int = 1
 
-    # 目标 nearness：中区近度保持在此值附近
-    # （2026-07-27: 0.55≈1m → 按 1/d 比例调到 0.69≈0.8m）
+    # 目标 nearness（场景相对量，非米制）：椅子列近度保持在此值附近
     target_nearness: float = 0.69
 
     # 距离控制死区：nearness 在此范围内不做前后调整
     distance_deadband: float = 0.05
 
     # 环绕横移杆量（只在椅子居中时才横移，椅子偏了先停住让yaw拉回中央）
-    # （2026-07-25: 降到10，视觉伺服优先——慢慢横移，偏了就停）
     orbit_roll: int = 10
 
     # 椅子居中偏航增益：chair_pos ∈ [-1,1] → yaw 杆量
-    # at pos=0.10 → yaw=20, at pos=0.25 → yaw=50(max)
-    # （2026-07-25: 重新设计，直接乘增益不再乘max_yaw，避免增益语义混淆）
     yaw_centering_gain: float = 200.0
 
     # 横移门槛：|chair_pos| < 此值才允许横移，否则停横移全力yaw居中
     centering_deadband: float = 0.12
 
-    # 距离控制增益：(target - mid) → pitch 杆量比例
-    # （2026-07-25: 1.2→2.5，距离修正更强，靠近目标更快）
+    # 距离控制增益：(target - chair_near) → pitch 杆量比例
     pitch_distance_gain: float = 2.5
 
     # 杆量限制
-    max_yaw: int = 50     # 椅子偏时全力拉回
-    max_pitch: int = 35   # 更多前进余地
-    min_yaw: int = 0      # 不做最小钳位，小误差不转
+    max_yaw: int = 50
+    max_pitch: int = 35
+    min_yaw: int = 0
     min_pitch: int = 5
 
-    # 接近检测：中区或侧区超过此值认为太近（危险）
-    # 环绕横移时侧向才是主碰撞面，故左右区同样刹停（2026-07-26）
+    # 接近检测：中区或侧区超过此值认为太近（危险；亦为相对量）
     danger_thresh: float = 0.78
 
-    # 失锁：中区低于此值认为椅子丢掉了
+    # 历史字段（当前以检测失败判 LOST；保留以免旧配置炸）
     lost_thresh: float = 0.10
+
+    # ── 目标获取 / 跟踪滞回（2026-07-27）──────────────────
+    # 获取：全图严格峰均比；跟踪：上一位置 ROI + 更松峰均比
+    acquire_peak_ratio: float = 2.0
+    track_peak_ratio: float = 1.35
+    min_peak: float = 0.12
+    acquire_frames: int = 2
+    track_roi_half: float = 0.35   # 归一化坐标半宽
+    max_pos_jump: float = 0.45
 
 
 @dataclass
 class OrbitDecision:
     axes: RcAxes
-    state: str  # ORBIT | LOST | DANGER
+    state: str  # ORBIT | LOST | DANGER | ACQUIRE
     zones: tuple[float, float, float]
     yaw_correction: int = 0
     pitch_correction: int = 0
     chair_pos: Optional[float] = None
     orbit_phase: str = ""
+    target_near: float = 0.0
+    reject_reason: str = ""
 
     def as_hud(self) -> str:
         l, m, r = self.zones
         pos_str = f"pos{self.chair_pos:+.2f}" if self.chair_pos is not None else "pos?"
+        rej = f" {self.reject_reason}" if self.reject_reason else ""
         return (
             f"{self.state} {pos_str} {self.orbit_phase} "
-            f"L{l:.2f} M{m:.2f} R{r:.2f} "
+            f"L{l:.2f} M{m:.2f} R{r:.2f} tn{self.target_near:.2f} "
             f"yaw{self.yaw_correction:+d} pit{self.pitch_correction:+d} "
-            f"rc{self.axes.as_tuple()}"
+            f"rc{self.axes.as_tuple()}{rej}"
         )
 
 
 class OrbitController:
-    """POI 环绕控制律：保持椅子在画面中央，以固定距离绕圈。
+    """POI 环绕控制律：保持目标在画面中央，以相对近度绕圈。
 
     控制策略：
-    1. 椅子偏左 → yaw 左（-），偏右 → yaw 右（+），把它拉回中央
-    2. 持续向环绕方向横移（roll），形成圆形轨迹
-    3. 太近（中区高）→ pitch 后退；太远（中区低）→ pitch 前进
+    1. 严格获取 → 锁定后 ROI 跟踪（避免宽目标被峰均比误杀）
+    2. 目标居中时慢速横移；偏了先 yaw 拉回
+    3. 用椅子列近度做前后距离保持（非米制）
     """
 
     def __init__(self, params: OrbitParams | None = None) -> None:
         self.p = params or OrbitParams()
+        self._tracked = False
+        self._last_pos: Optional[float] = None
+        self._acquire_count = 0
 
     def reset(self) -> None:
-        pass
+        self._tracked = False
+        self._last_pos = None
+        self._acquire_count = 0
 
     def decide(self, nearness: np.ndarray) -> OrbitDecision:
-        """每帧调用，返回环绕杆量。视觉伺服优先策略：
-
-        1. 椅子居中 (|pos| < deadband) → 慢速横移 + 微调yaw
-        2. 椅子偏了 → 停横移，全力yaw拉回中央
-        3. 椅子丢了 / 危险 → 停一切，悬停等待
-        """
+        """每帧调用，返回环绕杆量。"""
         left, mid, right = self._zone_nearness(nearness)
 
-        # ── 1) 椅子水平位置（重心法）───────────────────
-        chair_pos = self._chair_horizontal(nearness)  # [-1,1]，0=正中
+        chair_pos, reject_reason = self._lock_target(nearness)
 
-        # ── 2) yaw 居中（视觉伺服核心）─────────────────
-        # chair_pos > 0 = 椅子偏右 → yaw 正(右转)追上
         if chair_pos is not None:
             yaw_raw = chair_pos * self.p.yaw_centering_gain
             yaw = int(round(max(-self.p.max_yaw, min(self.p.max_yaw, yaw_raw))))
         else:
             yaw = 0
 
-        # ── 3) 环绕横移（只居中时才走）─────────────────
-        # 椅子偏出 deadband 就停横移，让 yaw 先把椅子拉回来
         if chair_pos is not None and abs(chair_pos) < self.p.centering_deadband:
             roll = self.p.direction * self.p.orbit_roll
             orbit_phase = "strafe"
         elif chair_pos is not None:
             roll = 0
-            orbit_phase = "center"  # 正在居中，暂停横移
+            orbit_phase = "center"
         else:
             roll = 0
-            orbit_phase = "search"  # 找不到椅子
+            orbit_phase = "search"
 
-        # ── 4) 距离保持（按椅子列近度，勿用中区——椅子偏了时 mid 是背景）──
         if chair_pos is None:
             pitch = 0
             target_near = mid
         else:
             target_near = self._nearness_at_pos(nearness, chair_pos)
-            dist_err = self.p.target_nearness - target_near  # 正=太远需前进
+            dist_err = self.p.target_nearness - target_near
             if abs(dist_err) <= self.p.distance_deadband:
                 pitch = 0
             else:
@@ -244,17 +244,14 @@ class OrbitController:
                 if abs(pitch) < self.p.min_pitch and abs(pitch_raw) >= 1:
                     pitch = self.p.min_pitch if pitch_raw > 0 else -self.p.min_pitch
 
-        # ── 5) 状态判定 ──────────────────────────────
-        # 中区或侧区过近都 DANGER（横移时侧向是主碰撞面）
         state = "ORBIT"
         if max(left, mid, right) > self.p.danger_thresh:
             state = "DANGER"
         elif chair_pos is None:
-            # 无可靠目标即 LOST（不要求 mid < lost_thresh，避免墙面 mid 中等时永不失锁）
-            state = "LOST"
+            # 获取中 ≠ 失锁：避免 acquire 帧启动 LOST episode 超时
+            state = "ACQUIRE" if reject_reason.startswith("acquiring") else "LOST"
 
-        # LOST / DANGER：强制零杆（宽限期内也不得前进）
-        if state in ("LOST", "DANGER"):
+        if state in ("LOST", "DANGER", "ACQUIRE"):
             pitch = roll = yaw = 0
 
         return OrbitDecision(
@@ -265,33 +262,85 @@ class OrbitController:
             pitch_correction=pitch,
             chair_pos=chair_pos,
             orbit_phase=orbit_phase,
+            target_near=float(target_near),
+            reject_reason=reject_reason,
         )
 
-    @staticmethod
-    def _chair_horizontal(nearness: np.ndarray) -> Optional[float]:
-        """重心法计算椅子在画面中的水平位置。
+    def _lock_target(self, nearness: np.ndarray) -> tuple[Optional[float], str]:
+        """获取/跟踪滞回：返回 (chair_pos, reject_reason)。"""
+        raw_pos, reason, peak, mean = self._detect_chair(nearness)
+        if raw_pos is None:
+            self._acquire_count = 0
+            return None, reason
 
-        返回归一化值 [-1, 1]：0=正中，-1=最左，1=最右。
-        返回 None 表示视野中找不到椅子。
-        """
+        if self._tracked:
+            self._acquire_count = 0
+            self._last_pos = raw_pos
+            return raw_pos, ""
+
+        self._acquire_count += 1
+        if self._acquire_count >= self.p.acquire_frames:
+            self._tracked = True
+            self._last_pos = raw_pos
+            return raw_pos, ""
+        return None, f"acquiring{self._acquire_count}/{self.p.acquire_frames}"
+
+    def _detect_chair(
+        self, nearness: np.ndarray
+    ) -> tuple[Optional[float], str, float, float]:
+        """检测水平目标重心。跟踪时限制在上一位置 ROI。"""
         h, w = nearness.shape
         y0 = int(h * 0.30)
         y1 = max(y0 + 1, int(h * 0.80))
-        band = nearness[y0:y1, :]
-        # 每列的中位近度
-        col_nearness = np.median(band, axis=0)
-        # 过滤背景噪声：近度低于 0.10 的列不参与
+        col_nearness = np.median(nearness[y0:y1, :], axis=0)
         weights = np.maximum(col_nearness - 0.10, 0.0)
+
+        if self._tracked and self._last_pos is not None:
+            c0, c1 = self._roi_cols(w, self._last_pos, self.p.track_roi_half)
+            roi_w = weights.copy()
+            if c0 > 0:
+                roi_w[:c0] = 0.0
+            if c1 < w:
+                roi_w[c1:] = 0.0
+            weights = roi_w
+            ratio_need = self.p.track_peak_ratio
+        else:
+            ratio_need = self.p.acquire_peak_ratio
+
         total = float(weights.sum())
         if total < 1e-6:
-            return None
-        # 拒绝均匀场（墙/地板当假椅子）：需有明显峰值列
+            return None, ("roi_empty" if self._tracked else "no_weight"), 0.0, 0.0
+
         peak = float(weights.max())
-        mean = total / float(weights.size)
-        if peak < 0.12 or peak < mean * 2.0:
-            return None
-        center = float(np.average(np.arange(w, dtype=np.float64), weights=weights))
-        return (center / max(1, w - 1)) * 2.0 - 1.0
+        # mean 用全宽（含零）更稳：跟踪 ROI 外已置零
+        mean_all = total / float(weights.size)
+        if peak < self.p.min_peak:
+            return None, "peak_low", peak, mean_all
+        if peak < mean_all * ratio_need:
+            return None, f"flat:{peak:.2f}/{mean_all:.2f}", peak, mean_all
+
+        center_idx = float(np.average(np.arange(w, dtype=np.float64), weights=weights))
+        pos = (center_idx / max(1, w - 1)) * 2.0 - 1.0
+
+        if self._tracked and self._last_pos is not None:
+            if abs(pos - self._last_pos) > self.p.max_pos_jump:
+                return None, "jump", peak, mean_all
+        return pos, "", peak, mean_all
+
+    @staticmethod
+    def _roi_cols(width: int, pos: float, half: float) -> tuple[int, int]:
+        center = (pos + 1.0) * 0.5 * (width - 1)
+        span = half * 0.5 * (width - 1)  # half in [-1,1] space → column span
+        c0 = max(0, int(np.floor(center - span)))
+        c1 = min(width, int(np.ceil(center + span)) + 1)
+        return c0, c1
+
+    @staticmethod
+    def _chair_horizontal(nearness: np.ndarray) -> Optional[float]:
+        """兼容旧测试：无状态严格全图获取（等同未跟踪时的检测）。"""
+        c = OrbitController()
+        pos, _, _, _ = c._detect_chair(nearness)
+        return pos
 
     @staticmethod
     def _nearness_at_pos(nearness: np.ndarray, chair_pos: float) -> float:

@@ -63,7 +63,8 @@ class FsmParams:
     # 环绕模式（POI Orbit）：开启后 APPROACH 检测到障碍 → 切入 ORBIT 而非 AVOID_TURN
     orbit_mode: bool = False
     orbit_enter_nearness: float = 0.30  # 中区超过此值 → 进入 ORBIT 阶段
-    orbit_lost_timeout_s: float = 5.0   # 椅子丢失超过 N 秒 → 悬停
+    orbit_lost_timeout_s: float = 5.0   # 失锁 episode 超过 N 秒 → 悬停（闪断不复位）
+    orbit_relock_frames: int = 5        # 失锁后需连续 N 帧有效锁定才清 episode
 
     # 全局安全
     min_battery_pct: int = 30
@@ -120,7 +121,8 @@ class AvoidanceFSM:
         self._danger_history: list[float] = []
         self._last_depth_ts: float = 0.0
         self._abort_reason: str = ""
-        self._orbit_lost_since: Optional[float] = None  # ORBIT 失锁计时；None=未失锁
+        self._orbit_lost_since: Optional[float] = None  # ORBIT 失锁 episode 起点；None=未失锁
+        self._orbit_relock_count: int = 0  # 失锁后连续有效帧计数
         self._orbit_active: bool = False   # 环绕滞回：一旦进入即保持，避免 mid 波动导致进出振荡
 
     # ── 属性 ──────────────────────────────────────────────────
@@ -170,6 +172,8 @@ class AvoidanceFSM:
             self._pass_clear_count = 0
             self._orbit_active = False
             self._orbit_lost_since = None
+            self._orbit_relock_count = 0
+            self._orbit.reset()
             return FsmDecision(
                 axes=RcAxes(),
                 state=self._state,
@@ -187,6 +191,8 @@ class AvoidanceFSM:
             self._abort_reason = ""
             self._orbit_active = False
             self._orbit_lost_since = None
+            self._orbit_relock_count = 0
+            self._orbit.reset()
 
         # 3) 检查 AUTO 全局超时
         if now - self._auto_engaged > self.p.max_auto_engaged_s:
@@ -337,39 +343,81 @@ class AvoidanceFSM:
         """环绕控制（独立方法，由 _step_approach 在 _orbit_active=True 时调用）。
 
         一旦进入环绕就持续运行，不因 mid 小波动退出。
-        退出条件：DANGER（太近）或 LOST 超时（椅子丢失过久）。
+        退出条件：DANGER（太近）或 LOST episode 超时（闪断不复位计时）。
         """
         orbit_dec = self._orbit.decide(nearness)
+        return self._finish_orbit_decision(orbit_dec, now, elapsed)
 
-        # DANGER → 悬停 + 解除 AUTO（须填 abort_reason，app 才 _disengage_auto）
+    def _finish_orbit_decision(
+        self, orbit_dec: OrbitDecision, now: float, elapsed: float
+    ) -> FsmDecision:
+        """共享：DANGER 立即 abort；LOST episode 超时；重获需连续锁定。"""
         if orbit_dec.state == "DANGER":
             self._orbit_active = False
             self._orbit_lost_since = None
+            self._orbit_relock_count = 0
             self._abort_reason = "orbit_danger"
             self._state = AvoidState.HOVER
             self._ctrl.reset()
+            self._orbit.reset()
             return FsmDecision(
                 axes=RcAxes(), state=self._state,
                 abort_reason=self._abort_reason,
                 sub_state="orbit_danger", state_elapsed_s=0.0,
             )
 
-        # LOST 超时 → 悬停 + 解除 AUTO
         if orbit_dec.state == "LOST":
             if self._orbit_lost_since is None:
                 self._orbit_lost_since = now
+            self._orbit_relock_count = 0
             if now - self._orbit_lost_since > self.p.orbit_lost_timeout_s:
                 self._orbit_active = False
                 self._orbit_lost_since = None
+                self._orbit_relock_count = 0
                 self._abort_reason = "orbit_lost"
                 self._state = AvoidState.HOVER
+                self._orbit.reset()
                 return FsmDecision(
                     axes=RcAxes(), state=self._state,
                     abort_reason=self._abort_reason,
                     sub_state="orbit_lost", state_elapsed_s=0.0,
                 )
-        else:
-            self._orbit_lost_since = None
+            return FsmDecision(
+                axes=RcAxes(), state=self._state,
+                sub_state=orbit_dec.as_hud(), state_elapsed_s=elapsed,
+            )
+
+        # 初始获取中：零杆，但不启动/不计 LOST episode
+        if orbit_dec.state == "ACQUIRE":
+            return FsmDecision(
+                axes=RcAxes(), state=self._state,
+                sub_state=orbit_dec.as_hud(), state_elapsed_s=elapsed,
+            )
+
+        # 有效锁定：若处在失锁 episode，需连续 N 帧才清计时；期间零杆
+        if self._orbit_lost_since is not None:
+            self._orbit_relock_count += 1
+            if self._orbit_relock_count >= self.p.orbit_relock_frames:
+                self._orbit_lost_since = None
+                self._orbit_relock_count = 0
+            else:
+                if now - self._orbit_lost_since > self.p.orbit_lost_timeout_s:
+                    self._orbit_active = False
+                    self._orbit_lost_since = None
+                    self._orbit_relock_count = 0
+                    self._abort_reason = "orbit_lost"
+                    self._state = AvoidState.HOVER
+                    self._orbit.reset()
+                    return FsmDecision(
+                        axes=RcAxes(), state=self._state,
+                        abort_reason=self._abort_reason,
+                        sub_state="orbit_lost", state_elapsed_s=0.0,
+                    )
+                return FsmDecision(
+                    axes=RcAxes(), state=self._state,
+                    sub_state=f"reacq {self._orbit_relock_count}/{self.p.orbit_relock_frames} | {orbit_dec.as_hud()}",
+                    state_elapsed_s=elapsed,
+                )
 
         return FsmDecision(
             axes=orbit_dec.axes, state=self._state,
@@ -578,50 +626,13 @@ class AvoidanceFSM:
     def _step_orbit(
         self, nearness: "np.ndarray", now: float, elapsed: float
     ) -> FsmDecision:
-        """POI 环绕：保持椅子在画面中央，以固定距离绕圈。"""
+        """POI 环绕（备用路径；真路径走 APPROACH+_run_orbit）。"""
         if nearness is None:
             return FsmDecision(
                 axes=RcAxes(), state=self._state, sub_state="wait_depth",
                 state_elapsed_s=elapsed,
             )
-
-        dec = self._orbit.decide(nearness)
-
-        # 太近 → 悬停 + 解除 AUTO（与 _run_orbit 对齐）
-        if dec.state == "DANGER":
-            self._orbit_active = False
-            self._orbit_lost_since = None
-            self._abort_reason = "orbit_danger"
-            self._state = AvoidState.HOVER
-            self._ctrl.reset()
-            return FsmDecision(
-                axes=RcAxes(), state=self._state,
-                abort_reason=self._abort_reason,
-                sub_state="orbit_danger", state_elapsed_s=0.0,
-            )
-
-        # 椅子丢失计时
-        if dec.state == "LOST":
-            if self._orbit_lost_since is None:
-                self._orbit_lost_since = now
-            if now - self._orbit_lost_since > self.p.orbit_lost_timeout_s:
-                self._orbit_active = False
-                self._orbit_lost_since = None
-                self._abort_reason = "orbit_lost"
-                self._state = AvoidState.HOVER
-                return FsmDecision(
-                    axes=RcAxes(), state=self._state,
-                    abort_reason=self._abort_reason,
-                    sub_state="orbit_lost", state_elapsed_s=0.0,
-                )
-        else:
-            self._orbit_lost_since = None
-
-        return FsmDecision(
-            axes=dec.axes, state=self._state,
-            sub_state=dec.as_hud(),
-            state_elapsed_s=elapsed,
-        )
+        return self._finish_orbit_decision(self._orbit.decide(nearness), now, elapsed)
 
     # ── 辅助 ──────────────────────────────────────────────────
 
@@ -661,6 +672,8 @@ class AvoidanceFSM:
         self._danger_history.clear()
         self._abort_reason = ""
         self._ctrl.reset()
+        self._orbit.reset()
         self._orbit_active = False
         self._orbit_lost_since = None
+        self._orbit_relock_count = 0
         self._last_depth_ts = 0.0

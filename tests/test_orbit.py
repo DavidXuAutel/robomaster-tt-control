@@ -20,6 +20,15 @@ def _tel(bat=80, h=80, yaw=0):
     return {"bat": str(bat), "h": str(h), "yaw": str(yaw)}
 
 
+def _decide_locked(ctrl: OrbitController, nearness, frames: int | None = None):
+    """跑满 acquire_frames，返回最后一帧决策。"""
+    n = frames if frames is not None else ctrl.p.acquire_frames
+    d = None
+    for _ in range(n):
+        d = ctrl.decide(nearness)
+    return d
+
+
 def test_lost_zeros_sticks():
     c = OrbitController()
     d = c.decide(_grid(0.05))
@@ -49,7 +58,7 @@ def test_search_no_blind_pitch():
 def test_danger_mid_zeros_sticks():
     c = OrbitController()
     n = _chair(0.85, x0=40, x1=90)
-    d = c.decide(n)
+    d = _decide_locked(c, n)
     assert d.state == "DANGER"
     assert d.axes.is_zero()
 
@@ -67,11 +76,34 @@ def test_danger_side_zeros_sticks():
 def test_orbit_strafe_when_centered():
     c = OrbitController()
     n = _chair(0.55, x0=50, x1=78)  # 偏中
-    d = c.decide(n)
+    d = _decide_locked(c, n)
     assert d.state == "ORBIT"
     assert d.orbit_phase in ("strafe", "center")
     if d.orbit_phase == "strafe":
         assert d.axes.roll == OrbitParams().orbit_roll
+
+
+def test_acquire_is_not_lost_episode():
+    """首帧获取中应为 ACQUIRE，不得记成 LOST。"""
+    c = OrbitController(OrbitParams(acquire_frames=3))
+    d = c.decide(_chair(0.55, x0=50, x1=78))
+    assert d.state == "ACQUIRE"
+    assert d.axes.is_zero()
+    assert d.reject_reason.startswith("acquiring")
+
+
+def test_broad_target_tracks_after_acquire():
+    """宽目标获取后用 ROI 跟踪，不应因峰均比下降误 LOST。"""
+    c = OrbitController(OrbitParams(acquire_frames=2, track_peak_ratio=1.35))
+    peaked = _chair(0.64, x0=50, x1=78)
+    d0 = _decide_locked(c, peaked)
+    assert d0.state == "ORBIT"
+    assert c._tracked
+    # 变宽：全图峰均比会 <2，但跟踪 ROI 应仍锁住
+    broad = _chair(0.64, x0=30, x1=100)
+    d1 = c.decide(broad)
+    assert d1.state == "ORBIT"
+    assert d1.chair_pos is not None
 
 
 def test_fsm_orbit_danger_aborts_auto():
@@ -88,10 +120,12 @@ def test_fsm_orbit_danger_aborts_auto():
         ),
     )
     t = 1000.0
-    r = fsm.step(_chair(0.55), _tel(), True, now=t)
+    # acquire_frames=2：多喂几帧完成锁定
+    for i in range(3):
+        fsm.step(_chair(0.55), _tel(), True, now=t + i * 0.05)
     assert fsm._orbit_active
     danger = _chair(0.85)
-    r2 = fsm.step(danger, _tel(), True, now=t + 0.1)
+    r2 = fsm.step(danger, _tel(), True, now=t + 0.2)
     assert r2.state == AvoidState.HOVER
     assert r2.abort_reason == "orbit_danger"
     assert r2.axes.is_zero()
@@ -112,16 +146,50 @@ def test_fsm_orbit_lost_grace_zero_then_abort():
         ),
     )
     t = 2000.0
-    fsm.step(_chair(0.55), _tel(), True, now=t)
+    for i in range(3):
+        fsm.step(_chair(0.55), _tel(), True, now=t + i * 0.05)
     assert fsm._orbit_active
     lost = _grid(0.04)
-    r1 = fsm.step(lost, _tel(), True, now=t + 0.1)
+    r1 = fsm.step(lost, _tel(), True, now=t + 0.2)
     assert "LOST" in r1.sub_state
     assert r1.axes.is_zero()
     assert r1.abort_reason == ""
-    r2 = fsm.step(lost, _tel(), True, now=t + 1.2)
+    r2 = fsm.step(lost, _tel(), True, now=t + 1.3)
     assert r2.state == AvoidState.HOVER
     assert r2.abort_reason == "orbit_lost"
+
+
+def test_fsm_lost_flicker_does_not_reset_timeout():
+    """偶发一帧检出不得清零 LOST episode；超时仍 abort。"""
+    ctrl = AvoidanceController(AvoidParams(clear_thresh=0.35, cruise_speed=30))
+    fsm = AvoidanceFSM(
+        controller=ctrl,
+        params=FsmParams(
+            orbit_mode=True,
+            orbit_enter_nearness=0.35,
+            orbit_lost_timeout_s=1.0,
+            orbit_relock_frames=5,
+            max_approach_s=60,
+            max_auto_engaged_s=120,
+            depth_stale_s=20,
+            min_battery_pct=5,
+        ),
+    )
+    t = 4000.0
+    for i in range(3):
+        fsm.step(_chair(0.55), _tel(), True, now=t + i * 0.05)
+    assert fsm._orbit_active
+    lost = _grid(0.04)
+    fsm.step(lost, _tel(), True, now=t + 0.2)
+    # 中间闪一帧有效 → 应进入 reacq，零杆，且不清除 episode
+    r_flash = fsm.step(_chair(0.55), _tel(), True, now=t + 0.4)
+    assert r_flash.abort_reason == ""
+    assert r_flash.axes.is_zero()
+    assert fsm._orbit_lost_since is not None
+    assert "reacq" in r_flash.sub_state or "LOST" in r_flash.sub_state
+    # 再失锁，总 episode >1s → abort
+    r_abort = fsm.step(lost, _tel(), True, now=t + 1.3)
+    assert r_abort.abort_reason == "orbit_lost"
 
 
 def test_fsm_reset_clears_orbit_latch():
@@ -138,12 +206,12 @@ def test_fsm_reset_clears_orbit_latch():
         ),
     )
     t = 3000.0
-    fsm.step(_chair(0.55), _tel(), True, now=t)
+    for i in range(3):
+        fsm.step(_chair(0.55), _tel(), True, now=t + i * 0.05)
     assert fsm._orbit_active
     fsm.reset()
     assert not fsm._orbit_active
     assert fsm._auto_engaged is None
-    # 再挂应从干净 APPROACH 起步，不立刻 orbit（需 mid 再触发）
     far = _grid(0.10)
     r = fsm.step(far, _tel(), True, now=t + 1.0)
     assert r.state == AvoidState.APPROACH
@@ -152,13 +220,11 @@ def test_fsm_reset_clears_orbit_latch():
 
 def test_offcenter_target_uses_chair_column_not_mid():
     """椅子偏一侧时，距离应用椅子列近度，不能因 mid=背景而猛冲。"""
-    c = OrbitController()
+    c = OrbitController(OrbitParams(target_nearness=0.55, acquire_frames=2))
     n = _grid(0.08)
-    # 椅子在最右侧，中区仍是背景
     n[:, 100:125] = 0.55
-    d = c.decide(n)
+    d = _decide_locked(c, n)
     assert d.chair_pos is not None and d.chair_pos > 0.3
-    # 目标近度≈0.55≈target，pitch 应接近 0（允许微调）
     assert abs(d.axes.pitch) <= 10
 
 
@@ -199,7 +265,7 @@ def test_fsm_approach_holds_at_orbit_danger_band():
         ),
     )
     n = _grid(0.10)
-    n[:, : n.shape[1] // 3] = 0.79  # 旧逻辑会 cruise，新逻辑必须 hold
+    n[:, : n.shape[1] // 3] = 0.79
     r = fsm.step(n, _tel(), True, now=50.0)
     assert r.axes.is_zero()
     assert "approach_hold" in r.sub_state
@@ -233,13 +299,14 @@ def test_fsm_now_zero_does_not_clear_orbit_latch():
         ),
     )
     t = 0.0
-    fsm.step(_chair(0.55), _tel(), True, now=t)
+    for i in range(3):
+        fsm.step(_chair(0.55), _tel(), True, now=t + i * 0.05)
     assert fsm._orbit_active
-    assert fsm._auto_engaged == 0.0  # 合法挂载时刻可以是 0
-    r = fsm.step(_grid(0.04), _tel(), True, now=t + 0.1)
+    assert fsm._auto_engaged == 0.0
+    r = fsm.step(_grid(0.04), _tel(), True, now=t + 0.2)
     assert fsm._orbit_active
     assert "LOST" in r.sub_state
     assert r.axes.is_zero()
     assert r.abort_reason == ""
-    r2 = fsm.step(_grid(0.04), _tel(), True, now=t + 1.2)
+    r2 = fsm.step(_grid(0.04), _tel(), True, now=t + 1.3)
     assert r2.abort_reason == "orbit_lost"
