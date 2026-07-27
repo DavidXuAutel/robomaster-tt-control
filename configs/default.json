@@ -1,0 +1,59 @@
+{
+  "//_meta": "自动飞行参数配置。直接编辑此文件修改默认值，也可用 --config 指定其他文件。CLI 参数 > 配置文件 > dataclass 默认值。",
+
+  "avoid": {
+    "//_comment": "避障控制律参数（AvoidanceController / AvoidParams）",
+    "cruise_speed": 30,
+    "strafe_speed": 40,
+    "yaw_speed": 15,
+    "turn_pitch": 10,
+    "approach_pitch": 25,
+    "stop_thresh": 0.70,
+    "estop_thresh": 0.82,
+    "clear_thresh": 0.35,
+    "side_margin": 0.08,
+    "band_top": 0.30,
+    "band_bottom": 0.80
+  },
+
+  "orbit": {
+    "//_comment": "POI 环绕参数（OrbitController / OrbitParams）",
+    "direction": 1,
+    "target_nearness": 0.55,
+    "distance_deadband": 0.05,
+    "orbit_roll": 10,
+    "yaw_centering_gain": 200.0,
+    "centering_deadband": 0.12,
+    "pitch_distance_gain": 2.5,
+    "max_yaw": 50,
+    "max_pitch": 35,
+    "min_yaw": 0,
+    "min_pitch": 5,
+    "danger_thresh": 0.78,
+    "lost_thresh": 0.10
+  },
+
+  "fsm": {
+    "//_comment": "避障状态机参数（AvoidanceFSM / FsmParams）",
+    "max_approach_s": 20.0,
+    "max_turn_s": 25.0,
+    "max_pass_s": 15.0,
+    "max_recover_s": 5.0,
+    "max_auto_engaged_s": 120.0,
+    "min_turn_s": 5.0,
+    "min_pass_s": 2.0,
+    "post_clear_s": 4.0,
+    "post_clear_pitch": 15,
+    "pass_clear_thresh": 0.35,
+    "pass_consecutive_frames": 4,
+    "heading_tolerance_deg": 15.0,
+    "heading_yaw_gain": 0.5,
+    "dead_end_frames": 10,
+    "orbit_mode": true,
+    "orbit_enter_nearness": 0.35,
+    "orbit_lost_timeout_s": 5.0,
+    "min_battery_pct": 10,
+    "max_height_cm": 500,
+    "depth_stale_s": 3.0
+  }
+}

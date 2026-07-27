@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from tt_control.auto_safety import AutoWatchdog
-from tt_control.avoidance import AvoidanceController, AvoidDecision, AvoidParams
+from tt_control.avoidance import AvoidanceController, AvoidDecision, AvoidParams, OrbitController, OrbitParams
 from tt_control.avoidance_fsm import AvoidanceFSM, AvoidState, FsmParams
 from tt_control.config import AppConfig, detect_local_ip
 from tt_control.control import HELP_TEXT, RcAxes, map_key
@@ -53,6 +53,9 @@ class App:
         self,
         config: AppConfig,
         inference: Optional[InferenceBackend] = None,
+        avoid_params: Optional[AvoidParams] = None,
+        orbit_params: Optional[OrbitParams] = None,
+        fsm_params: Optional[FsmParams] = None,
     ) -> None:
         self.config = config
         self.inference = inference or PassthroughBackend()
@@ -102,34 +105,16 @@ class App:
         self._auto_since: Optional[float] = None  # AUTO ON 起始墙钟（看门狗用）
         self._auto_dbg_ts: float = 0.0  # AUTO 决策诊断日志限流（每秒一次）
         self._watchdog = AutoWatchdog(
-            max_engaged_s=120.0,  # 完整绕障任务在低速+高RTT下需60-90s，30s会中途掐断（2026-07-24实测）
-            # 本地推理 RTT 通常 <1s；新鲜度已锚帧采集时刻，3s 足够覆盖抖动且不盲飞
+            max_engaged_s=120.0,
             depth_stale_s=3.0,
         )
-        self._controller = AvoidanceController(AvoidParams(
-            cruise_speed=30,            # 接近阶段更自信地前飞（2026-07-24：20 太保守）
-            approach_pitch=25,          # 绕行初始弧线角更大，前进分量更多
-            turn_pitch=10,              # 贴近障碍时保持的最小前进量
-            strafe_speed=40,
-            yaw_speed=15,
-            clear_thresh=0.35,       # 椅子等宽障碍物触发阈值（柱子太细，median 无法检测）
-            stop_thresh=0.65,
-        ))
-        self._fsm = AvoidanceFSM(controller=self._controller, params=FsmParams(
-            post_clear_s=4.0,
-            post_clear_pitch=15,
-            depth_stale_s=3.0,
-            max_approach_s=20.0,
-            max_turn_s=25.0,
-            max_pass_s=15.0,
-            min_turn_s=5.0,               # 横移至少 5 秒才允许切越障确认（2026-07-24 真机：3s 太短）
-            min_pass_s=2.0,               # 越障确认至少 2 秒再补横移
-            orbit_mode=True,               # 环绕模式：靠近后绕圈而非直飞绕过
-            orbit_enter_nearness=0.35,     # 提前切入环绕(≈2-3m)，给后退留缓冲空间
-            max_auto_engaged_s=120.0,
-            pass_consecutive_frames=4,    # 本地推理 ~8fps，4 帧≈0.5s 确认，兼顾快与稳
-            min_battery_pct=10,
-        ))
+        # 控制律 + 环绕 + 状态机（优先使用调用方传入的参数，回退 dataclass 默认值）
+        _ap = avoid_params or AvoidParams()
+        _op = orbit_params or OrbitParams()
+        _fp = fsm_params or FsmParams()
+        self._controller = AvoidanceController(_ap)
+        self._orbit = OrbitController(_op)
+        self._fsm = AvoidanceFSM(controller=self._controller, params=_fp, orbit_ctrl=self._orbit)
         self._fsm_state = AvoidState.PREFLIGHT
         # 深度后端持有同一 controller 用于叠图标注「此刻会输出的杆量」
         if hasattr(self.inference, "controller"):

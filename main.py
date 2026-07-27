@@ -25,6 +25,12 @@ faulthandler.enable(open(_crash_log, "a"))
 
 from tt_control.app import App
 from tt_control.config import AppConfig, detect_local_ip
+from tt_control.flight_config import (
+    build_avoid_params,
+    build_fsm_params,
+    build_orbit_params,
+    load_config,
+)
 from tt_control.inference import create_backend
 
 
@@ -88,10 +94,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=10.0,
         help="录制采样频率(默认 10Hz,限流避免全帧落盘)",
     )
-    p.add_argument("--cruise", type=int, default=25, help="避障:通畅前进杆量")
-    p.add_argument("--approach-pitch", type=int, default=16,
-                   help="避障:接近区前进量(调小=更原地转、少前冲,近人更安全)")
-    p.add_argument("--yaw", type=int, default=35, help="避障:转向杆量")
+    p.add_argument("--cruise", type=int, default=None,
+                   help="避障:通畅前进杆量（覆盖配置文件 avoid.cruise_speed）")
+    p.add_argument("--approach-pitch", type=int, default=None,
+                   help="避障:接近区前进量（覆盖配置文件 avoid.approach_pitch）")
+    p.add_argument("--yaw", type=int, default=None,
+                   help="避障:转向杆量（覆盖配置文件 avoid.yaw_speed）")
+    p.add_argument("--config", default="",
+                   help="飞行参数配置文件路径（默认 configs/default.json）")
+    p.add_argument("--orbit-target-nearness", type=float, default=None,
+                   help="环绕目标近度(0~1，越大越近，覆盖配置; 默认 0.55≈1m)")
+    p.add_argument("--orbit-direction", default=None,
+                   choices=("cw", "ccw"),
+                   help="环绕方向（cw=顺时针顺时针/ccw=逆时针，覆盖配置; 默认顺时针）")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -134,6 +149,25 @@ def main(argv: list[str] | None = None) -> int:
         sys.exit(1)
 
     signal.signal(signal.SIGTERM, _sigterm_handler)
+
+    # ── 飞行配置加载（CLI > 配置文件 > dataclass 默认值） ───
+    _flight_cfg = load_config(args.config or None)
+
+    # CLI 参数覆盖配置节
+    if args.cruise is not None:
+        _flight_cfg.setdefault("avoid", {})["cruise_speed"] = args.cruise
+    if args.approach_pitch is not None:
+        _flight_cfg.setdefault("avoid", {})["approach_pitch"] = args.approach_pitch
+    if args.yaw is not None:
+        _flight_cfg.setdefault("avoid", {})["yaw_speed"] = args.yaw
+    if args.orbit_target_nearness is not None:
+        _flight_cfg.setdefault("orbit", {})["target_nearness"] = args.orbit_target_nearness
+    if args.orbit_direction is not None:
+        _flight_cfg.setdefault("orbit", {})["direction"] = 1 if args.orbit_direction == "cw" else -1
+
+    _avoid_params = build_avoid_params(_flight_cfg)
+    _orbit_params = build_orbit_params(_flight_cfg)
+    _fsm_params = build_fsm_params(_flight_cfg)
 
     if args.start_depth_service:
         if args.depth_service:
@@ -309,16 +343,25 @@ def main(argv: list[str] | None = None) -> int:
         sim=args.sim,
         enable_record=args.record,
         record_hz=args.record_hz,
-        avoid_cruise=args.cruise,
-        avoid_approach_pitch=args.approach_pitch,
-        avoid_yaw=args.yaw,
     )
     # 手势后端通过 --inference gestures 选择；depth-anything 注入显式服务地址
     kw = {}
     if args.inference in ("depth-anything", "da-v2", "depth"):
         kw["service_url"] = args.depth_service
     backend = create_backend(args.inference, **kw)
-    return App(cfg, inference=backend).run()
+    log.info(
+        "飞行参数: 避障(cruise=%d approach=%d yaw=%d) "
+        "环绕(target_nearness=%.2f dir=%s) "
+        "fsm(orbit_mode=%s depth_stale=%.1f)",
+        _avoid_params.cruise_speed, _avoid_params.approach_pitch, _avoid_params.yaw_speed,
+        _orbit_params.target_nearness,
+        "cw" if _orbit_params.direction > 0 else "ccw",
+        _fsm_params.orbit_mode, _fsm_params.depth_stale_s,
+    )
+    return App(cfg, inference=backend,
+               avoid_params=_avoid_params,
+               orbit_params=_orbit_params,
+               fsm_params=_fsm_params).run()
 
 
 if __name__ == "__main__":
