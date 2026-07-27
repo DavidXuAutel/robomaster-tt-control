@@ -26,17 +26,16 @@
 ### 启动步骤
 
 ```bash
-# 1. 启动本地深度推理服务（M5 MPS，端口 8890）
-server/.venv/bin/python server/da_v2_service.py --host 0.0.0.0 --port 8890 --grid 96x128 &
-
-# 2. 启动控制界面（指向本地推理服务）
+# 推荐：受管启动深度子进程（默认 127.0.0.1:8899），退出 UI 时自动停止
 .venv/bin/python main.py \
   --tello-ip 192.168.0.100 \
   --local-ip 192.168.0.103 \
   --inference depth-anything \
-  --depth-service http://127.0.0.1:8890/depth \
+  --start-depth-service \
   -v
 ```
+
+⚠️ Agent 本地真机测试禁止先手搓 `da_v2_service.py &` 再传 `--depth-service`：外挂进程不会随 main 退出。
 
 ### 飞行操作
 

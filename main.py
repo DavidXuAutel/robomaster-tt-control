@@ -51,12 +51,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--depth-service",
         default="",
-        help="depth-anything 推理服务 URL（必填，或改用 --start-depth-service；禁止静默回落公网）",
+        help="外挂 depth 服务 URL（可选；本地真机测试请优先 --start-depth-service，禁止静默回落公网）",
     )
     p.add_argument(
         "--start-depth-service",
         action="store_true",
-        help="自动启动本地深度推理服务(默认 127.0.0.1:8899; 退出时自动停止)",
+        help="自动启动本地深度推理服务(默认 127.0.0.1:8899; 退出时 atexit/SIGTERM 自动停止)",
     )
     p.add_argument(
         "--mujoco",
@@ -169,6 +169,21 @@ def main(argv: list[str] | None = None) -> int:
     _avoid_params = build_avoid_params(_flight_cfg)
     _orbit_params = build_orbit_params(_flight_cfg)
     _fsm_params = build_fsm_params(_flight_cfg)
+
+    # 本地深度默认走受管子进程：退出时 atexit 可清理。外挂服务需显式 --depth-service。
+    _DEPTH_INFER = ("depth-anything", "da-v2", "depth")
+    if args.inference in _DEPTH_INFER and not args.depth_service and not args.start_depth_service:
+        args.start_depth_service = True
+        logging.info(
+            "未指定 --depth-service：自动启用 --start-depth-service "
+            "（子进程随 main 退出清理；外挂服务请显式传 --depth-service）"
+        )
+    elif args.depth_service and not args.start_depth_service:
+        logging.warning(
+            "使用外挂 --depth-service=%s：main 退出不会停止该服务，"
+            "测试结束请自行确认端口已释放；本地真机请改用 --start-depth-service",
+            args.depth_service,
+        )
 
     if args.start_depth_service:
         if args.depth_service:

@@ -121,10 +121,10 @@ VideoStream (H.264 解码, 30fps)
 
 **启动命令**：
 ```bash
-# 本地
-server/.venv/bin/python server/da_v2_service.py --host 0.0.0.0 --port 8890 --grid 96x128 &
+# 本地真机（推荐）：受管子进程，退出 main 自动停（默认 :8899）
+.venv/bin/python main.py --inference depth-anything --start-depth-service -v
 
-# 指定远程服务
+# 指定远程/外挂服务（main 不会代为清理）
 .venv/bin/python main.py --inference depth-anything --depth-service http://10.229.20.125:8899/depth -v
 ```
 

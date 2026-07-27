@@ -31,25 +31,29 @@ RoboMaster TT 视觉避障项目的 Agent 入口文档。每次新 Agent 进入�
 
 目标：为 WAM 世界模型训练积累多样化飞行数据。
 
+## Agent 真机测试铁律（必须遵守）
+
+1. **深度服务必须受管启动**：用 `--start-depth-service`（或省略 `--depth-service`，main 会自动启用）。退出 UI / `X` / Ctrl-C 后由 atexit 停子进程。
+2. **禁止** 自行 `da_v2_service.py &` 再 `--depth-service http://127.0.0.1:8890/...` 做本地真机测试——外挂进程不会随 main 退出，易 residual 占 GPU/内存。
+3. 仅当主人明确要求连远端/已有常驻服务时，才许用 `--depth-service URL`；结束测试后必须确认对应端口已释放。
+4. 测试结束自检：`lsof -nP -iTCP:8899,8890 -sTCP:LISTEN` 应无本项目深度服务。
+
 ## 快速启动
 
 ```bash
 # 1. 找飞机
 python3 station_mode.py find
 
-# 2. 启动本地深度推理（后台）
-server/.venv/bin/python server/da_v2_service.py --host 0.0.0.0 --port 8890 --grid 96x128 &
-
-# 3. 启动控制界面
+# 2. 启动控制界面（自动拉起本地深度子进程，退出时自动停）
 .venv/bin/python main.py \
   --tello-ip 192.168.0.100 \
   --local-ip 192.168.0.103 \
   --inference depth-anything \
-  --depth-service http://127.0.0.1:8890/depth \
+  --start-depth-service \
   -v
 
 # 可选：录制飞行数据
-.venv/bin/python main.py ... --record --record-hz 10
+.venv/bin/python main.py ... --start-depth-service --record --record-hz 10
 ```
 
 ## 飞行操作
