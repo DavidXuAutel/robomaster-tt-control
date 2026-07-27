@@ -155,8 +155,8 @@ class OrbitParams:
     lost_thresh: float = 0.10
 
     # ── 目标获取 / 跟踪滞回（2026-07-27）──────────────────
-    # 获取：全图严格峰均比；跟踪：上一位置 ROI + 更松峰均比
-    acquire_peak_ratio: float = 2.0
+    # 获取：全图峰均比（真机椅背场景约 1.9，故 1.6）；跟踪：ROI + 更松
+    acquire_peak_ratio: float = 1.6
     track_peak_ratio: float = 1.35
     min_peak: float = 0.12
     acquire_frames: int = 2

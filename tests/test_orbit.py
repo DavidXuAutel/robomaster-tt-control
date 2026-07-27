@@ -106,6 +106,56 @@ def test_broad_target_tracks_after_acquire():
     assert d1.chair_pos is not None
 
 
+def test_pre_orbit_no_latch_keeps_approach():
+    """mid 过进入阈值但目标未锁定时，不得 latch，应继续靠近。"""
+    ctrl = AvoidanceController(AvoidParams(clear_thresh=0.35, approach_pitch=25, cruise_speed=30))
+    fsm = AvoidanceFSM(
+        controller=ctrl,
+        params=FsmParams(
+            orbit_mode=True,
+            orbit_enter_nearness=0.35,
+            orbit_lost_timeout_s=1.0,
+            max_approach_s=60,
+            max_auto_engaged_s=120,
+            depth_stale_s=20,
+            min_battery_pct=5,
+        ),
+    )
+    # 均匀近场：M 高但峰均比不够 → 拒识
+    flat = _grid(0.40)
+    r = fsm.step(flat, _tel(), True, now=5000.0)
+    assert not fsm._orbit_active
+    assert r.abort_reason == ""
+    assert r.axes.pitch == 25
+    assert "pre_orbit" in r.sub_state
+    # 再喂几帧仍不应 orbit_lost
+    r2 = fsm.step(flat, _tel(), True, now=5001.5)
+    assert not fsm._orbit_active
+    assert r2.abort_reason == ""
+    assert r2.axes.pitch == 25
+
+
+def test_pre_orbit_latches_after_lock():
+    """锁定成功后才 latch，随后可环绕。"""
+    ctrl = AvoidanceController(AvoidParams(clear_thresh=0.35, cruise_speed=30))
+    fsm = AvoidanceFSM(
+        controller=ctrl,
+        params=FsmParams(
+            orbit_mode=True,
+            orbit_enter_nearness=0.35,
+            max_approach_s=60,
+            max_auto_engaged_s=120,
+            depth_stale_s=20,
+            min_battery_pct=5,
+        ),
+    )
+    t = 5100.0
+    for i in range(3):
+        r = fsm.step(_chair(0.55, x0=50, x1=78), _tel(), True, now=t + i * 0.05)
+    assert fsm._orbit_active
+    assert "ORBIT" in r.sub_state or r.axes.roll != 0 or r.axes.yaw != 0 or r.axes.pitch != 0
+
+
 def test_fsm_orbit_danger_aborts_auto():
     ctrl = AvoidanceController(AvoidParams(clear_thresh=0.35, cruise_speed=30))
     fsm = AvoidanceFSM(

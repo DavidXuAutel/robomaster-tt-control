@@ -31,7 +31,7 @@
     "min_pitch": 5,
     "danger_thresh": 0.78,
     "lost_thresh": 0.10,
-    "acquire_peak_ratio": 2.0,
+    "acquire_peak_ratio": 1.6,
     "track_peak_ratio": 1.35,
     "min_peak": 0.12,
     "acquire_frames": 2,

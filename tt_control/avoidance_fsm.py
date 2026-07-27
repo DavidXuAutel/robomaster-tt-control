@@ -312,8 +312,27 @@ class AvoidanceFSM:
         # 检测到障碍 → 绕行 or 环绕
         if self.p.orbit_mode:
             if mid > self.p.orbit_enter_nearness:
-                self._orbit_active = True
-                return self._run_orbit(nearness, now, elapsed)
+                # 未锁定前不 latch：继续靠近，避免 flat 拒识后零杆→orbit_lost
+                orbit_dec = self._orbit.decide(nearness)
+                if orbit_dec.state == "ORBIT":
+                    self._orbit_active = True
+                    return self._finish_orbit_decision(orbit_dec, now, elapsed)
+                if orbit_dec.state == "DANGER":
+                    return self._finish_orbit_decision(orbit_dec, now, elapsed)
+                if max(zones) > self._orbit.p.danger_thresh:
+                    return FsmDecision(
+                        axes=RcAxes(),
+                        state=self._state,
+                        sub_state=f"approach_hold danger={max(zones):.2f}",
+                        state_elapsed_s=elapsed,
+                    )
+                rej = orbit_dec.reject_reason or orbit_dec.state
+                return FsmDecision(
+                    axes=RcAxes(pitch=self._ctrl.p.approach_pitch),
+                    state=self._state,
+                    sub_state=f"pre_orbit {rej} M{mid:.2f}",
+                    state_elapsed_s=elapsed,
+                )
             # 还不够近 → 继续直飞靠近；侧障按 orbit danger 门限刹停
             # （勿用 estop 0.82，否则与 orbit 0.78 之间存在侧刮带）
             if dec.state == "BLOCKED" or max(zones) > self._orbit.p.danger_thresh:
