@@ -125,8 +125,8 @@ class OrbitParams:
     direction: int = 1
 
     # 目标 nearness：中区近度保持在此值附近
-    # （2026-07-25: 0.45→0.55，离椅子更近≈1m）
-    target_nearness: float = 0.55
+    # （2026-07-27: 0.55≈1m → 按 1/d 比例调到 0.69≈0.8m）
+    target_nearness: float = 0.69
 
     # 距离控制死区：nearness 在此范围内不做前后调整
     distance_deadband: float = 0.05

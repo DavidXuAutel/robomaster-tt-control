@@ -19,7 +19,7 @@
   "orbit": {
     "//_comment": "POI 环绕参数（OrbitController / OrbitParams）",
     "direction": 1,
-    "target_nearness": 0.55,
+    "target_nearness": 0.69,
     "distance_deadband": 0.05,
     "orbit_roll": 10,
     "yaw_centering_gain": 200.0,

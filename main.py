@@ -103,7 +103,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--config", default="",
                    help="飞行参数配置文件路径（默认 configs/default.json）")
     p.add_argument("--orbit-target-nearness", type=float, default=None,
-                   help="环绕目标近度(0~1，越大越近，覆盖配置; 默认 0.55≈1m)")
+                   help="环绕目标近度(0~1，越大越近，覆盖配置; 默认 0.69≈0.8m)")
     p.add_argument("--orbit-direction", default=None,
                    choices=("cw", "ccw"),
                    help="环绕方向（cw=顺时针顺时针/ccw=逆时针，覆盖配置; 默认顺时针）")
@@ -117,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    log = logging.getLogger()
     if args.gesture_dry_run and args.gesture_flight_test:
         logging.error("--gesture-dry-run 与 --gesture-flight-test 不能同时使用")
         return 2
