@@ -1,0 +1,23 @@
+{
+  "//_meta": "铁丝笼场地 · 随机漫游首飞档。用法: main.py --config configs/wander-cage.json ... 未列字段回退 default.json / dataclass 默认值。",
+
+  "fsm": {
+    "//_comment": "与 orbit 互斥；笼内高度硬顶按笼高设（默认 200，笼低于 2.5m 请下调）",
+    "orbit_mode": false,
+    "wander_mode": true,
+    "max_auto_engaged_s": 86400.0,
+    "min_battery_pct": 15,
+    "max_height_cm": 200,
+    "depth_stale_s": 3.0
+  },
+
+  "wander": {
+    "//_comment": "巡航带 60~130cm（主人 2026-07-28 裁定）：0.5~0.8m 椅子须落在深度带 [0.30,0.80] 内才可检出，实飞高度应压在 70~90cm。偏离规格 §2.3（80~200），见 docs/dev-notes/2026-07-28-wander-cage-flight-plan.md",
+    "seed": 0,
+    "cruise_pitch_min": 10,
+    "cruise_pitch_max": 14,
+    "h_min_cm": 60.0,
+    "h_max_cm": 130.0,
+    "alt_throttle": 15
+  }
+}
