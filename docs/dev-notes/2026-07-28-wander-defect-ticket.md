@@ -33,7 +33,7 @@
 | P0-2 | dead-reckon 被 DANGER 暂停污染 | **ADOPT** | PROBE5 确认；未转到位进 VERIFY |
 | P0-3 | 冻深度仍满 pitch + taper | **REJECT** | 深度新鲜度属全局层；taper 双轨超时；见 §8 |
 | P1-4 | 高度双向归零无法回带 | **ADOPT** | PROBE1；规格 §2.3 闭环 |
-| P1-5 | h 缺失按控制帧计数 | **ADOPT（口径）/ DEFER（可恢复）** | 改 `h_missing_s`；闩锁维持永久（D-1） |
+| P1-5 | h 缺失按控制帧计数 | **ADOPT（口径+可恢复）** | `h_missing_s` 计时；主人 D-1=B 后连续读满可解除 |
 | P1-6 | PANO `abs(step)` 吃噪声 | **ADOPT（修订）** | 有符号行程；死区走参数非裸字面量 |
 | P1-7 | corner abort 实际不可达 | **ADOPT** | PROBE4；deadline 从 PANO 完成起算 |
 | P2-8 | 到位不校验转向方向 | **ADOPT** | 注释撒谎；应做符号校验 |
@@ -189,13 +189,12 @@ PROBE5  state=WANDER_VERIFY est=210 vs target 120
   `h >= max and throttle > 0 → 0`；`h <= min and throttle < 0 → 0`
 - **测试**：改造 `test_height_band_and_missing_h_zeros_throttle`（含跌破下界允许爬升）
 
-### P1-5　h 缺失计数口径 — ADOPT 口径 / DEFER 可恢复
+### P1-5　h 缺失计数口径 — ADOPT（口径 + 可恢复）
 
 - **现状**：`h_missing_frames=5` 在 ~24Hz `_pack` 上计数 ≈0.21s 即闩（PROBE2）
-- **Codex 订正**：并非「永远不可恢复」——`reset()` / 新 AUTO 会清闩；「永远」指**本段 AUTO 会话内**
-- **本批改法**：新增 `h_missing_s`（默认 1.0），按 `now - _h_last_ok_t` 计时；  
-  `h_missing_frames` 保留但不再参与逻辑（兼容旧配置）
-- **D-1**：闩锁可恢复 = 改规格 → **本批不改**，维持会话内永久 0
+- **改法**：`h_missing_s`（默认 1.0）按时间计缺失；`h_missing_frames` 保留但不参与逻辑
+- **D-1（主人 2026-07-28 = B）**：连续读到 `h` 满 `h_missing_s` → 解除闩锁，高度控制恢复  
+  （偏离规格 §2.3「永远 0」字面，待 Claude 改设计文档）
 
 ### P1-6　PANO 行程吃噪声 — ADOPT（修订）
 
@@ -236,9 +235,9 @@ PROBE5  state=WANDER_VERIFY est=210 vs target 120
 
 | ID | 议题 | 本批默认 |
 |---|---|---|
-| D-1 | 高度闩锁是否可恢复 | **否**（维持规格字面）；仅改计时口径 |
+| D-1 | 高度闩锁是否可恢复 | **主人 2026-07-28 选 B：可恢复**（连续读到 h 满 `h_missing_s` 解除）。偏离规格 §2.3「永远 0」字面，待 Claude 改设计文档 |
 | D-2 | 高度子段 `mid < clear_thresh` 是否放宽 | 先修 P1-4/5 再采数看直方图 |
-| D-3 | P0-3 / FSM 冻深度守卫 | 不在 Wander 加 taper；全局问题另开工单 |
+| D-3 | P0-3 / FSM 冻深度守卫 | **主人 2026-07-28 选 A：维持全局 depth_stale**；不在 Wander 加 taper |
 | D-4 | `turns_total` 是否含进 PANO 的那次遇障 | DEFER P2-12 |
 
 ## 7. DoD
@@ -254,7 +253,7 @@ PROBE5  state=WANDER_VERIFY est=210 vs target 120
 |---|---|---|
 | C-1 | Opus P0-3 taper vs 规格全局深度过期 | **REJECT taper**；FSM `nearness is not None` 刷新墙钟是全局缺陷，另案 |
 | C-2 | P2-11 要改 app.py vs 工单禁止改 app | **wander-only**：首次 `decide(now)` 定 seed |
-| C-3 | Opus「闩锁永久」 vs reset 可清 | 订正为「AUTO 会话内永久」；D-1 不改规格 |
+| C-3 | Opus「闩锁永久」 vs reset 可清 | 订正为「AUTO 会话内」；**后被主人改为可恢复（D-1=B）** |
 | C-4 | P2-9 abort 绕 _pack | REJECT（无害） |
 | C-5 | P2-13 SEG 首帧 | REJECT（非生产路径） |
 

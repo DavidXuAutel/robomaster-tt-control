@@ -67,7 +67,7 @@ class WanderParams:
     pano_min_s: float = 2.0
     pano_timeout_s: float = 20.0
     pano_step_deadband_deg: float = 0.5
-    h_missing_s: float = 1.0
+    h_missing_s: float = 1.0  # 连续读不到 h 超过此时长 → 闩锁；连续读到满此时长 → 解除（主人 2026-07-28 裁定可恢复）
     h_missing_frames: int = 5  # deprecated: 不再参与逻辑，保留兼容旧配置
 
 
@@ -174,6 +174,7 @@ class WanderPolicy:
 
         # 高度
         self._h_missing_since: Optional[float] = None
+        self._h_recover_since: Optional[float] = None
         self._h_latch_zero = False
         self._tel: dict[str, str] = {}
 
@@ -244,6 +245,7 @@ class WanderPolicy:
         self._resume_after_danger = WANDER_CRUISE
         self._obstacle_turn_times.clear()
         self._h_missing_since = None
+        self._h_recover_since = None
         self._h_latch_zero = False
         self._tel = {}
 
@@ -747,10 +749,23 @@ class WanderPolicy:
     def _apply_h_clamp(
         self, throttle: int, telemetry: dict[str, str], now: float
     ) -> int:
-        if self._h_latch_zero:
-            return 0
         h = self._read_h(telemetry)
+
+        # 闩锁中：连续读到 h 满 h_missing_s → 解除（主人裁定可恢复）
+        if self._h_latch_zero:
+            if h is None:
+                self._h_recover_since = None
+                return 0
+            if self._h_recover_since is None:
+                self._h_recover_since = now
+            if now - self._h_recover_since < self.p.h_missing_s:
+                return 0
+            self._h_latch_zero = False
+            self._h_recover_since = None
+            self._h_missing_since = None
+
         if h is None:
+            self._h_recover_since = None
             if self._h_missing_since is None:
                 self._h_missing_since = now
             elif now - self._h_missing_since >= self.p.h_missing_s:

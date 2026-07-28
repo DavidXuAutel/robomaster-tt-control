@@ -509,8 +509,16 @@ def test_height_band_corrective_and_missing():
         t += 1.0 / 24.0
         pol2.decide(_grid(0.15), {"bat": "80", "yaw": "0"}, now=t, depth_ts=1.0)
     assert pol2._h_latch_zero is True
-    d = pol2.decide(_grid(0.15), _tel(h=120), now=t + 1.0, depth_ts=t + 1.0)
-    assert d.axes.throttle == 0  # 会话内永久
+    # 刚恢复瞬间仍闩（需连续读满 h_missing_s）
+    d = pol2.decide(_grid(0.15), _tel(h=120), now=t + 0.1, depth_ts=t + 0.1)
+    assert d.axes.throttle == 0
+    # 连续正常满 1s → 解除闩锁，高度控制恢复
+    t_rec = t + 0.1
+    for _ in range(30):
+        t_rec += 1.0 / 24.0
+        d = pol2.decide(_grid(0.15), _tel(h=120), now=t_rec, depth_ts=t_rec)
+    assert pol2._h_latch_zero is False
+    assert d.axes.throttle == 25
 
 
 def test_seed_reproducible_decision_stream():
