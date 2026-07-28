@@ -8,19 +8,24 @@
     "max_auto_engaged_s": 86400.0,
     "min_battery_pct": 15,
     "max_height_cm": 200,
-    "depth_stale_s": 3.0
+    "//_stale_comment": "3.0 太久：2026-07-28 撞铁丝网后视频流中断，飞机仍执行了 3s 转向指令才被看门狗断开",
+    "depth_stale_s": 1.5
   },
 
   "wander": {
     "//_comment": "巡航带 60~130cm（主人 2026-07-28 裁定）：0.5~0.8m 椅子须落在深度带 [0.30,0.80] 内才可检出，实飞高度应压在 70~90cm。偏离规格 §2.3（80~200），见 docs/dev-notes/2026-07-28-wander-cage-flight-plan.md",
     "seed": 0,
-    "cruise_pitch_min": 10,
-    "cruise_pitch_max": 14,
+
+    "//_pitch_comment": "10~14 约 1m/s，笼半宽仅 2.25m，人工接管只有 ~2s 反应窗口（2026-07-28 撞铁丝网）。铁丝网对单目深度是反向信号（越近 mid 越低），只能靠降速给人留时间",
+    "cruise_pitch_min": 5,
+    "cruise_pitch_max": 8,
+
     "h_min_cm": 60.0,
     "h_max_cm": 130.0,
     "alt_throttle": 15,
 
-    "//_turn_comment": "首飞实测 mid 双峰：正对障碍 ~0.44-0.46 / 转开后 ~0.25-0.33，默认 0.58 全程未触发。下调到 0.45（主人 2026-07-28 裁定）。clear_thresh 仍取 0.40，迟滞只剩 0.05，若日志出现反复 retry_turn 需下调到 0.35",
-    "turn_thresh": 0.45
+    "//_turn_comment": "二飞实测：撞前连续三帧 M0.41/0.43/0.45，0.45 门槛差一点没触发 → 降到 0.40。clear_thresh 同步降到 0.30 保住 0.10 迟滞",
+    "turn_thresh": 0.40,
+    "clear_thresh": 0.30
   }
 }

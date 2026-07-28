@@ -425,8 +425,21 @@ class WanderPolicy:
         mid: float,
         depth_ts: Optional[float],
     ) -> WanderDecision:
-        # 超时 → 同向追加转角
+        # 超时：前方已不构成障碍则降级放行，否则同向追加转角。
+        # clear_thresh..turn_thresh 之间是灰区——不够 clear 放行不了，又没近到
+        # CRUISE 要转向的程度。原实现超时无条件 retry，灰区里必然死循环
+        # （2026-07-28 铁丝笼二飞 8 次 retry，mid 稳在 0.41~0.56）。灰区是迟滞
+        # 的必然产物，收窄迟滞只会换成墙前抽搐，故只能给超时开出口。
+        # 偏离规格 §5 状态图与 §9.1 验收项 6，主人 2026-07-28 裁定，
+        # 见 docs/dev-notes/2026-07-28-wander-verify-graylock.md
         if now - self._state_entered >= self.p.verify_timeout_s:
+            if mid < self.p.turn_thresh:
+                self._enter(WANDER_CRUISE, now)
+                self._begin_cruise_segment(now, event=True)
+                return self._pack(
+                    RcAxes(), zones, now, event=self._pop_event(),
+                    sub="verify_timeout_pass",
+                )
             return self._start_retry_turn(zones, now)
 
         # 只认 turn_end_ts 之后的新深度帧

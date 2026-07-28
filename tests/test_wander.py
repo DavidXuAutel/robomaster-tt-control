@@ -203,10 +203,59 @@ def test_verify_timeout_retries_same_direction():
     assert d.state == WANDER_VERIFY
     t += 1.1
     dts += 1.1
-    d = pol.decide(_wall(0.55), _tel(yaw=40), now=t, depth_ts=dts)
+    # mid 须 > turn_thresh 才走 retry；灰区（clear..turn）走降级放行，
+    # 由 test_verify_timeout_gray_zone_passes_to_cruise 覆盖
+    d = pol.decide(_wall(0.70), _tel(yaw=40), now=t, depth_ts=dts)
     assert d.state == WANDER_TURN
     assert np.sign(d.axes.yaw) == np.sign(turn_dir_yaw)
     assert "retry" in d.event
+
+
+def test_verify_timeout_gray_zone_passes_to_cruise():
+    """回归：clear_thresh..turn_thresh 灰区里超时降级放行，不再无限 retry。
+
+    2026-07-28 铁丝笼二飞：VERIFY 期 mid 稳在 0.41~0.56，clear_thresh=0.40
+    永不满足，超时无条件 retry → 原地打转 8 次。灰区是迟滞的必然产物
+    （收窄迟滞只会换成墙前抽搐），故只能给超时开出口。
+    见 docs/dev-notes/2026-07-28-wander-verify-graylock.md
+    """
+    pol = _policy(
+        turn_confirm_frames=1,
+        turn_min_deg=30,
+        turn_max_deg=30,
+        turn_thresh=0.58,
+        clear_thresh=0.40,
+        verify_timeout_s=1.0,
+        verify_frames=10,
+        segment_s_min=50,
+        segment_s_max=50,
+    )
+    t, dts = 1.0, 1.0
+    pol.decide(_grid(0.2), _tel(yaw=0), now=t, depth_ts=dts)
+    t += 0.2
+    dts += 0.2
+    d = pol.decide(_wall(0.70, left=0.1, right=0.6), _tel(yaw=0), now=t, depth_ts=dts)
+    assert d.state == WANDER_TURN
+    for yaw in (-15, -30, -40):
+        t += 0.2
+        dts += 0.2
+        d = pol.decide(_wall(0.70, left=0.1, right=0.6), _tel(yaw=yaw), now=t, depth_ts=dts)
+    assert d.state == WANDER_VERIFY
+
+    # 灰区 mid=0.50：放行不了（>0.40）也够不上转向门槛（<0.58）
+    t += 1.1
+    dts += 1.1
+    d = pol.decide(_wall(0.50), _tel(yaw=40), now=t, depth_ts=dts)
+    assert d.state == WANDER_CRUISE
+    assert "retry" not in d.event
+    assert d.axes.roll == 0
+
+    # 放行后确实恢复前飞，而非零杆卡住
+    t += 0.2
+    dts += 0.2
+    d = pol.decide(_wall(0.50), _tel(yaw=40), now=t, depth_ts=dts)
+    assert d.state == WANDER_CRUISE
+    assert d.axes.pitch > 0
 
 
 def test_danger_hold_retreat_abort():
