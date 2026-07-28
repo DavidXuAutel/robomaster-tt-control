@@ -1,0 +1,49 @@
+---
+description: 飞行模块选型、启动方式与采数交付规范
+alwaysApply: true
+---
+
+# 飞行与采数运行规范（所有 Agent 必读）
+
+完整手册：`docs/handover/2026-07-28-flight-modes-and-data-collection-runbook.md`。
+真机飞行、采集数据、或改动飞行模块配置前，先读该手册。
+
+## 选模块 = 选配置档，不要手改 default.json 切模式
+
+| 模块 | 配置档 |
+|---|---|
+| POI 环绕（绕目标飞） | `configs/orbit-chair.json` |
+| 随机漫游（笼内） | `configs/wander-cage.json` |
+| 随机漫游（通用） | `configs/wander.json` |
+| 参数基线 / 默认 | `configs/default.json` |
+
+绕飞与漫游是**彼此独立的模块**，参数规则互不耦合：
+
+1. 调参只写进模块自己的档，**不回灌 `configs/default.json`**
+   （其 orbit/fsm 节是 2026-07-27 真机已验证基线快照）。
+2. 禁止为调漫游而动 `avoid` 节的 `band_top` / `band_bottom`——两模块共享，
+   改它会同时影响绕飞。见 `docs/dev-notes/2026-07-28-orbit-wander-decoupling.md`。
+3. **先确认需求该由哪个模块承载，再谈调参。** 绕着目标飞只能用 OrbitController；
+   漫游的遇障响应是 50°~130° 偏航「转开去别处」，且安全不变量要求 roll≡0，
+   几何上绕不过障碍物（`tt_control/avoidance.py:99`，2026-07-24 真机结论）。
+
+## 启动
+
+```bash
+python3 station_mode.py find     # 每次飞前重扫 IP，飞机重启后会变；主程序占 8889 时需先关
+.venv/bin/python main.py --config <档> --tello-ip <IP> --local-ip 192.168.0.103 \
+  --inference depth-anything --start-depth-service --record --record-hz 10 -v
+```
+
+`--start-depth-service` 必带；禁止外挂 `da_v2_service.py &` + `--depth-service`
+做本地真机测试。收工自检 `lsof -nP -iTCP:8899,8890 -sTCP:LISTEN` 应无输出。
+
+## 采数交付
+
+- 一次起飞 = 一个 episode（按 `T` 开录，按 `L` 收尾），建议飞满 2 分钟以上。
+- 人工接管（WASD）记为 `ctrl_state=MANUAL`，**同样是有价值的训练数据**，遇险不必硬扛。
+- 交付前必查：视频帧数 == `frames.csv` 行数；有动作帧占比 > 90%；abort 计数符合预期。
+- 每份交付**必须附 `README.md`**，说明对齐保证、动作列语义、`ctrl_state` 取值，
+  以及会让对方误判的地方（如 `outcome: session_cleanup` 并非飞行异常）。
+- **`episode_check.py` 只适用于 wander**，用它验收 orbit 数据必然 FAIL
+  （orbit 无 turn 事件），那是工具边界问题不是数据问题。

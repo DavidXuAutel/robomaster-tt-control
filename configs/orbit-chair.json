@@ -1,0 +1,47 @@
+{
+  "//_meta": "椅子 POI 环绕（Orbit）· 铁丝笼场地专用档。用法: main.py --config configs/orbit-chair.json ...\n本档与 configs/wander-cage.json 完全独立：两者只会有一个被 --config 加载，互不覆盖。\norbit 节所有值 = docs/design/2026-07-27-orbit-control-principles.md §4 已验证基线，\n在此显式写全（而非依赖 default.json 回退），以免他人改动 default.json 时波及绕飞。\n改任何一项前必读该原则文件的「安全不变量」与「历史坑」。",
+
+  "orbit": {
+    "//_comment": "2026-07-27 真机验证基线（连续环绕 2min13s 无 abort）。括号内为原则文件 §4 标注的安全范围，超出即未验证。",
+    "direction": 1,
+    "target_nearness": 0.69,
+    "distance_deadband": 0.05,
+    "orbit_roll": 10,
+    "yaw_centering_gain": 80.0,
+    "centering_deadband": 0.25,
+    "pos_smooth_alpha": 0.25,
+    "yaw_deadband": 0.05,
+    "yaw_ff_ratio": 0.6,
+    "pitch_distance_gain": 4.0,
+    "max_yaw": 25,
+    "max_pitch": 35,
+    "min_yaw": 0,
+    "min_pitch": 5,
+    "danger_thresh": 0.78,
+    "lost_thresh": 0.10,
+    "acquire_peak_ratio": 1.6,
+    "track_peak_ratio": 1.35,
+    "min_peak": 0.12,
+    "acquire_frames": 2,
+    "track_roi_half": 0.35,
+    "max_pos_jump": 0.30
+  },
+
+  "fsm": {
+    "//_comment": "orbit_mode / wander_mode 互斥，本档固定 orbit=true、wander=false，杜绝漫游逻辑串入绕飞。",
+    "orbit_mode": true,
+    "wander_mode": false,
+
+    "//_orbit_params": "以下四项为 orbit 专属，取原则文件 §4 fsm 节已验证值",
+    "orbit_enter_nearness": 0.35,
+    "orbit_lost_timeout_s": 5.0,
+    "orbit_relock_frames": 5,
+    "orbit_danger_hold_s": 0.4,
+
+    "//_cage_comment": "以下三项是 fsm 全局项（orbit / wander 共用同名字段，但各档独立取值）。笼内按笼高设硬顶，电量留裕度。depth_stale_s 保持 3.0 基线——绕飞是围椅子转、不朝铁丝网直冲，无需 wander-cage 那档因撞网收紧到 1.5",
+    "max_height_cm": 200,
+    "min_battery_pct": 15,
+    "depth_stale_s": 3.0,
+    "max_auto_engaged_s": 86400.0
+  }
+}
