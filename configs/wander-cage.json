@@ -24,8 +24,8 @@
     "h_max_cm": 130.0,
     "alt_throttle": 15,
 
-    "//_turn_comment": "二飞实测：撞前连续三帧 M0.41/0.43/0.45，0.45 门槛差一点没触发 → 降到 0.40。clear_thresh 同步降到 0.30 保住 0.10 迟滞",
-    "turn_thresh": 0.40,
-    "clear_thresh": 0.30
+    "//_turn_comment": "三飞（椅子绕飞专项）：ep_20260727_204010 统计 CRUISE 期 mid p75=0.23 / p90=0.29 / max=0.41，>=0.40 只有 1 帧，全程仅 1 次 obstacle 转向，椅子基本没被判成障碍 → 降到 0.30（约取 CRUISE 上尾 5%，配合 turn_confirm_frames=2 可滤掉单帧尖峰）。clear_thresh 同步降到 0.22 保住 0.08 迟滞",
+    "turn_thresh": 0.30,
+    "clear_thresh": 0.22
   }
 }
