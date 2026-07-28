@@ -238,6 +238,24 @@ def test_danger_hold_retreat_abort():
     assert d.abort_reason == "wander_danger"
 
 
+def test_side_zone_alone_does_not_trigger_danger():
+    """回归：侧区极近但正前方开阔 → 不进 danger 三段式。
+
+    2026-07-28 铁丝笼首飞：danger=max(zones) 被侧墙顶穿，而漫游只能直退，
+    直退不降低侧向近度 → hold→retreat→abort 是必然路径。
+    见 docs/dev-notes/2026-07-28-wander-side-danger-abort.md
+    """
+    pol = _policy(danger_thresh=0.78, turn_thresh=0.58, segment_s_min=50, segment_s_max=50)
+    t = 1.0
+    pol.decide(_grid(0.2), _tel(), now=t, depth_ts=t)
+    for _ in range(10):
+        t += 0.2
+        d = pol.decide(_wall(mid_val=0.28, left=0.95, right=0.92), _tel(), now=t, depth_ts=t)
+        assert d.state == WANDER_CRUISE
+        assert d.abort_reason == ""
+    assert d.axes.pitch > 0
+
+
 def test_pano_enters_verify_not_cruise():
     """P0-1: PANO seek 完成后必须进 VERIFY，旧深度不放行。"""
     pol = _policy(

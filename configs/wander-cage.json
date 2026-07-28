@@ -18,6 +18,9 @@
     "cruise_pitch_max": 14,
     "h_min_cm": 60.0,
     "h_max_cm": 130.0,
-    "alt_throttle": 15
+    "alt_throttle": 15,
+
+    "//_turn_comment": "首飞实测 mid 双峰：正对障碍 ~0.44-0.46 / 转开后 ~0.25-0.33，默认 0.58 全程未触发。下调到 0.45（主人 2026-07-28 裁定）。clear_thresh 仍取 0.40，迟滞只剩 0.05，若日志出现反复 retry_turn 需下调到 0.35",
+    "turn_thresh": 0.45
   }
 }

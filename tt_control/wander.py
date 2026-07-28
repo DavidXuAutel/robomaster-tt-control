@@ -289,7 +289,12 @@ class WanderPolicy:
         new_depth = self._note_depth(depth_ts)
 
         # 任意状态：danger 三段式（需新深度帧证据，避免冻帧空转计时）
-        danger = max(zones)
+        # 只看 mid：漫游 roll≡0，唯一保命动作是直退，而直退不降低侧向近度，
+        # 侧区触发 danger 必然走成 hold→retreat→abort（2026-07-28 铁丝笼首飞）。
+        # 与 AvoidanceController.decide 的 estop 语义一致：侧向近应转开而非急停。
+        # 偏离规格 §2.1 的 max(zones)，主人 2026-07-28 裁定，
+        # 见 docs/dev-notes/2026-07-28-wander-side-danger-abort.md
+        danger = mid
         if self._state not in (DANGER_HOLD, WANDER_RETREAT):
             if new_depth and danger > self.p.danger_thresh:
                 self._resume_after_danger = self._state
