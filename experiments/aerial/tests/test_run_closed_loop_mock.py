@@ -15,6 +15,27 @@ from experiments.aerial.eval.run_closed_loop import (
 )
 from experiments.aerial.openfly_actions import primitive_to_delta
 
+
+# A non-mock bridge (kinematics reused) so run_episode's dump gate fires.
+class _NonMockBridge:
+    def __init__(self) -> None:
+        self._inner = MockBridge(seed=3)
+
+    def reset(self, episode):
+        self._inner.reset(episode)
+
+    def render(self):
+        return np.full((48, 64, 3), (10, 20, 30), dtype=np.uint8)
+
+    def state(self):
+        return self._inner.state()
+
+    def step(self, primitive_id):
+        self._inner.step(primitive_id)
+
+    def close(self):
+        self._inner.close()
+
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "mini_openfly" / "seen_mini.json"
 
 
@@ -85,6 +106,52 @@ def test_evaluate_episodes_preserves_per_episode_metrics():
         "shortest_length",
         "steps",
     }
+
+
+def _have_image_writer() -> bool:
+    try:
+        import PIL  # type: ignore  # noqa: F401
+
+        return True
+    except ImportError:
+        pass
+    try:
+        import cv2  # type: ignore  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.mark.skipif(not _have_image_writer(), reason="needs Pillow or opencv-python")
+def test_dump_frames_writes_pngs_for_real_bridge(tmp_path):
+    episode = load_annotation(FIXTURE)[0]
+    dump_dir = tmp_path / "frames"
+    bridge = _NonMockBridge()
+    policy = ReplayPolicy(episode["action"])
+    result = run_episode(
+        bridge,
+        policy,
+        episode,
+        max_steps=20,
+        dump_dir=dump_dir,
+        frame_prefix="000_r0",
+    )
+    pngs = sorted(dump_dir.glob("000_r0_step*.png"))
+    # Render happens once per loop iteration, including the final iteration that
+    # reads the stop primitive — so the goal frame is captured: steps + 1.
+    assert len(pngs) == result.steps + 1
+    assert pngs[0].name == "000_r0_step0000.png"
+
+
+def test_dump_frames_skipped_for_mock_bridge(tmp_path):
+    episode = load_annotation(FIXTURE)[0]
+    dump_dir = tmp_path / "frames"
+    bridge = MockBridge(seed=7)
+    policy = ReplayPolicy(episode["action"])
+    run_episode(bridge, policy, episode, max_steps=20, dump_dir=dump_dir)
+    # Pseudo-RGB must never be dumped; dir stays empty (or is never created).
+    assert not dump_dir.exists() or not any(dump_dir.iterdir())
 
 
 def test_mock_metrics_reproducible_with_seed():

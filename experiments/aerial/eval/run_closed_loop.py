@@ -61,6 +61,33 @@ def trajectory_path_length(positions: Sequence[np.ndarray]) -> float:
     return total
 
 
+def _safe_name(text: str) -> str:
+    """Filesystem-safe token for frame filenames (episode ids may contain '/')."""
+    return "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in text) or "ep"
+
+
+def _save_frame(dump_dir: Path, name: str, rgb: np.ndarray) -> None:
+    """Persist one RGB frame to dump_dir. Prefers Pillow, falls back to cv2."""
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    out = dump_dir / name
+    frame = np.ascontiguousarray(np.asarray(rgb, dtype=np.uint8))
+    try:
+        from PIL import Image  # type: ignore[import-not-found]
+
+        Image.fromarray(frame).save(str(out))
+        return
+    except ImportError:
+        pass
+    try:
+        import cv2  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - depends on host deps
+        raise ImportError(
+            "--dump-frames needs Pillow or opencv-python installed to save frames"
+        ) from exc
+    # cv2 expects BGR; our frame is RGB.
+    cv2.imwrite(str(out), frame[..., ::-1])
+
+
 class Bridge(Protocol):
     def reset(self, episode: dict[str, Any]) -> None: ...
 
@@ -249,6 +276,8 @@ def run_episode(
     episode: dict[str, Any],
     *,
     max_steps: int,
+    dump_dir: Optional[Path] = None,
+    frame_prefix: str = "ep",
 ) -> EpisodeResult:
     positions = np.asarray(episode["pos"], dtype=np.float64)
     goal_pos = positions[-1]
@@ -258,6 +287,9 @@ def run_episode(
     if hasattr(policy, "reset"):
         policy.reset()
 
+    # MockBridge emits deterministic pseudo-RGB (not a real render); never dump it.
+    save_frames = dump_dir is not None and not isinstance(bridge, MockBridge)
+
     instruction = str(episode.get("gpt_instruction", ""))
     visited = [bridge.state()[:3].astype(np.float64).copy()]
     steps = 0
@@ -265,6 +297,8 @@ def run_episode(
 
     while steps < max_steps:
         rgb = bridge.render()
+        if save_frames:
+            _save_frame(dump_dir, f"{frame_prefix}_step{steps:04d}.png", rgb)
         state = bridge.state()
         primitive = int(policy.predict_primitive(rgb, state, instruction))
         if primitive == 0:
@@ -376,6 +410,7 @@ def evaluate_episodes(
     openfly_root: Optional[Path] = None,
     seed: int = 0,
     task: str = "aerial_joint_1cam_1e-4",
+    dump_frames: Optional[Path] = None,
 ) -> dict[str, Any]:
     successes: list[bool] = []
     path_lengths: list[float] = []
@@ -398,8 +433,16 @@ def evaluate_episodes(
             task=task,
             seed=seed,
         )
+        episode_id = _episode_id(episode, index)
         try:
-            result = run_episode(bridge, policy, episode, max_steps=max_steps)
+            result = run_episode(
+                bridge,
+                policy,
+                episode,
+                max_steps=max_steps,
+                dump_dir=dump_frames,
+                frame_prefix=f"{index:03d}_{_safe_name(episode_id)}",
+            )
         finally:
             bridge.close()
 
@@ -409,7 +452,7 @@ def evaluate_episodes(
         nes.append(result.navigation_error)
         episode_records.append(
             {
-                "episode_id": _episode_id(episode, index),
+                "episode_id": episode_id,
                 "success": result.success,
                 "NE": result.navigation_error,
                 "path_length": result.path_length,
@@ -449,6 +492,13 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--task", default="aerial_joint_1cam_1e-4")
+    parser.add_argument(
+        "--dump-frames",
+        type=Path,
+        default=None,
+        help="Directory to save each rendered RGB frame as PNG (openfly bridge only; "
+        "skipped for the mock bridge's pseudo-RGB). Assemble to video with ffmpeg.",
+    )
     return parser.parse_args(argv)
 
 
@@ -467,6 +517,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         openfly_root=args.openfly_root,
         seed=int(args.seed),
         task=str(args.task),
+        dump_frames=args.dump_frames,
     )
     write_metrics(metrics, args.out)
     print(json.dumps(metrics, indent=2))
