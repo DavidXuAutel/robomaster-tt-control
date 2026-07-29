@@ -8,6 +8,7 @@ from experiments.aerial.eval.run_closed_loop import (
     MockBridge,
     ReplayPolicy,
     apply_body_delta,
+    eval_hydra_overrides,
     evaluate_episodes,
     load_annotation,
     run_episode,
@@ -152,6 +153,24 @@ def test_dump_frames_skipped_for_mock_bridge(tmp_path):
     run_episode(bridge, policy, episode, max_steps=20, dump_dir=dump_dir)
     # Pseudo-RGB must never be dumped; dir stays empty (or is never created).
     assert not dump_dir.exists() or not any(dump_dir.iterdir())
+
+
+def test_eval_overrides_use_local_wan22_and_text_encoder(monkeypatch):
+    monkeypatch.delenv("AERIAL_EVAL_HYDRA_OVERRIDES", raising=False)
+    overrides = eval_hydra_overrides("aerial_joint_1cam_1e-4")
+    assert overrides[0] == "task=aerial_joint_1cam_1e-4"
+    # redirect=true resolves the VAE to converted safetensors that are not on
+    # the eval hosts, which made every B0 v2 checkpoint eval fail.
+    assert "model.redirect_common_files=false" in overrides
+    assert "model.load_text_encoder=true" in overrides
+
+
+def test_eval_overrides_append_env_extras(monkeypatch):
+    monkeypatch.setenv(
+        "AERIAL_EVAL_HYDRA_OVERRIDES", "model.foo=1, data.train.num_frames=9 ,"
+    )
+    overrides = eval_hydra_overrides("aerial_joint_1cam_1e-4")
+    assert overrides[-2:] == ["model.foo=1", "data.train.num_frames=9"]
 
 
 def test_mock_metrics_reproducible_with_seed():

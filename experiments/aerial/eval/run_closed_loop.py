@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -321,6 +322,26 @@ def run_episode(
     )
 
 
+def eval_hydra_overrides(task: str) -> list[str]:
+    """Hydra overrides for closed-loop eval.
+
+    Eval encodes the instruction at run time, while training consumes cached
+    text embeddings, so the text encoder has to be loaded here. The Wan2.2
+    weights on the eval hosts are the original ``.pth`` files, so the DiffSynth
+    redirect to converted safetensors must stay off or the VAE path resolves
+    empty. Extra comma-separated overrides can be appended via
+    ``AERIAL_EVAL_HYDRA_OVERRIDES``.
+    """
+    overrides = [
+        f"task={task}",
+        "model.load_text_encoder=true",
+        "model.redirect_common_files=false",
+    ]
+    extra = os.environ.get("AERIAL_EVAL_HYDRA_OVERRIDES", "")
+    overrides.extend(item.strip() for item in extra.split(",") if item.strip())
+    return overrides
+
+
 def build_policy(
     policy_name: str,
     episode: dict[str, Any],
@@ -349,7 +370,7 @@ def build_policy(
 
     cfg_dir = str((_repo_root() / "configs").resolve())
     with initialize_config_dir(config_dir=cfg_dir, version_base="1.3"):
-        cfg = compose(config_name="train", overrides=[f"task={task}"])
+        cfg = compose(config_name="train", overrides=eval_hydra_overrides(task))
 
     eval_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model = instantiate(cfg.model, model_dtype=torch.float32, device=eval_device)
@@ -366,14 +387,15 @@ def build_policy(
         processor = instantiate(cfg.data.train.processor).eval()
         processor.set_normalizer_from_stats(load_dataset_stats_from_json(str(stats_path)))
 
-    action_horizon = int(cfg.data.train.num_frames) - 1
+    num_video_frames = int(cfg.data.train.num_frames)
     return FastWAMAerialPolicy(
         model=model,
         processor=processor,
-        action_horizon=action_horizon,
+        action_horizon=num_video_frames - 1,
         replan_steps=1,
         seed=seed,
         rand_device=eval_device,
+        num_video_frames=num_video_frames,
     )
 
 
