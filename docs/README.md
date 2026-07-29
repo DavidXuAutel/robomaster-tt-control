@@ -16,6 +16,7 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 | 我要做什么 | 读这个 |
 |---|---|
 | 飞真机 / 采数据 / 选飞行模块 | `handover/2026-07-28-flight-modes-and-data-collection-runbook.md` |
+| 人工示教 + 意图标注（动作头 SFT） | `handover/2026-07-29-teleop-intent-data-collection.md` |
 | 改环绕（Orbit）代码或参数 | `design/2026-07-27-orbit-control-principles.md`（仅 Claude 可改） |
 | 改漫游（Wander）代码或参数 | `design/2026-07-27-wander-explore-design.md`（仅 Claude 可改） |
 | 了解项目全部能力 | `handover/2026-07-25-capability-inventory.md` |
@@ -49,6 +50,8 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 
 ### handover/ — 交接与同步
 - `2026-07-28-flight-modes-and-data-collection-runbook.md` — **飞行/采数必读**：模块×配置档对照、启动命令、采数 SOP、飞后校验、打包交付、模块红线、故障速查
+- `2026-07-29-teleop-intent-data-collection.md` — **人工示教（含意图标注）采数方案**：给 Kairos/WAM 动作头 SFT；任务清单、SOP、验收与打包
+- `templates/teleop_manifest.csv` — 示教交付总表模板（episode ↔ intent）
 - `2026-07-20-changes-and-sync-for-dazhong.md` — 代码变更与服务器同步说明（面向大众）
 - `2026-07-20-gesture-control-handover.md` — 手势控制模块交接说明
 - `2026-07-20-sync-execution-report.md` — 手势控制上云同步执行报告

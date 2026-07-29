@@ -8,6 +8,11 @@ alwaysApply: true
 完整手册：`docs/handover/2026-07-28-flight-modes-and-data-collection-runbook.md`。
 真机飞行、采集数据、或改动飞行模块配置前，先读该手册。
 
+人工示教 + 意图标注（WAM/Kairos 动作头 SFT）：
+`docs/handover/2026-07-29-teleop-intent-data-collection.md`
+（不挂 AUTO；一段一意图；总表 `docs/handover/templates/teleop_manifest.csv`）。
+规则式 AUTO 与 teleop **分目录交付**，禁止把自动回合改标成 teleop。
+
 ## 选模块 = 选配置档，不要手改 default.json 切模式
 
 | 模块 | 配置档 |

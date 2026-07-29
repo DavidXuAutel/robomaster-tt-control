@@ -5,6 +5,8 @@ RoboMaster TT 视觉避障项目的 Agent 入口文档。每次新 Agent 进入�
 **要飞真机或采数据？** 读完本文件后接着读
 `docs/handover/2026-07-28-flight-modes-and-data-collection-runbook.md`
 （模块选型 × 配置档、启动命令、采数 SOP、交付规范、故障速查）。
+若采的是 **人工示教 + 意图标注**（给 WAM/Kairos 动作头 SFT），再读
+`docs/handover/2026-07-29-teleop-intent-data-collection.md`。
 
 ## 项目简介
 
@@ -128,6 +130,8 @@ server/
 | 文档 | 内容 |
 |------|------|
 | `docs/handover/2026-07-28-flight-modes-and-data-collection-runbook.md` | **飞行/采数必读**：模块×配置档、启动命令、采数 SOP、交付规范、故障速查 |
+| `docs/handover/2026-07-29-teleop-intent-data-collection.md` | **人工示教 + 意图标注**：动作头 SFT 任务清单、SOP、manifest、打包 |
+| `docs/handover/templates/teleop_manifest.csv` | 示教交付总表模板 |
 | `docs/dev-notes/2026-07-28-orbit-wander-decoupling.md` | 绕飞与漫游的模块边界、耦合点核查与约定 |
 | `docs/handover/2026-07-25-capability-inventory.md` | 全部 11 个模块的详细能力清单 |
 | `docs/handover/2026-07-25-orbit-avoidance-handover.md` | 环绕飞行开发交接（参数/调试/排障） |
