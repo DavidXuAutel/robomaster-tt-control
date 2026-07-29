@@ -124,9 +124,10 @@ server/
 
 ## Aerial WAM 训练线（2026-07-29）
 
-本仓库还承载 aerial WAM 导航训练（OpenFly/AirSim）的设计与交接文档，代码在 FastWAM worktree `aerial-b0-b1-orchestration`。
+本仓库还承载 aerial WAM 导航训练（OpenFly/AirSim）。**代码现已 vendoring 进本仓的孤儿分支 `aerial-wam`**（整个 FastWAM runtime，checkout 即可跑，`git checkout aerial-wam`）；来源 FastWAM worktree `aerial-b0-b1-orchestration@46a1138`（保留作源锚点）。设计/交接文档在本 `main` 分支的 `docs/` 下（也随代码进了 `aerial-wam`）。
 
 - **当前状态**：B0→B1 编排；v1 的 B1 FT 停在 **step_002250/5000**（`ft.status=FAILED`，correction-rate 门禁），且 B1 整体未超过 B0（B0 SR=0/NE≈134）。
+- **代码/runtime 单一事实源**：`robomaster@aerial-wam`（不再是 FastWAM worktree）。v2 采样/门禁/resume-guard/启动脚本都在该分支。
 - **v2 重设计（从头训 B0）**：`docs/design/2026-07-29-aerial-nav-wam-redesign.md`（模型/数据/评测/训练全规格 + 主机 bring-up/启动 SOP）。
 - **v1 交接**：`docs/handover/2026-07-29-aerial-b0-b1-orchestration-handover.md`。
 - 训练主机 `:31126`（1 机 2×H100，从头训），评测 `:30682`（1×H100 + AirSim）。
