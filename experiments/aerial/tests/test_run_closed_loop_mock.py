@@ -7,6 +7,7 @@ import pytest
 from experiments.aerial.eval.run_closed_loop import (
     MockBridge,
     ReplayPolicy,
+    _assemble_episode_mp4,
     apply_body_delta,
     eval_hydra_overrides,
     evaluate_episodes,
@@ -125,11 +126,23 @@ def _have_image_writer() -> bool:
 
 
 @pytest.mark.skipif(not _have_image_writer(), reason="needs Pillow or opencv-python")
-def test_dump_frames_writes_pngs_for_real_bridge(tmp_path):
+def test_dump_frames_writes_pngs_for_real_bridge(tmp_path, monkeypatch):
     episode = load_annotation(FIXTURE)[0]
     dump_dir = tmp_path / "frames"
     bridge = _NonMockBridge()
     policy = ReplayPolicy(episode["action"])
+    assembled: list[tuple[str, str]] = []
+
+    def fake_assemble(dump, prefix, *, fps=10.0):
+        assembled.append((str(dump), prefix))
+        out = Path(dump) / f"{prefix}.mp4"
+        out.write_bytes(b"fake-mp4")
+        return out
+
+    monkeypatch.setattr(
+        "experiments.aerial.eval.run_closed_loop._assemble_episode_mp4",
+        fake_assemble,
+    )
     result = run_episode(
         bridge,
         policy,
@@ -143,6 +156,63 @@ def test_dump_frames_writes_pngs_for_real_bridge(tmp_path):
     # reads the stop primitive — so the goal frame is captured: steps + 1.
     assert len(pngs) == result.steps + 1
     assert pngs[0].name == "000_r0_step0000.png"
+    assert assembled == [(str(dump_dir), "000_r0")]
+    assert (dump_dir / "000_r0.mp4").is_file()
+
+
+def test_assemble_episode_mp4_encodes_sorted_pngs(tmp_path, monkeypatch):
+    dump_dir = tmp_path / "frames"
+    dump_dir.mkdir()
+    # Minimal 2x2 RGB PNGs via Pillow when available, else raw via imageio mock only.
+    try:
+        from PIL import Image
+    except ImportError:
+        pytest.skip("needs Pillow to create input PNGs")
+
+    for step, color in ((0, (255, 0, 0)), (1, (0, 255, 0)), (2, (0, 0, 255))):
+        Image.fromarray(
+            __import__("numpy").full((2, 2, 3), color, dtype="uint8")
+        ).save(dump_dir / f"epA_step{step:04d}.png")
+
+    written: list[object] = []
+
+    class _Writer:
+        def append_data(self, frame):
+            written.append(frame)
+
+        def close(self):
+            return None
+
+    def fake_get_writer(path, **kwargs):
+        assert path.endswith("epA.mp4")
+        assert kwargs.get("fps") == 10.0
+        return _Writer()
+
+    class _FakeImageio:
+        @staticmethod
+        def get_writer(path, **kwargs):
+            return fake_get_writer(path, **kwargs)
+
+        @staticmethod
+        def imread(path):
+            from PIL import Image
+            import numpy as np
+
+            return np.asarray(Image.open(path))
+
+    import sys
+    import types
+
+    fake_mod = types.ModuleType("imageio")
+    fake_v2 = types.ModuleType("imageio.v2")
+    fake_v2.get_writer = _FakeImageio.get_writer
+    fake_v2.imread = _FakeImageio.imread
+    monkeypatch.setitem(sys.modules, "imageio", fake_mod)
+    monkeypatch.setitem(sys.modules, "imageio.v2", fake_v2)
+
+    out = _assemble_episode_mp4(dump_dir, "epA", fps=10.0)
+    assert out == dump_dir / "epA.mp4"
+    assert len(written) == 3
 
 
 def test_dump_frames_skipped_for_mock_bridge(tmp_path):

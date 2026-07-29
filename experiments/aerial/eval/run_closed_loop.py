@@ -89,6 +89,40 @@ def _save_frame(dump_dir: Path, name: str, rgb: np.ndarray) -> None:
     cv2.imwrite(str(out), frame[..., ::-1])
 
 
+def _assemble_episode_mp4(
+    dump_dir: Path,
+    frame_prefix: str,
+    *,
+    fps: float = 10.0,
+) -> Optional[Path]:
+    """Encode ``{frame_prefix}_step*.png`` into ``{frame_prefix}.mp4`` (OpenFly FPS=10)."""
+    paths = sorted(dump_dir.glob(f"{frame_prefix}_step*.png"))
+    if not paths:
+        return None
+    out = dump_dir / f"{frame_prefix}.mp4"
+    try:
+        import imageio.v2 as imageio  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - depends on host deps
+        raise ImportError(
+            "episode mp4 assembly needs imageio with imageio-ffmpeg installed"
+        ) from exc
+
+    writer = imageio.get_writer(
+        str(out),
+        fps=float(fps),
+        codec="libx264",
+        quality=8,
+        macro_block_size=1,
+        ffmpeg_params=["-pix_fmt", "yuv420p"],
+    )
+    try:
+        for path in paths:
+            writer.append_data(np.asarray(imageio.imread(path)))
+    finally:
+        writer.close()
+    return out
+
+
 class Bridge(Protocol):
     def reset(self, episode: dict[str, Any]) -> None: ...
 
@@ -307,6 +341,10 @@ def run_episode(
         bridge.step(primitive)
         visited.append(bridge.state()[:3].astype(np.float64).copy())
         steps += 1
+
+    if save_frames:
+        assert dump_dir is not None
+        _assemble_episode_mp4(dump_dir, frame_prefix)
 
     final_pos = bridge.state()[:3].astype(np.float64)
     navigation_error = float(np.linalg.norm(final_pos - goal_pos))
@@ -528,8 +566,8 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--dump-frames",
         type=Path,
         default=None,
-        help="Directory to save each rendered RGB frame as PNG (openfly bridge only; "
-        "skipped for the mock bridge's pseudo-RGB). Assemble to video with ffmpeg.",
+        help="Directory to save each rendered RGB frame as PNG and one mp4 per "
+        "episode (openfly bridge only; skipped for the mock bridge's pseudo-RGB).",
     )
     return parser.parse_args(argv)
 
