@@ -1,0 +1,17 @@
+# OpenFly source and subset size.
+hf_repo: IPEC-COMMUNITY/OpenFly
+target_train_trajs: 8000
+
+# Full evaluation annotations are retained; evaluation images are deferred.
+split_ann:
+  train: Annotation/train.json
+  seen: Annotation/seen.json
+  unseen: Annotation/unseen.json
+
+# Prefer AirSim scenes for the first training/evaluation pass.
+env_prefixes:
+  - env_airsim_
+seed: 42
+
+out_raw: ./data/openfly_raw
+out_lerobot: ./data/openfly_lerobot

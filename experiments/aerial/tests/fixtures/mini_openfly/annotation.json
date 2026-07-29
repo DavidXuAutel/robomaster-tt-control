@@ -1,0 +1,16 @@
+[
+  {
+    "scene_id": "mini_openfly_scene",
+    "gpt_instruction": "Fly forward, then turn left.",
+    "image_path": "images",
+    "index_list": ["000000", "000001", "000002", "000003"],
+    "action": [1, 1, 2, 0],
+    "pos": [
+      [0.0, 0.0, 1.0],
+      [3.0, 0.0, 1.0],
+      [6.0, 0.0, 1.0],
+      [6.0, 0.0, 1.0]
+    ],
+    "yaw": [0.0, 0.0, 0.0, 0.5235987755982988]
+  }
+]
