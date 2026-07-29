@@ -31,7 +31,7 @@ trap 'rmdir "$EVAL_WORKER_LOCK"' EXIT
 
 if (( DRY_RUN )); then
   printf '%s\n' \
-    "AIRSIM_HOST=10.229.20.125 AIRSIM_PORT=41451 AIRSIM_ALLOW_LOCAL_LAUNCH=0 python3 -m experiments.aerial.eval.run_closed_loop --bridge openfly --policy fastwam --openfly-root /path/to/openfly --ann /path/to/seen.json --checkpoint /path/to/checkpoint.pt --out /path/to/metrics.json --max-episodes 20 --max-steps 100 --seed 42 --task aerial_joint_b1_joint"
+    "AIRSIM_HOST=10.229.20.125 AIRSIM_PORT=41451 AIRSIM_ALLOW_LOCAL_LAUNCH=0 python3 -m experiments.aerial.eval.run_closed_loop --bridge openfly --policy fastwam --openfly-root /path/to/openfly --ann /path/to/seen.json --checkpoint /path/to/checkpoint.pt --out /path/to/metrics.json --max-episodes 20 --max-steps 100 --seed 42 --task aerial_joint_b1_joint --dump-frames /path/to/frames"
   exit 0
 fi
 
@@ -71,6 +71,12 @@ run_job() {
   export AIRSIM_PORT=41451
   export AIRSIM_ALLOW_LOCAL_LAUNCH=0
 
+  # Persist AirSim RGB frames beside metrics so closed-loop episodes can be
+  # audited offline (synced back to the operator Mac after the queue drains).
+  local dump_frames
+  dump_frames="$(dirname "$out_metrics")/frames"
+  mkdir -p "$dump_frames"
+
   local command=(
     "$PYTHON_BIN" -m experiments.aerial.eval.run_closed_loop
     --bridge openfly
@@ -83,6 +89,7 @@ run_job() {
     --max-steps "$max_steps"
     --seed "$seed"
     --task "$task"
+    --dump-frames "$dump_frames"
   )
 
   local eval_rc

@@ -61,6 +61,7 @@ def test_dry_run_prints_locked_serial_eval_command_without_remote_access(tmp_pat
     assert "experiments.aerial.eval.run_closed_loop" in result.stdout
     assert "--seed 42" in result.stdout
     assert "--max-episodes 20" in result.stdout
+    assert "--dump-frames /path/to/frames" in result.stdout
     assert "AIRSIM_HOST=10.229.20.125" in result.stdout
     assert "AIRSIM_PORT=41451" in result.stdout
     assert "AIRSIM_ALLOW_LOCAL_LAUNCH=0" in result.stdout
