@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import random
-import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
@@ -31,7 +30,7 @@ WANDER_RETREAT = "WANDER_RETREAT"
 class WanderParams:
     """漫游参数；全部阈值只允许出现在 configs/default.json 的 wander 节。"""
 
-    seed: int = 0  # 0 = 用构造时刻时间戳
+    seed: int = 0  # 0 = 推迟到首次 decide(now) 用 now 定种
     cruise_pitch_min: int = 12
     cruise_pitch_max: int = 25
     segment_s_min: float = 3.0
@@ -67,7 +66,9 @@ class WanderParams:
     pano_complete_deg: float = 340.0
     pano_min_s: float = 2.0
     pano_timeout_s: float = 20.0
-    h_missing_frames: int = 5
+    pano_step_deadband_deg: float = 0.5
+    h_missing_s: float = 1.0  # 连续读不到 h 超过此时长 → 闩锁；连续读到满此时长 → 解除（主人 2026-07-28 裁定可恢复）
+    h_missing_frames: int = 5  # deprecated: 不再参与逻辑，保留兼容旧配置
 
 
 @dataclass
@@ -99,9 +100,6 @@ def _yaw_delta(target: float, current: float) -> float:
     return (target - current + 180.0) % 360.0 - 180.0
 
 
-def _abs_yaw_delta(a: float, b: float) -> float:
-    return abs(_yaw_delta(a, b))
-
 
 class WanderPolicy:
     """随机漫游策略内核。"""
@@ -115,9 +113,8 @@ class WanderPolicy:
     ) -> None:
         self.p = params or WanderParams()
         raw_seed = self.p.seed if seed is None else seed
-        if raw_seed == 0:
-            raw_seed = int(time.time() * 1000) & 0x7FFFFFFF
-        self.seed = int(raw_seed)
+        self._seed_pending = int(raw_seed) == 0
+        self.seed = 0 if self._seed_pending else int(raw_seed)
         self._rng = random.Random(self.seed)
         self._zones_ctrl = zones_ctrl or AvoidanceController()
 
@@ -149,17 +146,21 @@ class WanderPolicy:
         self._turn_reason = "obstacle"
         self._turn_start_yaw: Optional[float] = None
         self._turn_start_t: float = 0.0
+        self._turn_yaw_elapsed: float = 0.0
+        self._turn_last_tick: Optional[float] = None
         self._yaw_dead_reckon = False
         self._pending_event = ""
 
         # PANO
         self._pano_start_yaw: Optional[float] = None
-        self._pano_start_t: float = 0.0
+        self._pano_start_t: Optional[float] = None
+        self._pano_seek_started: Optional[float] = None
         self._pano_samples: list[tuple[float, float]] = []
         self._pano_target_yaw: Optional[float] = None
         self._pano_phase = "scan"  # scan | seek
         self._pano_last_yaw: Optional[float] = None
         self._pano_travel_deg: float = 0.0
+        self._pano_done_at: Optional[float] = None
 
         # DANGER / RETREAT
         self._danger_since: Optional[float] = None
@@ -170,10 +171,10 @@ class WanderPolicy:
 
         # 角落窗口：遇障转向时间戳
         self._obstacle_turn_times: list[float] = []
-        self._pano_done_in_window = False
 
         # 高度
-        self._h_missing = 0
+        self._h_missing_since: Optional[float] = None
+        self._h_recover_since: Optional[float] = None
         self._h_latch_zero = False
         self._tel: dict[str, str] = {}
 
@@ -184,11 +185,13 @@ class WanderPolicy:
         self._reset_control_state()
 
     def begin_episode(self, seed: Optional[int] = None) -> int:
-        """新 episode：重设 RNG + 清零计数器，返回生效 seed（写入 meta）。"""
+        """新 episode：重设 RNG + 清零计数器，返回生效 seed（写入 meta）。
+
+        seed=0 时推迟到首次 decide(now) 用注入的 now 定种（不调用 time.time）。
+        """
         raw = self.p.seed if seed is None else seed
-        if raw == 0:
-            raw = int(time.time() * 1000) & 0x7FFFFFFF
-        self.seed = int(raw)
+        self._seed_pending = int(raw) == 0
+        self.seed = 0 if self._seed_pending else int(raw)
         self._rng = random.Random(self.seed)
         self.turns_total = 0
         self.panos_total = 0
@@ -196,6 +199,13 @@ class WanderPolicy:
         self.corner_aborts = 0
         self._reset_control_state()
         return self.seed
+
+    def _ensure_seed(self, now: float) -> None:
+        if not self._seed_pending:
+            return
+        self.seed = int(now * 1000.0) & 0x7FFFFFFF
+        self._rng = random.Random(self.seed)
+        self._seed_pending = False
 
     def _reset_control_state(self) -> None:
         self._state = WANDER_CRUISE
@@ -215,23 +225,27 @@ class WanderPolicy:
         self._turn_reason = "obstacle"
         self._turn_start_yaw = None
         self._turn_start_t = 0.0
+        self._turn_yaw_elapsed = 0.0
+        self._turn_last_tick = None
         self._yaw_dead_reckon = False
         self._pending_event = ""
         self._pano_start_yaw = None
-        self._pano_start_t = 0.0
+        self._pano_start_t = None
+        self._pano_seek_started = None
         self._pano_samples = []
         self._pano_target_yaw = None
         self._pano_phase = "scan"
         self._pano_last_yaw = None
         self._pano_travel_deg = 0.0
+        self._pano_done_at = None
         self._danger_since = None
         self._danger_hold_depth_s = 0.0
         self._retreat_started = 0.0
         self._retreat_end_ts = 0.0
         self._resume_after_danger = WANDER_CRUISE
         self._obstacle_turn_times.clear()
-        self._pano_done_in_window = False
-        self._h_missing = 0
+        self._h_missing_since = None
+        self._h_recover_since = None
         self._h_latch_zero = False
         self._tel = {}
 
@@ -256,12 +270,12 @@ class WanderPolicy:
         *,
         depth_ts: Optional[float] = None,
     ) -> WanderDecision:
+        self._ensure_seed(now)
+        self._tel = telemetry
         if not self._started:
             self._started = True
             self._state_entered = now
             self._begin_cruise_segment(now, event=True)
-
-        self._tel = telemetry
 
         if nearness is None:
             return WanderDecision(
@@ -275,7 +289,12 @@ class WanderPolicy:
         new_depth = self._note_depth(depth_ts)
 
         # 任意状态：danger 三段式（需新深度帧证据，避免冻帧空转计时）
-        danger = max(zones)
+        # 只看 mid：漫游 roll≡0，唯一保命动作是直退，而直退不降低侧向近度，
+        # 侧区触发 danger 必然走成 hold→retreat→abort（2026-07-28 铁丝笼首飞）。
+        # 与 AvoidanceController.decide 的 estop 语义一致：侧向近应转开而非急停。
+        # 偏离规格 §2.1 的 max(zones)，主人 2026-07-28 裁定，
+        # 见 docs/dev-notes/2026-07-28-wander-side-danger-abort.md
+        danger = mid
         if self._state not in (DANGER_HOLD, WANDER_RETREAT):
             if new_depth and danger > self.p.danger_thresh:
                 self._resume_after_danger = self._state
@@ -353,32 +372,48 @@ class WanderPolicy:
         yaw_cmd = int(self._turn_dir * self.p.yaw_speed)
         cur_yaw = self._read_yaw(telemetry)
 
+        # 只累加实际发 yaw 杆的时间（DANGER 暂停不计入）
+        if self._turn_last_tick is not None:
+            self._turn_yaw_elapsed += max(0.0, now - self._turn_last_tick)
+        self._turn_last_tick = now
+
         if cur_yaw is None:
             self._yaw_dead_reckon = True
-            elapsed = now - self._turn_start_t
-            est = abs(yaw_cmd) * self.p.yaw_dead_reckon_dps_per_unit * elapsed
+            est = abs(yaw_cmd) * self.p.yaw_dead_reckon_dps_per_unit * self._turn_yaw_elapsed
             done = est >= self._turn_deg
         else:
             if self._turn_start_yaw is None:
                 self._turn_start_yaw = cur_yaw
-            turned = _abs_yaw_delta(cur_yaw, self._turn_start_yaw)
-            # 方向一致性：误差符号应与 turn_dir 同向，过冲也用到位判定
-            done = turned >= (self._turn_deg - self.p.turn_arrive_tol_deg)
+            # 有符号进度：仅命令方向计入到位
+            progress = _yaw_delta(cur_yaw, self._turn_start_yaw) * self._turn_dir
+            done = progress >= (self._turn_deg - self.p.turn_arrive_tol_deg)
 
         if done:
-            # 坑 #2：用转向结束墙钟；只认 depth_ts > turn_end_ts 的帧
-            self._turn_end_ts = now
-            self._verify_clear = 0
-            self._enter(WANDER_VERIFY, now)
-            return self._pack(
-                RcAxes(), zones, now, event=event,
-                sub="turn_done",
-                yaw_mode="yaw_dead_reckon" if self._yaw_dead_reckon else "",
-            )
+            return self._enter_verify(zones, now, event=event, sub="turn_done")
 
         return self._pack(
             RcAxes(yaw=yaw_cmd), zones, now, event=event,
             sub=f"turn_{'R' if self._turn_dir > 0 else 'L'}{self._turn_deg:.0f}",
+            yaw_mode="yaw_dead_reckon" if self._yaw_dead_reckon else "",
+        )
+
+    def _enter_verify(
+        self,
+        zones: tuple[float, float, float],
+        now: float,
+        *,
+        event: str = "",
+        sub: str = "verify",
+        mark_pano_done: bool = False,
+    ) -> WanderDecision:
+        self._turn_end_ts = now
+        self._verify_clear = 0
+        self._turn_last_tick = None
+        if mark_pano_done:
+            self._pano_done_at = now
+        self._enter(WANDER_VERIFY, now)
+        return self._pack(
+            RcAxes(), zones, now, event=event, sub=sub,
             yaw_mode="yaw_dead_reckon" if self._yaw_dead_reckon else "",
         )
 
@@ -390,8 +425,21 @@ class WanderPolicy:
         mid: float,
         depth_ts: Optional[float],
     ) -> WanderDecision:
-        # 超时 → 同向追加转角
+        # 超时：前方已不构成障碍则降级放行，否则同向追加转角。
+        # clear_thresh..turn_thresh 之间是灰区——不够 clear 放行不了，又没近到
+        # CRUISE 要转向的程度。原实现超时无条件 retry，灰区里必然死循环
+        # （2026-07-28 铁丝笼二飞 8 次 retry，mid 稳在 0.41~0.56）。灰区是迟滞
+        # 的必然产物，收窄迟滞只会换成墙前抽搐，故只能给超时开出口。
+        # 偏离规格 §5 状态图与 §9.1 验收项 6，主人 2026-07-28 裁定，
+        # 见 docs/dev-notes/2026-07-28-wander-verify-graylock.md
         if now - self._state_entered >= self.p.verify_timeout_s:
+            if mid < self.p.turn_thresh:
+                self._enter(WANDER_CRUISE, now)
+                self._begin_cruise_segment(now, event=True)
+                return self._pack(
+                    RcAxes(), zones, now, event=self._pop_event(),
+                    sub="verify_timeout_pass",
+                )
             return self._start_retry_turn(zones, now)
 
         # 只认 turn_end_ts 之后的新深度帧
@@ -425,6 +473,9 @@ class WanderPolicy:
         if new_depth and danger <= self.p.danger_thresh:
             self._danger_since = None
             self._danger_hold_depth_s = 0.0
+            # 恢复 TURN 时丢弃暂停时长，避免 dead-reckon 空转到位
+            if self._resume_after_danger == WANDER_TURN:
+                self._turn_last_tick = now
             self._enter(self._resume_after_danger, now)
             return self._pack(RcAxes(), zones, now, sub="danger_clear")
 
@@ -494,31 +545,32 @@ class WanderPolicy:
         yaw_cmd = self.p.pano_yaw_speed
 
         if self._pano_phase == "scan":
-            if self._pano_start_t <= 0.0:
+            if self._pano_start_t is None:
                 self._pano_start_t = now
             if self._pano_start_yaw is None and cur_yaw is not None:
                 self._pano_start_yaw = cur_yaw
                 self._pano_last_yaw = cur_yaw
                 self._pano_travel_deg = 0.0
             if cur_yaw is not None and self._pano_last_yaw is not None:
-                # 累计有符号最短角差，避免跨 360° 跳变漏判完成
+                # 有符号累加；噪声死区以下不推进 last_yaw（避免慢转被滤掉）
                 step = _yaw_delta(cur_yaw, self._pano_last_yaw)
-                # 慢转全景期望同向；取绝对值累加行程
-                self._pano_travel_deg += abs(step)
-                self._pano_last_yaw = cur_yaw
+                if abs(step) >= self.p.pano_step_deadband_deg:
+                    self._pano_travel_deg += step
+                    self._pano_last_yaw = cur_yaw
             if new_depth and cur_yaw is not None:
                 self._pano_samples.append((cur_yaw, mid))
 
-            timed_out = (now - self._pano_start_t) >= self.p.pano_timeout_s
+            start_t = self._pano_start_t if self._pano_start_t is not None else now
+            timed_out = (now - start_t) >= self.p.pano_timeout_s
             scanned = False
             if cur_yaw is not None and self._pano_start_yaw is not None:
                 scanned = (
-                    self._pano_travel_deg >= self.p.pano_complete_deg
-                    and (now - self._pano_start_t) >= self.p.pano_min_s
+                    abs(self._pano_travel_deg) >= self.p.pano_complete_deg
+                    and (now - start_t) >= self.p.pano_min_s
                 )
             else:
                 rate = abs(yaw_cmd) * self.p.yaw_dead_reckon_dps_per_unit
-                scanned = (now - self._pano_start_t) * rate >= 360.0
+                scanned = (now - start_t) * rate >= 360.0
             scanned = scanned or timed_out
 
             if scanned:
@@ -530,9 +582,9 @@ class WanderPolicy:
                     best_yaw = 0.0
                 self._pano_target_yaw = best_yaw
                 self._pano_phase = "seek"
+                self._pano_seek_started = now
                 self._pending_event = f"PANO({best_yaw:.1f})"
                 self.panos_total += 1
-                self._pano_done_in_window = True
                 event = self._pop_event()
 
             return self._pack(
@@ -540,25 +592,19 @@ class WanderPolicy:
                 sub=f"pano_scan n={len(self._pano_samples)}",
             )
 
-        # seek：转到选定朝向
+        # seek：转到选定朝向 → 必须进 VERIFY（P0-1）
+        seek_t0 = self._pano_seek_started if self._pano_seek_started is not None else now
         if cur_yaw is None or self._pano_target_yaw is None:
-            # 无遥测：短时转完即回 cruise
-            if now - self._state_entered > 2.0:
-                self._enter(WANDER_CRUISE, now)
-                self._begin_cruise_segment(now, event=True)
-                return self._pack(
-                    RcAxes(), zones, now, event=self._pop_event(),
-                    sub="pano_seek_timeout",
+            if now - seek_t0 > 2.0:
+                return self._enter_verify(
+                    zones, now, event=event, sub="pano_seek_timeout", mark_pano_done=True,
                 )
             return self._pack(RcAxes(yaw=yaw_cmd), zones, now, event=event, sub="pano_seek")
 
         err = _yaw_delta(self._pano_target_yaw, cur_yaw)
         if abs(err) <= self.p.turn_arrive_tol_deg:
-            self._enter(WANDER_CRUISE, now)
-            self._begin_cruise_segment(now, event=True)
-            return self._pack(
-                RcAxes(), zones, now, event=self._pop_event(),
-                sub="pano_done",
+            return self._enter_verify(
+                zones, now, event=event, sub="pano_done", mark_pano_done=True,
             )
         yaw = int(np.sign(err) * self.p.pano_yaw_speed) or self.p.pano_yaw_speed
         return self._pack(RcAxes(yaw=yaw), zones, now, event=event, sub=f"pano_seek e={err:.0f}")
@@ -569,8 +615,11 @@ class WanderPolicy:
         self, zones: tuple[float, float, float], now: float
     ) -> WanderDecision:
         self._prune_corner_window(now)
-        # 全景选向后，窗口内再遇障触发 → abort（不要求凑满 4 次旧计数）
-        if self._pano_done_in_window:
+        # PANO 完成后 corner_window_s 内再遇障 → abort（与旧转向时间戳解耦）
+        if (
+            self._pano_done_at is not None
+            and now - self._pano_done_at <= self.p.corner_window_s
+        ):
             self.corner_aborts += 1
             return WanderDecision(
                 axes=RcAxes(),
@@ -583,7 +632,7 @@ class WanderPolicy:
         # 第 corner_max_turns 次遇障转向 → 全景选向
         if len(self._obstacle_turn_times) + 1 >= self.p.corner_max_turns:
             self._obstacle_turn_times.append(now)
-            self.turns_total += 1
+            self.turns_total += 1  # 计遇障触发；PANO 本身另计 panos_total
             self._pano_phase = "scan"
             self._pano_samples = []
             self._pano_start_yaw = None
@@ -591,6 +640,7 @@ class WanderPolicy:
             self._pano_travel_deg = 0.0
             self._pano_target_yaw = None
             self._pano_start_t = now
+            self._pano_seek_started = None
             self._enter(WANDER_PANO, now)
             return self._pack(
                 RcAxes(yaw=self.p.pano_yaw_speed),
@@ -621,6 +671,8 @@ class WanderPolicy:
         self._turn_reason = "retry"
         self._turn_start_yaw = None
         self._turn_start_t = now
+        self._turn_yaw_elapsed = 0.0
+        self._turn_last_tick = now
         self._yaw_dead_reckon = False
         self._turn_confirm = 0
         self.turns_total += 1
@@ -647,6 +699,8 @@ class WanderPolicy:
         # 在 arm 帧锁定起始 yaw，避免下一帧才采样导致转角少算一拍
         self._turn_start_yaw = self._read_yaw(self._tel)
         self._turn_start_t = now
+        self._turn_yaw_elapsed = 0.0
+        self._turn_last_tick = now
         self._yaw_dead_reckon = self._turn_start_yaw is None
         self._turn_confirm = 0
         self.turns_total += 1
@@ -693,8 +747,8 @@ class WanderPolicy:
     def _prune_corner_window(self, now: float) -> None:
         w = self.p.corner_window_s
         self._obstacle_turn_times = [t for t in self._obstacle_turn_times if now - t <= w]
-        if not self._obstacle_turn_times:
-            self._pano_done_in_window = False
+        if self._pano_done_at is not None and now - self._pano_done_at > w:
+            self._pano_done_at = None
 
     # ── 高度 / 遥测 / 深度帧 ──────────────────────────────────
 
@@ -710,18 +764,33 @@ class WanderPolicy:
             return 0
         return int(self._alt_throttle)
 
-    def _apply_h_clamp(self, throttle: int, telemetry: dict[str, str]) -> int:
-        if self._h_latch_zero:
-            return 0
+    def _apply_h_clamp(
+        self, throttle: int, telemetry: dict[str, str], now: float
+    ) -> int:
         h = self._read_h(telemetry)
+
+        # 闩锁中：连续读到 h 满 h_missing_s → 解除（主人裁定可恢复）
+        if self._h_latch_zero:
+            if h is None:
+                self._h_recover_since = None
+                return 0
+            if self._h_recover_since is None:
+                self._h_recover_since = now
+            if now - self._h_recover_since < self.p.h_missing_s:
+                return 0
+            self._h_latch_zero = False
+            self._h_recover_since = None
+            self._h_missing_since = None
+
         if h is None:
-            self._h_missing += 1
-            if self._h_missing >= self.p.h_missing_frames:
+            self._h_recover_since = None
+            if self._h_missing_since is None:
+                self._h_missing_since = now
+            elif now - self._h_missing_since >= self.p.h_missing_s:
                 self._h_latch_zero = True
             return 0
-        self._h_missing = 0
-        if h < self.p.h_min_cm or h > self.p.h_max_cm:
-            return 0
+        self._h_missing_since = None
+        # 单向钳制：出带只禁止继续偏离，允许回到巡航带
         if h >= self.p.h_max_cm and throttle > 0:
             return 0
         if h <= self.p.h_min_cm and throttle < 0:
@@ -779,7 +848,7 @@ class WanderPolicy:
         else:
             pitch = -abs(self.p.retreat_pitch) if pitch < 0 else 0
 
-        throttle = self._apply_h_clamp(throttle, self._tel)
+        throttle = self._apply_h_clamp(throttle, self._tel, now)
 
         return WanderDecision(
             axes=RcAxes(roll=roll, pitch=pitch, throttle=throttle, yaw=yaw),
