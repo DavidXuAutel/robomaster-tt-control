@@ -21,3 +21,5 @@ gesture_profiles/
 tt_control.bak-*/
 .pytest_cache/
 tmp/
+.claude/settings.local.json
+.claude/.cc-writes/

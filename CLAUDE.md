@@ -121,3 +121,19 @@ server/
 | `docs/design/2026-07-27-wander-explore-design.md` | 随机漫游（Wander）实现规格书（仅 Claude 可改） |
 | `docs/design/2026-07-17-tt-visual-avoidance-design.md` | 避障系统设计说明 |
 | `docs/README.md` | 完整文档索引 |
+
+## Aerial WAM 训练线（2026-07-29）
+
+本仓库还承载 aerial WAM 导航训练（OpenFly/AirSim）的设计与交接文档，代码在 FastWAM worktree `aerial-b0-b1-orchestration`。
+
+- **当前状态**：B0→B1 编排；v1 的 B1 FT 停在 **step_002250/5000**（`ft.status=FAILED`，correction-rate 门禁），且 B1 整体未超过 B0（B0 SR=0/NE≈134）。
+- **v2 重设计（从头训 B0）**：`docs/design/2026-07-29-aerial-nav-wam-redesign.md`（模型/数据/评测/训练全规格 + 主机 bring-up/启动 SOP）。
+- **v1 交接**：`docs/handover/2026-07-29-aerial-b0-b1-orchestration-handover.md`。
+- 训练主机 `:31126`（1 机 2×H100，从头训），评测 `:30682`（1×H100 + AirSim）。
+- Artifacts：`artifacts/b1_seen20_metrics_*.json`、`artifacts/b1_loss_history_through_2400.json`、`artifacts/loss_curve_b1_*.png`。
+
+## Prior Cursor history
+
+本项目从 Cursor 迁移到 Claude Code 的历史对话（306 conversations / 17493 messages / 8.1 MB）在
+`~/.cursor-history/robomaster-tt-control/cursor-history.md`。需要过往决策上下文时先 grep 该文件。
+近期话题："WAM drone navigation cases"、"B0→B1 编排实现"、"推理仿真烟测"、"Update FT host to H100"。
