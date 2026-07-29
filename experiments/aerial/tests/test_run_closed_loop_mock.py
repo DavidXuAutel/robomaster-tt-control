@@ -173,6 +173,33 @@ def test_eval_overrides_append_env_extras(monkeypatch):
     assert overrides[-2:] == ["model.foo=1", "data.train.num_frames=9"]
 
 
+def test_evaluate_episodes_builds_policy_once(monkeypatch):
+    """Regression: rebuilding Wan2.2 every episode OOMs on episode 2."""
+    episodes = load_annotation(FIXTURE)
+    assert len(episodes) >= 2
+
+    calls: list[int] = []
+
+    def fake_build_policy(policy_name, episode, **kwargs):
+        calls.append(1)
+        return ReplayPolicy(episode.get("action", []) or [0])
+
+    monkeypatch.setattr(
+        "experiments.aerial.eval.run_closed_loop.build_policy",
+        fake_build_policy,
+    )
+    metrics = evaluate_episodes(
+        episodes[:2],
+        bridge_name="mock",
+        policy_name="fastwam",
+        max_steps=20,
+        checkpoint=Path("/tmp/unused.pt"),
+        seed=0,
+    )
+    assert len(calls) == 1
+    assert metrics["n"] == 2.0
+
+
 def test_mock_metrics_reproducible_with_seed():
     episodes = load_annotation(FIXTURE)
     first = evaluate_episodes(

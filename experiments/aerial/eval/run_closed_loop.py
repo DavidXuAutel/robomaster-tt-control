@@ -440,19 +440,29 @@ def evaluate_episodes(
     nes: list[float] = []
     episode_records: list[dict[str, Any]] = []
 
+    if not episodes:
+        metrics = compute_sr_ne_spl(successes, path_lengths, shortest_lengths, nes)
+        metrics["n"] = 0.0
+        metrics["episodes"] = episode_records
+        return metrics
+
+    # Build the policy once for the whole eval. Instantiating Wan2.2 per episode
+    # keeps the previous model alive until the next assignment succeeds, so the
+    # second episode OOMs while loading the text encoder.
+    policy = build_policy(
+        policy_name,
+        episodes[0],
+        checkpoint=checkpoint,
+        task=task,
+        seed=seed,
+    )
+
     for index, episode in enumerate(episodes):
         env_name = _episode_env_name(episode)
         bridge = build_bridge(
             bridge_name,
             openfly_root=openfly_root,
             env_name=env_name,
-            seed=seed,
-        )
-        policy = build_policy(
-            policy_name,
-            episode,
-            checkpoint=checkpoint,
-            task=task,
             seed=seed,
         )
         episode_id = _episode_id(episode, index)
