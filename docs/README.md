@@ -20,6 +20,7 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 | 改环绕（Orbit）代码或参数 | `design/2026-07-27-orbit-control-principles.md`（仅 Claude 可改） |
 | 改漫游（Wander）代码或参数 | `design/2026-07-27-wander-explore-design.md`（仅 Claude 可改） |
 | 了解项目全部能力 | `handover/2026-07-25-capability-inventory.md` |
+| 空地协同（无人机×机器狗）演示 | `handover/2026-07-30-air-ground-phased-gates.md` + `design/2026-07-30-air-ground-mission-architecture.md` |
 
 ## 现有文档
 
@@ -33,6 +34,7 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-25-wam-training-scenarios.md` — WAM 世界模型训练场景规划：21 个飞行场景分类 + 数据采集管线设计
 - `2026-07-27-orbit-control-principles.md` — **POI 环绕模块设计原则与参数守则**（安全不变量 + 历史坑 + 参数安全范围；**仅 Claude 可改**）
 - `2026-07-27-wander-explore-design.md` — **随机漫游模块实现规格书**（含分工与验收阶梯；**仅 Claude 可改**）
+- `2026-07-30-air-ground-mission-architecture.md` — 空地协同 MissionBrain 架构说明（语义地图 + 事件契约 + 适配器边界）
 
 ### dev-notes/ — 开发过程笔记
 - `2026-07-18-avoidance-dev-notes.md` — 视觉避障离线开发说明
@@ -64,6 +66,7 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-23-morning-flight-checklist.md` — 新服务器开飞清单
 - `2026-07-25-orbit-avoidance-handover.md` — POI 环绕避障开发交接：视觉伺服居中 + 环绕飞行，含完整参数、调试记录、启动命令
 - `2026-07-25-capability-inventory.md` — 能力清单总览：11 个模块、所有键盘映射、FSM 状态、安全保护、参数表
+- `2026-07-30-air-ground-phased-gates.md` — 空地协同分阶段验收门 G0–G5（契约/狗/机/交接/气检/端到端）
 
 ### references/ — 外部参考
 - `2026-07-20-scoutxwam-world-model-analysis.md` / `.html` — ScoutXWAM 世界模型技术方案分析

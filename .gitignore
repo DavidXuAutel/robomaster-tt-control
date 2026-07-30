@@ -21,3 +21,4 @@ gesture_profiles/
 tt_control.bak-*/
 .pytest_cache/
 tmp/
+data/mission_evidence/
