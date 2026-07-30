@@ -108,6 +108,11 @@ def test_evaluate_episodes_preserves_per_episode_metrics():
         "path_length",
         "shortest_length",
         "steps",
+        "closest_approach",
+        "terminated_by",
+        "oracle_hit@20",
+        "oracle_hit@30",
+        "oracle_hit@40",
     }
 
 
@@ -437,3 +442,146 @@ def test_mock_metrics_reproducible_with_seed():
         seed=99,
     )
     assert first == second
+
+
+# ---------------------------------------------------------------------------
+# Stage-0 oracle-stop + closest-approach diagnostics
+# ---------------------------------------------------------------------------
+
+# Never stops on its own: emits the same forward primitive forever. Reproduces
+# the b0_v2 failure mode (fwd-only, flies past the goal) so the oracle-stop and
+# closest-approach diagnostics have something realistic to measure.
+class _ForwardPolicy:
+    def __init__(self, primitive: int = 1) -> None:
+        self._primitive = int(primitive)
+
+    def reset(self) -> None:
+        return None
+
+    def predict_primitive(self, obs_rgb, state, instruction):
+        del obs_rgb, state, instruction
+        return self._primitive
+
+
+def _line_episode(goal_x: float) -> dict:
+    """Goal straight ahead on +x; fwd3 (primitive 1) marches toward it."""
+    return {
+        "pos": [[0.0, 0.0, 0.0], [goal_x, 0.0, 0.0]],
+        "yaw": [0.0, 0.0],
+        "gpt_instruction": "fly forward",
+    }
+
+
+def _sideways_episode(goal_y: float) -> dict:
+    """Goal off to the side; a fwd-only (+x) policy never approaches it."""
+    return {
+        "pos": [[0.0, 0.0, 0.0], [0.0, goal_y, 0.0]],
+        "yaw": [0.0, 0.0],
+        "gpt_instruction": "fly forward",
+    }
+
+
+def test_oracle_stop_terminates_within_success_dist():
+    # Goal at x=30; fwd3 steps: dist 27,24,21,18(<20). Stops the moment it
+    # enters SUCCESS_DIST (20 m), succeeds, and reports why it stopped.
+    episode = _line_episode(30.0)
+    result = run_episode(
+        MockBridge(seed=1), _ForwardPolicy(), episode, max_steps=100, oracle_stop=True
+    )
+    assert result.terminated_by == "oracle_stop"
+    assert result.success
+    assert result.steps == 4
+    assert result.closest_approach == pytest.approx(18.0, abs=1e-6)
+
+
+def test_without_oracle_stop_flies_past_but_closest_approach_records_the_miss():
+    # Same fwd-only policy, no oracle stop: it flies straight through the goal
+    # to x=300, so NE is huge and it FAILS — yet closest_approach ~= 0 proves
+    # the trajectory did pass through. This is the never-stops diagnostic.
+    episode = _line_episode(30.0)
+    result = run_episode(
+        MockBridge(seed=1), _ForwardPolicy(), episode, max_steps=100, oracle_stop=False
+    )
+    assert result.terminated_by == "max_steps"
+    assert not result.success
+    assert result.navigation_error == pytest.approx(270.0, abs=1e-6)
+    assert result.closest_approach == pytest.approx(0.0, abs=1e-6)
+    assert result.steps == 100
+
+
+def test_closest_approach_records_heading_miss_when_goal_never_approached():
+    # Goal 100 m to the side; a fwd-only policy only increases the distance.
+    # closest_approach stays at the start distance -> oracle stop can't help.
+    # This is the heading/goal-conditioning failure (root cause #2).
+    episode = _sideways_episode(100.0)
+    result = run_episode(
+        MockBridge(seed=1), _ForwardPolicy(), episode, max_steps=50, oracle_stop=True
+    )
+    assert result.terminated_by == "max_steps"
+    assert not result.success
+    assert result.closest_approach == pytest.approx(100.0, abs=1e-6)
+
+
+def test_evaluate_episodes_emits_stage0_diagnostics(monkeypatch):
+    episodes = [_line_episode(30.0), _sideways_episode(100.0)]
+
+    monkeypatch.setattr(
+        "experiments.aerial.eval.run_closed_loop.build_policy",
+        lambda *a, **kw: _ForwardPolicy(),
+    )
+    metrics = evaluate_episodes(
+        episodes,
+        bridge_name="mock",
+        policy_name="fastwam",
+        max_steps=100,
+        checkpoint=Path("/tmp/unused.pt"),
+        seed=0,
+        oracle_stop=True,
+    )
+
+    assert metrics["protocol_version"] == "stage0-oracle-v1"
+    assert metrics["oracle_stop"] is True
+    # One episode enters 20 m (oracle stop), the other never does (times out).
+    assert metrics["oracle_hit@20"] == pytest.approx(0.5)
+    assert metrics["n_oracle_stop"] == 1.0
+    assert metrics["n_max_steps"] == 1.0
+    assert metrics["n_oracle_stop"] + metrics["n_stop_primitive"] + metrics[
+        "n_max_steps"
+    ] == metrics["n"]
+    assert np.isfinite(metrics["closest_approach_mean"])
+    assert np.isfinite(metrics["closest_approach_median"])
+
+
+def test_write_metrics_preserves_protocol_version_string(tmp_path):
+    episodes = [_line_episode(30.0)]
+    metrics = evaluate_episodes(
+        episodes,
+        bridge_name="mock",
+        policy_name="replay",
+        max_steps=50,
+        seed=0,
+        oracle_stop=True,
+    )
+    out = tmp_path / "metrics.json"
+    write_metrics(metrics, out)
+    loaded = json.loads(out.read_text())
+    # String / bool keys must survive the float coercion in write_metrics.
+    assert loaded["protocol_version"] == "stage0-oracle-v1"
+    assert loaded["oracle_stop"] is True
+    assert isinstance(loaded["closest_approach_mean"], float)
+    assert loaded["episodes"][0]["terminated_by"] in {
+        "oracle_stop",
+        "stop_primitive",
+        "max_steps",
+    }
+
+
+def test_default_behavior_unchanged_without_oracle_stop():
+    # Regression guard: the replay success path must be identical to before —
+    # oracle_stop defaults to off and does not perturb NE / steps / success.
+    episode = load_annotation(FIXTURE)[0]
+    result = run_episode(MockBridge(seed=7), ReplayPolicy(episode["action"]), episode, max_steps=20)
+    assert result.success
+    assert result.navigation_error == pytest.approx(0.0, abs=1e-5)
+    assert result.terminated_by == "stop_primitive"
+    assert result.closest_approach == pytest.approx(0.0, abs=1e-5)

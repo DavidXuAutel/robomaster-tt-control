@@ -14,6 +14,12 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 # episode). Off by default so normal gate eval pays no extra VAE decode.
 DUMP_WM_FRAMES="${DUMP_WM_FRAMES:-0}"
 WM_DUMP_EVERY="${WM_DUMP_EVERY:-0}"
+# Stage-0 diagnostic. ORACLE_STOP=1 terminates each episode as success the moment
+# the drone enters SUCCESS_DIST of the ground-truth goal — measures the oracle-stop
+# SR ceiling for the current (never-stops) policy. Off by default: normal gate eval
+# uses the learned stop primitive. closest_approach / oracle_hit@20/30/40 are logged
+# either way, so a plain gate run already gets the closest-approach diagnostic.
+ORACLE_STOP="${ORACLE_STOP:-0}"
 RUN_ONCE=0
 DRY_RUN=0
 
@@ -99,6 +105,9 @@ run_job() {
   )
   if [[ "$DUMP_WM_FRAMES" == "1" ]]; then
     command+=(--dump-wm-frames --wm-dump-every "$WM_DUMP_EVERY")
+  fi
+  if [[ "$ORACLE_STOP" == "1" ]]; then
+    command+=(--oracle-stop)
   fi
 
   local eval_rc

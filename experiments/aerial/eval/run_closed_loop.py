@@ -16,6 +16,15 @@ from experiments.aerial.openfly_actions import primitive_to_delta, wrap_angle
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# Bumped whenever the eval protocol changes so stale metrics.json can be told
+# apart from runs of the current runner. Written into every metrics payload.
+EVAL_PROTOCOL_VERSION = "stage0-oracle-v1"
+
+# Closest-approach diagnostic buckets. 20 m == OPENFLY_SUCCESS_DIST_M, so
+# oracle_hit@20 is the oracle-stop SR ceiling; 30/40 show how far off the near
+# misses are. Logged every run, independent of --oracle-stop.
+ORACLE_HIT_THRESHOLDS_M = (20.0, 30.0, 40.0)
+
 
 def _repo_root() -> Path:
     return REPO_ROOT
@@ -346,6 +355,12 @@ class EpisodeResult:
     shortest_length: float
     navigation_error: float
     steps: int
+    # Minimum distance the trajectory ever got to the goal (over every visited
+    # pose incl. start). oracle_hit@X derives from this; it's the diagnostic
+    # that separates "never stops" from "never even passes near the goal".
+    closest_approach: float
+    # How the episode ended: "stop_primitive" | "oracle_stop" | "max_steps".
+    terminated_by: str
 
 
 def run_episode(
@@ -358,6 +373,7 @@ def run_episode(
     frame_prefix: str = "ep",
     dump_wm: bool = False,
     wm_dump_every: int = 0,
+    oracle_stop: bool = False,
 ) -> EpisodeResult:
     positions = np.asarray(episode["pos"], dtype=np.float64)
     goal_pos = positions[-1]
@@ -371,16 +387,27 @@ def run_episode(
     save_frames = dump_dir is not None and not isinstance(bridge, MockBridge)
 
     instruction = str(episode.get("gpt_instruction", ""))
-    visited = [bridge.state()[:3].astype(np.float64).copy()]
+    start_pos = bridge.state()[:3].astype(np.float64).copy()
+    visited = [start_pos]
+    closest_approach = float(np.linalg.norm(start_pos - goal_pos))
     steps = 0
     primitive = -1
+    terminated_by = "max_steps"
 
     # Dump the world-model's generated clip only when we have a real dump target
     # and the policy can produce one. Default cadence = step 0 of each episode
     # (one extra VAE decode per episode); wm_dump_every>0 also samples mid-rollout.
     wm_capable = dump_wm and save_frames and hasattr(policy, "dump_video")
 
-    while steps < max_steps:
+    # Stage-0 oracle stop is an EVAL-SIDE DIAGNOSTIC: it uses the ground-truth
+    # goal (which a deployed policy would not have) to terminate the instant the
+    # drone enters SUCCESS_DIST. It measures the SR ceiling a perfect learned
+    # stop could reach for THIS policy — it is not itself a learned capability.
+    # closest_approach / oracle_hit are recorded regardless of the flag.
+    if oracle_stop and closest_approach < OPENFLY_SUCCESS_DIST_M:
+        terminated_by = "oracle_stop"
+
+    while steps < max_steps and terminated_by != "oracle_stop":
         rgb = bridge.render()
         if save_frames:
             _save_frame(dump_dir, f"{frame_prefix}_step{steps:04d}.png", rgb)
@@ -401,10 +428,17 @@ def run_episode(
                 _save_wm_clip(dump_dir, f"{frame_prefix}_wm_step{steps:04d}", gen)
 
         if primitive == 0:
+            terminated_by = "stop_primitive"
             break
         bridge.step(primitive)
-        visited.append(bridge.state()[:3].astype(np.float64).copy())
+        new_pos = bridge.state()[:3].astype(np.float64).copy()
+        visited.append(new_pos)
+        goal_dist = float(np.linalg.norm(new_pos - goal_pos))
+        closest_approach = min(closest_approach, goal_dist)
         steps += 1
+        if oracle_stop and goal_dist < OPENFLY_SUCCESS_DIST_M:
+            terminated_by = "oracle_stop"
+            break
 
     if save_frames:
         assert dump_dir is not None
@@ -420,7 +454,9 @@ def run_episode(
         path_length=path_length,
         shortest_length=shortest_length,
         navigation_error=navigation_error,
-        steps=steps if primitive != 0 else steps,
+        steps=steps,
+        closest_approach=closest_approach,
+        terminated_by=terminated_by,
     )
 
 
@@ -537,16 +573,21 @@ def evaluate_episodes(
     dump_frames: Optional[Path] = None,
     dump_wm: bool = False,
     wm_dump_every: int = 0,
+    oracle_stop: bool = False,
 ) -> dict[str, Any]:
     successes: list[bool] = []
     path_lengths: list[float] = []
     shortest_lengths: list[float] = []
     nes: list[float] = []
+    closest_list: list[float] = []
+    terminated: list[str] = []
     episode_records: list[dict[str, Any]] = []
 
     if not episodes:
         metrics = compute_sr_ne_spl(successes, path_lengths, shortest_lengths, nes)
         metrics["n"] = 0.0
+        metrics["protocol_version"] = EVAL_PROTOCOL_VERSION
+        metrics["oracle_stop"] = bool(oracle_stop)
         metrics["episodes"] = episode_records
         return metrics
 
@@ -580,6 +621,7 @@ def evaluate_episodes(
                 frame_prefix=f"{index:03d}_{_safe_name(episode_id)}",
                 dump_wm=dump_wm,
                 wm_dump_every=wm_dump_every,
+                oracle_stop=oracle_stop,
             )
         finally:
             bridge.close()
@@ -588,6 +630,8 @@ def evaluate_episodes(
         path_lengths.append(result.path_length)
         shortest_lengths.append(result.shortest_length)
         nes.append(result.navigation_error)
+        closest_list.append(result.closest_approach)
+        terminated.append(result.terminated_by)
         episode_records.append(
             {
                 "episode_id": episode_id,
@@ -596,11 +640,30 @@ def evaluate_episodes(
                 "path_length": result.path_length,
                 "shortest_length": result.shortest_length,
                 "steps": result.steps,
+                "closest_approach": result.closest_approach,
+                "terminated_by": result.terminated_by,
+                **{
+                    f"oracle_hit@{int(t)}": bool(result.closest_approach < t)
+                    for t in ORACLE_HIT_THRESHOLDS_M
+                },
             }
         )
 
     metrics = compute_sr_ne_spl(successes, path_lengths, shortest_lengths, nes)
     metrics["n"] = float(len(episodes))
+    metrics["protocol_version"] = EVAL_PROTOCOL_VERSION
+    metrics["oracle_stop"] = bool(oracle_stop)
+    # Closest-approach diagnostics: distinguish "never terminates" (fix stop)
+    # from "never passes near the goal" (fix heading / goal-conditioning).
+    metrics["closest_approach_mean"] = float(np.mean(closest_list))
+    metrics["closest_approach_median"] = float(np.median(closest_list))
+    for t in ORACLE_HIT_THRESHOLDS_M:
+        metrics[f"oracle_hit@{int(t)}"] = float(
+            np.mean([c < t for c in closest_list])
+        )
+    metrics["n_oracle_stop"] = float(terminated.count("oracle_stop"))
+    metrics["n_stop_primitive"] = float(terminated.count("stop_primitive"))
+    metrics["n_max_steps"] = float(terminated.count("max_steps"))
     metrics["episodes"] = episode_records
     return metrics
 
@@ -609,7 +672,9 @@ def write_metrics(metrics: dict[str, Any], out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {}
     for key, value in metrics.items():
-        if key == "episodes":
+        # episodes is a list; protocol_version is a str; oracle_stop is a bool.
+        # Only coerce the numeric scalars to float.
+        if key == "episodes" or isinstance(value, (str, bool)):
             payload[key] = value
         else:
             payload[key] = float(value)
@@ -651,6 +716,15 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Dump the world-model clip every N closed-loop steps (0 = only step "
         "0 per episode). Each dump costs one extra VAE decode.",
     )
+    parser.add_argument(
+        "--oracle-stop",
+        action="store_true",
+        help="Stage-0 diagnostic: terminate an episode as success the moment the "
+        "drone enters SUCCESS_DIST of the ground-truth goal. Uses the true goal "
+        "(not a learned stop) to measure the oracle-stop SR ceiling for the "
+        "current policy. closest_approach and oracle_hit@20/30/40 are logged "
+        "either way.",
+    )
     return parser.parse_args(argv)
 
 
@@ -674,6 +748,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         dump_frames=args.dump_frames,
         dump_wm=bool(args.dump_wm_frames),
         wm_dump_every=int(args.wm_dump_every),
+        oracle_stop=bool(args.oracle_stop),
     )
     write_metrics(metrics, args.out)
     print(json.dumps(metrics, indent=2))
