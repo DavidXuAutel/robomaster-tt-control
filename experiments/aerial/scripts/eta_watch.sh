@@ -45,7 +45,11 @@ mkdir -p "$LOG_DIR"
 
 pick_log() {
   if [[ -n "$LOG" ]]; then printf '%s\n' "$LOG"; return; fi
-  ls -t "$LOG_DIR"/train_*.log 2>/dev/null | head -1
+  # prefer train_*.log; fall back to the newest *.log in LOG_DIR (run dirs vary)
+  local f
+  f="$(ls -t "$LOG_DIR"/train_*.log 2>/dev/null | head -1)"
+  [[ -z "$f" ]] && f="$(ls -t "$LOG_DIR"/*.log 2>/dev/null | head -1)"
+  printf '%s\n' "$f"
 }
 
 hms() { local s=$1; (( s < 0 )) && s=0; printf '%02d:%02d:%02d' $((s/3600)) $(((s%3600)/60)) $((s%60)); }
@@ -67,17 +71,22 @@ while :; do
     [[ "$ONESHOT" == 1 ]] && exit 0; sleep "$INTERVAL"; continue
   fi
 
-  tl="$(grep -aE '\[train\] .*step=[0-9]+/' "$logf" | tail -1)"
-  if [[ -z "$tl" ]]; then
-    emit "[$nowh] $logf: no [train] step line yet (torch compile / warmup in progress)"
+  # The trainer logs one progress block per interval. Depending on the logger
+  # (plain vs Rich console->file), fields may share a line OR be wrapped across
+  # several physical lines, and the "[train]" tag may be dropped in rendering.
+  # So grep each field independently and take the newest match — no assumption
+  # about shared lines or prefix. step=N/M carries the slash; the [eval] line's
+  # step=N has none, so matching "step=N/M" selects train blocks only.
+  sp="$(grep -aoE 'step=[0-9]+/[0-9]+' "$logf" | tail -1)"
+  if [[ -z "$sp" ]]; then
+    emit "[$nowh] $logf: no train step line yet (torch compile / warmup in progress)"
     [[ "$ONESHOT" == 1 ]] && exit 0; sleep "$INTERVAL"; continue
   fi
-
-  cur="$(sed -nE 's/.*step=([0-9]+)\/.*/\1/p'        <<<"$tl")"
-  mx="$( sed -nE 's/.*step=[0-9]+\/([0-9]+).*/\1/p'  <<<"$tl")"
-  spd="$(sed -nE 's/.*speed=([0-9.]+) step\/s.*/\1/p' <<<"$tl")"
-  loss="$(sed -nE 's/.* loss=([0-9.eE+-]+).*/\1/p'   <<<"$tl")"
-  logeta="$(sed -nE 's/.*eta=([0-9:]+).*/\1/p'       <<<"$tl")"
+  cur="${sp#step=}"; cur="${cur%/*}"
+  mx="${sp#*/}"
+  spd="$(grep -aoE 'speed=[0-9.]+ step/s' "$logf" | tail -1 | sed -nE 's/speed=([0-9.]+).*/\1/p')"
+  loss="$(grep -aoE 'loss=[0-9.eE+-]+' "$logf" | tail -1 | sed -nE 's/loss=//p')"
+  logeta="$(grep -aoE 'eta=[0-9:]+' "$logf" | tail -1 | sed -nE 's/eta=//p')"
   [[ -z "$spd" ]] && spd=0
 
   # cross-poll observed rate — more "current" than the log's cumulative speed=
