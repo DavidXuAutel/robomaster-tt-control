@@ -43,6 +43,7 @@ class FastWAMAerialPolicy:
         rand_device: str = "cpu",
         tiled: bool = False,
         num_video_frames: Optional[int] = None,
+        dump_video: bool = False,
     ) -> None:
         self.model = model
         self.processor = processor
@@ -56,6 +57,11 @@ class FastWAMAerialPolicy:
         self.rand_device = str(rand_device)
         self.tiled = bool(tiled)
         self._num_video_frames = num_video_frames
+        # When True, infer_action also returns the decoded world-model video; the
+        # most recent clip (list[PIL.Image]) is stashed here for the eval runner to
+        # dump. The runner toggles dump_video per step to bound VAE-decode cost.
+        self.dump_video = bool(dump_video)
+        self.last_generated_frames: Optional[list[Any]] = None
 
     def _normalize_state(self, state: np.ndarray) -> torch.Tensor:
         if self.processor is None:
@@ -123,14 +129,18 @@ class FastWAMAerialPolicy:
             "rand_device": self.rand_device,
             "tiled": self.tiled,
         }
-        if (
-            self._num_video_frames is not None
-            and "num_video_frames" in inspect.signature(self.model.infer_action).parameters
-        ):
+        infer_params = inspect.signature(self.model.infer_action).parameters
+        if self._num_video_frames is not None and "num_video_frames" in infer_params:
             infer_kwargs["num_video_frames"] = int(self._num_video_frames)
+
+        want_video = self.dump_video and "return_video" in infer_params
+        if want_video:
+            infer_kwargs["return_video"] = True
 
         with torch.no_grad():
             pred = self.model.infer_action(**infer_kwargs)
+
+        self.last_generated_frames = pred.get("video") if want_video else None
 
         action_tensor = pred["action"]
         action_chunk = self._denormalize_action(action_tensor)

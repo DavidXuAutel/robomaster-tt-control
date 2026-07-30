@@ -8,6 +8,7 @@ from experiments.aerial.eval.run_closed_loop import (
     MockBridge,
     ReplayPolicy,
     _assemble_episode_mp4,
+    _save_wm_clip,
     apply_body_delta,
     eval_hydra_overrides,
     evaluate_episodes,
@@ -223,6 +224,155 @@ def test_dump_frames_skipped_for_mock_bridge(tmp_path):
     run_episode(bridge, policy, episode, max_steps=20, dump_dir=dump_dir)
     # Pseudo-RGB must never be dumped; dir stays empty (or is never created).
     assert not dump_dir.exists() or not any(dump_dir.iterdir())
+
+
+# A policy that mimics FastWAMAerialPolicy's world-model-frame contract: when
+# dump_video is on at predict time, it stashes a clip on last_generated_frames.
+class _WMPolicy:
+    def __init__(self, actions) -> None:
+        self._inner = ReplayPolicy(actions)
+        self.dump_video = False
+        self.last_generated_frames = None
+
+    def reset(self):
+        if hasattr(self._inner, "reset"):
+            self._inner.reset()
+
+    def predict_primitive(self, obs_rgb, state, instruction):
+        if self.dump_video:
+            self.last_generated_frames = [
+                np.full((8, 8, 3), 40 * i, dtype=np.uint8) for i in range(3)
+            ]
+        else:
+            self.last_generated_frames = None
+        return self._inner.predict_primitive(obs_rgb, state, instruction)
+
+
+@pytest.mark.skipif(not _have_image_writer(), reason="needs Pillow or opencv-python")
+def test_save_wm_clip_writes_pngs_and_mp4(tmp_path, monkeypatch):
+    frames = [np.full((8, 8, 3), 40 * i, dtype=np.uint8) for i in range(3)]
+    appended: list[object] = []
+
+    class _Writer:
+        def append_data(self, frame):
+            appended.append(frame)
+
+        def close(self):
+            return None
+
+    import sys
+    import types
+
+    fake_v2 = types.ModuleType("imageio.v2")
+    fake_v2.get_writer = lambda path, **kw: _Writer()
+    monkeypatch.setitem(sys.modules, "imageio", types.ModuleType("imageio"))
+    monkeypatch.setitem(sys.modules, "imageio.v2", fake_v2)
+
+    out = _save_wm_clip(tmp_path, "000_r0_wm_step0000", frames)
+    assert out == tmp_path / "000_r0_wm_step0000.mp4"
+    assert len(appended) == 3
+    pngs = sorted(tmp_path.glob("000_r0_wm_step0000_f*.png"))
+    assert [p.name for p in pngs] == [
+        "000_r0_wm_step0000_f00.png",
+        "000_r0_wm_step0000_f01.png",
+        "000_r0_wm_step0000_f02.png",
+    ]
+
+
+def test_save_wm_clip_noop_on_empty(tmp_path):
+    assert _save_wm_clip(tmp_path, "x_wm_step0000", []) is None
+    assert not any(tmp_path.iterdir())
+
+
+def test_run_episode_dumps_wm_clip_step0_only(tmp_path, monkeypatch):
+    episode = load_annotation(FIXTURE)[0]
+    dump_dir = tmp_path / "frames"
+    bridge = _NonMockBridge()
+    policy = _WMPolicy(episode["action"])
+
+    monkeypatch.setattr(
+        "experiments.aerial.eval.run_closed_loop._assemble_episode_mp4",
+        lambda dump, prefix, **kw: None,
+    )
+    wm_calls: list[str] = []
+    monkeypatch.setattr(
+        "experiments.aerial.eval.run_closed_loop._save_wm_clip",
+        lambda dump, prefix, frames, **kw: wm_calls.append(prefix),
+    )
+
+    run_episode(
+        bridge,
+        policy,
+        episode,
+        max_steps=20,
+        dump_dir=dump_dir,
+        frame_prefix="000",
+        dump_wm=True,
+    )
+    # Default cadence: exactly one world-model dump, at step 0.
+    assert wm_calls == ["000_wm_step0000"]
+    # dump_video must be turned back off after the step-0 capture.
+    assert policy.dump_video is False
+
+
+def test_run_episode_wm_dump_every_samples_midrollout(tmp_path, monkeypatch):
+    episode = load_annotation(FIXTURE)[0]
+    dump_dir = tmp_path / "frames"
+    bridge = _NonMockBridge()
+    policy = _WMPolicy(episode["action"])
+
+    monkeypatch.setattr(
+        "experiments.aerial.eval.run_closed_loop._assemble_episode_mp4",
+        lambda dump, prefix, **kw: None,
+    )
+    wm_calls: list[str] = []
+    monkeypatch.setattr(
+        "experiments.aerial.eval.run_closed_loop._save_wm_clip",
+        lambda dump, prefix, frames, **kw: wm_calls.append(prefix),
+    )
+
+    run_episode(
+        bridge,
+        policy,
+        episode,
+        max_steps=20,
+        dump_dir=dump_dir,
+        frame_prefix="000",
+        dump_wm=True,
+        wm_dump_every=2,
+    )
+    assert "000_wm_step0000" in wm_calls
+    assert "000_wm_step0002" in wm_calls
+    assert "000_wm_step0001" not in wm_calls
+
+
+def test_run_episode_no_wm_dump_when_disabled(tmp_path, monkeypatch):
+    episode = load_annotation(FIXTURE)[0]
+    dump_dir = tmp_path / "frames"
+    bridge = _NonMockBridge()
+    policy = _WMPolicy(episode["action"])
+
+    monkeypatch.setattr(
+        "experiments.aerial.eval.run_closed_loop._assemble_episode_mp4",
+        lambda dump, prefix, **kw: None,
+    )
+    wm_calls: list[str] = []
+    monkeypatch.setattr(
+        "experiments.aerial.eval.run_closed_loop._save_wm_clip",
+        lambda dump, prefix, frames, **kw: wm_calls.append(prefix),
+    )
+
+    run_episode(
+        bridge,
+        policy,
+        episode,
+        max_steps=20,
+        dump_dir=dump_dir,
+        frame_prefix="000",
+        dump_wm=False,
+    )
+    assert wm_calls == []
+    assert policy.dump_video is False
 
 
 def test_eval_overrides_use_local_wan22_and_text_encoder(monkeypatch):

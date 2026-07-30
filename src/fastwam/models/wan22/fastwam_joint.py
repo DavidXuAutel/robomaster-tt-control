@@ -109,6 +109,7 @@ class FastWAMJoint(FastWAM):
         seed: Optional[int] = None,
         rand_device: str = "cpu",
         tiled: bool = False,
+        return_video: bool = False,
     ) -> dict[str, Any]:
         self.eval()
 
@@ -231,6 +232,13 @@ class FastWAMJoint(FastWAM):
             latents_action = self.infer_action_scheduler.step(pred_action_posi, step_delta_action, latents_action)
             latents_video[:, :, 0:1] = first_frame_latents.clone()
 
-        return {
+        result: dict[str, Any] = {
             "action": latents_action[0].detach().to(device="cpu", dtype=torch.float32),
         }
+        if return_video:
+            # Decode the jointly-denoised world-model latents that conditioned this
+            # action into RGB frames (list[PIL.Image], length == num_video_frames).
+            # Only paid when explicitly requested, so normal closed-loop eval keeps
+            # discarding the video branch and incurs no extra VAE decode.
+            result["video"] = self._decode_latents(latents_video, tiled=tiled)
+        return result

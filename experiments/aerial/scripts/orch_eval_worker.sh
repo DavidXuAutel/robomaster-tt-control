@@ -8,6 +8,12 @@ EVAL_ENV_FILE="${EVAL_ENV_FILE:-/home/a25689/aerial_eval_cache/env.sh}"
 EVAL_WORKER_LOCK="${EVAL_WORKER_LOCK:-/home/a25689/aerial_eval_cache/orchestration/eval_worker.lock}"
 POLL_SECONDS="${POLL_SECONDS:-30}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+# Opt-in world-model video dump. DUMP_WM_FRAMES=1 also decodes the video-branch
+# latents that conditioned each action into {prefix}_wm_step*.mp4 beside the
+# ground-truth frames. WM_DUMP_EVERY>0 samples mid-rollout (0 = only step 0 per
+# episode). Off by default so normal gate eval pays no extra VAE decode.
+DUMP_WM_FRAMES="${DUMP_WM_FRAMES:-0}"
+WM_DUMP_EVERY="${WM_DUMP_EVERY:-0}"
 RUN_ONCE=0
 DRY_RUN=0
 
@@ -91,6 +97,9 @@ run_job() {
     --task "$task"
     --dump-frames "$dump_frames"
   )
+  if [[ "$DUMP_WM_FRAMES" == "1" ]]; then
+    command+=(--dump-wm-frames --wm-dump-every "$WM_DUMP_EVERY")
+  fi
 
   local eval_rc
   if (

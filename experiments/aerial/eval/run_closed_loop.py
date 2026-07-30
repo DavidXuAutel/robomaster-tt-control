@@ -123,6 +123,49 @@ def _assemble_episode_mp4(
     return out
 
 
+def _save_wm_clip(
+    dump_dir: Path,
+    prefix: str,
+    frames: Sequence[Any],
+    *,
+    fps: float = 10.0,
+) -> Optional[Path]:
+    """Save a world-model generated clip (list[PIL.Image]) as PNGs + one mp4.
+
+    ``frames`` is the decoded video branch output for a single closed-loop step:
+    frame 0 reconstructs the current observation, frames 1.. are the model's
+    imagined future. Written as ``{prefix}_f00.png`` .. plus ``{prefix}.mp4`` so
+    it sits alongside the ground-truth observation mp4 for side-by-side review.
+    """
+    if not frames:
+        return None
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    for j, frame in enumerate(frames):
+        _save_frame(dump_dir, f"{prefix}_f{j:02d}.png", np.asarray(frame))
+    out = dump_dir / f"{prefix}.mp4"
+    try:
+        import imageio.v2 as imageio  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - depends on host deps
+        raise ImportError(
+            "world-model mp4 assembly needs imageio with imageio-ffmpeg installed"
+        ) from exc
+
+    writer = imageio.get_writer(
+        str(out),
+        fps=float(fps),
+        codec="libx264",
+        quality=8,
+        macro_block_size=1,
+        ffmpeg_params=["-pix_fmt", "yuv420p"],
+    )
+    try:
+        for frame in frames:
+            writer.append_data(np.asarray(frame, dtype=np.uint8))
+    finally:
+        writer.close()
+    return out
+
+
 class Bridge(Protocol):
     def reset(self, episode: dict[str, Any]) -> None: ...
 
@@ -313,6 +356,8 @@ def run_episode(
     max_steps: int,
     dump_dir: Optional[Path] = None,
     frame_prefix: str = "ep",
+    dump_wm: bool = False,
+    wm_dump_every: int = 0,
 ) -> EpisodeResult:
     positions = np.asarray(episode["pos"], dtype=np.float64)
     goal_pos = positions[-1]
@@ -330,12 +375,31 @@ def run_episode(
     steps = 0
     primitive = -1
 
+    # Dump the world-model's generated clip only when we have a real dump target
+    # and the policy can produce one. Default cadence = step 0 of each episode
+    # (one extra VAE decode per episode); wm_dump_every>0 also samples mid-rollout.
+    wm_capable = dump_wm and save_frames and hasattr(policy, "dump_video")
+
     while steps < max_steps:
         rgb = bridge.render()
         if save_frames:
             _save_frame(dump_dir, f"{frame_prefix}_step{steps:04d}.png", rgb)
         state = bridge.state()
+
+        want_wm = wm_capable and (
+            steps == 0 or (wm_dump_every > 0 and steps % wm_dump_every == 0)
+        )
+        if hasattr(policy, "dump_video"):
+            policy.dump_video = bool(want_wm)
+
         primitive = int(policy.predict_primitive(rgb, state, instruction))
+
+        if want_wm:
+            gen = getattr(policy, "last_generated_frames", None)
+            if gen:
+                assert dump_dir is not None
+                _save_wm_clip(dump_dir, f"{frame_prefix}_wm_step{steps:04d}", gen)
+
         if primitive == 0:
             break
         bridge.step(primitive)
@@ -471,6 +535,8 @@ def evaluate_episodes(
     seed: int = 0,
     task: str = "aerial_joint_1cam_1e-4",
     dump_frames: Optional[Path] = None,
+    dump_wm: bool = False,
+    wm_dump_every: int = 0,
 ) -> dict[str, Any]:
     successes: list[bool] = []
     path_lengths: list[float] = []
@@ -512,6 +578,8 @@ def evaluate_episodes(
                 max_steps=max_steps,
                 dump_dir=dump_frames,
                 frame_prefix=f"{index:03d}_{_safe_name(episode_id)}",
+                dump_wm=dump_wm,
+                wm_dump_every=wm_dump_every,
             )
         finally:
             bridge.close()
@@ -569,11 +637,27 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Directory to save each rendered RGB frame as PNG and one mp4 per "
         "episode (openfly bridge only; skipped for the mock bridge's pseudo-RGB).",
     )
+    parser.add_argument(
+        "--dump-wm-frames",
+        action="store_true",
+        help="Also dump the world-model's generated clip (decoded video-branch "
+        "latents that conditioned each action) into --dump-frames dir, as "
+        "{prefix}_wm_step*.mp4. Requires --dump-frames and the fastwam policy.",
+    )
+    parser.add_argument(
+        "--wm-dump-every",
+        type=int,
+        default=0,
+        help="Dump the world-model clip every N closed-loop steps (0 = only step "
+        "0 per episode). Each dump costs one extra VAE decode.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _parse_args(argv)
+    if args.dump_wm_frames and args.dump_frames is None:
+        raise SystemExit("--dump-wm-frames requires --dump-frames DIR")
     episodes = load_annotation(args.ann)[: max(0, int(args.max_episodes))]
     if not episodes:
         raise ValueError(f"no episodes found in {args.ann}")
@@ -588,6 +672,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         seed=int(args.seed),
         task=str(args.task),
         dump_frames=args.dump_frames,
+        dump_wm=bool(args.dump_wm_frames),
+        wm_dump_every=int(args.wm_dump_every),
     )
     write_metrics(metrics, args.out)
     print(json.dumps(metrics, indent=2))
