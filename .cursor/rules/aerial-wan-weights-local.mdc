@@ -1,0 +1,25 @@
+---
+description: Never re-download Wan2.2/Wan2.1 weights; use on-host caches only
+alwaysApply: true
+---
+
+# Aerial WAM：Wan 权重只用本机缓存（禁止再下）
+
+训练 / smoke / eval / 启动器操作时：
+
+1. **禁止**再从 HuggingFace / ModelScope / 镜像下载
+   `Wan-AI/Wan2.2-*`、`Wan-AI/Wan2.1-*`、`DiffSynth-Studio/Wan-Series-*`
+   或其它 Wan / DiffSynth 底座权重。
+2. **必须**复用设备上已有文件。训练主机 `:31126` 典型路径：
+   - `checkpoints/Wan-AI/Wan2.2-TI2V-5B/`（含 `Wan2.2_VAE.pth`、
+     `diffusion_pytorch_model*.safetensors`）
+   - `checkpoints/Wan-AI/Wan2.1-T2V-1.3B/`
+   - Action DiT：`checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt`
+   - 同源：`aerial_wam_runtime/FastWAM/checkpoints/Wan-AI/`、
+     `aerial_cache_shared/checkpoints/Wan-AI/`
+3. **关键坑**：默认 `redirect_common_files=true` 会把本地 `.pth` 重定向到
+   ModelScope 的 `DiffSynth-Studio/Wan-Series-Converted-Safetensors` 并触发下载。
+   启动时必须 `model.redirect_common_files=false`，并设
+   `DIFFSYNTH_SKIP_DOWNLOAD=true`（可加 `HF_HUB_OFFLINE=1`）。缺文件则**报错停**，
+   不要自动拉取。
+4. 评测机等同：先找本机/共享缓存，禁止为「方便」触发新下载。
