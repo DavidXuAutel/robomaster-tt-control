@@ -75,10 +75,24 @@ def convert_trajectory(
     image_root: Path,
     *,
     action_source: str = ACTION_SOURCE,
+    stop_relabel_radius: float | None = None,
 ) -> list[dict]:
-    """Convert one OpenFly trajectory into aligned LeRobot frame records."""
+    """Convert one OpenFly trajectory into aligned LeRobot frame records.
+
+    When ``stop_relabel_radius`` is not None, any emitted frame whose *start*
+    position lies within that many metres of the episode goal — plus the
+    terminal frame unconditionally — has its action zeroed to ``[0,0,0,0]``.
+    A zero body-delta is the OpenFly ``stop`` primitive (id 0), so this injects
+    ``stop`` supervision through the existing CE label pipeline
+    (``delta_nearest_with_dist`` maps zero delta → primitive 0) with no
+    torch-side changes. The goal is the end position of the last non-padding
+    transition, i.e. where the (successful) demo actually ends up. Default
+    ``None`` is a no-op, preserving the raw-delta dataset.
+    """
     if action_source != ACTION_SOURCE:
         raise ValueError(f"action_source must be {ACTION_SOURCE!r}, got {action_source!r}")
+    if stop_relabel_radius is not None and float(stop_relabel_radius) < 0:
+        raise ValueError("stop_relabel_radius must be non-negative")
 
     positions, yaws = _normalize_pos_yaw(traj)
     actions = np.asarray(traj["action"]).reshape(-1)
@@ -98,6 +112,8 @@ def convert_trajectory(
 
     scene_id = str(traj.get("scene_id", traj.get("scene", "")))
     frames: list[dict] = []
+    emitted_start_pos: list[np.ndarray] = []
+    last_end_pos: np.ndarray | None = None
     for index in range(frame_count - 1):
         if is_padding_action(actions[index]):
             continue
@@ -122,6 +138,19 @@ def convert_trajectory(
                 "meta.action_source": ACTION_SOURCE,
             }
         )
+        emitted_start_pos.append(positions[index])
+        last_end_pos = positions[index + 1]
+
+    if stop_relabel_radius is not None and frames:
+        radius = float(stop_relabel_radius)
+        goal = np.asarray(last_end_pos, dtype=np.float64)
+        for frame, start_pos in zip(frames, emitted_start_pos):
+            dist = float(np.linalg.norm(np.asarray(start_pos, dtype=np.float64) - goal))
+            if dist < radius:
+                frame["action"] = np.zeros(4, dtype=np.float32)
+        # Terminal frame always commands stop, even if it starts >= radius away.
+        frames[-1]["action"] = np.zeros(4, dtype=np.float32)
+
     return frames
 
 
@@ -200,6 +229,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--image-root", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--max-trajs", type=int)
+    parser.add_argument(
+        "--stop-relabel-radius",
+        type=float,
+        default=None,
+        help=(
+            "If set (metres), zero the action of frames within this distance of "
+            "the episode goal plus the terminal frame, injecting stop (primitive "
+            "0) supervision. Recommended: 20.0 (OPENFLY_SUCCESS_DIST_M). Default: "
+            "off (raw deltas)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -213,7 +253,12 @@ def main() -> None:
         trajectories = trajectories[: args.max_trajs]
 
     episodes = [
-        convert_trajectory(traj, args.image_root, action_source=ACTION_SOURCE)
+        convert_trajectory(
+            traj,
+            args.image_root,
+            action_source=ACTION_SOURCE,
+            stop_relabel_radius=args.stop_relabel_radius,
+        )
         for traj in trajectories
     ]
     write_lerobot_dataset(episodes, args.out, repo_id=args.out.name)

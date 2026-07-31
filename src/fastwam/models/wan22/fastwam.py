@@ -1,5 +1,6 @@
 from typing import Any, Optional, Sequence, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -38,6 +39,7 @@ class FastWAM(torch.nn.Module):
         action_num_train_timesteps: int = 1000,
         loss_lambda_video: float = 1.0,
         loss_lambda_action: float = 1.0,
+        loss_lambda_ce: float = 0.0,
     ):
         super().__init__()
         self.video_expert = video_expert
@@ -84,6 +86,8 @@ class FastWAM(torch.nn.Module):
         self.torch_dtype = torch_dtype
         self.loss_lambda_video = float(loss_lambda_video)
         self.loss_lambda_action = float(loss_lambda_action)
+        # Scheme B: CE on head_cls. Default 0 keeps legacy B0 recipe unchanged.
+        self.loss_lambda_ce = float(loss_lambda_ce)
 
         self.to(self.device)
 
@@ -111,6 +115,7 @@ class FastWAM(torch.nn.Module):
         action_num_train_timesteps: int = 1000,
         loss_lambda_video: float = 1.0,
         loss_lambda_action: float = 1.0,
+        loss_lambda_ce: float = 0.0,
     ):
         if video_dit_config is None:
             raise ValueError("`video_dit_config` is required for FastWAM.from_wan22_pretrained().")
@@ -168,6 +173,7 @@ class FastWAM(torch.nn.Module):
             action_num_train_timesteps=action_num_train_timesteps,
             loss_lambda_video=loss_lambda_video,
             loss_lambda_action=loss_lambda_action,
+            loss_lambda_ce=loss_lambda_ce,
         )
         model.model_paths = {
             "video_dit": components.dit_path,
@@ -560,10 +566,48 @@ class FastWAM(torch.nn.Module):
         )
         loss_action = (action_loss_per_sample * action_weight).mean()
 
-        loss_total = self.loss_lambda_video * loss_video + self.loss_lambda_action * loss_action
+        loss_ce = action_loss_token.new_zeros(())
+        if (
+            self.loss_lambda_ce > 0.0
+            and getattr(self.action_expert, "head_cls", None) is not None
+        ):
+            # First executed step → nearest primitive; CE on same forward's tokens + t.
+            from experiments.aerial.collapse_fix.labels import (
+                build_ce_mask,
+                delta_nearest_with_dist,
+            )
+
+            first = action[:, 0, :].detach().float().cpu().numpy()
+            prim_ids = []
+            dists = []
+            for row in first:
+                pid, dist = delta_nearest_with_dist(row)
+                prim_ids.append(pid)
+                dists.append(dist)
+            prim_t = torch.as_tensor(prim_ids, device=action.device, dtype=torch.long)
+            dist_np = np.asarray(dists, dtype=np.float64)
+            pad0 = None
+            if action_is_pad is not None:
+                pad0 = action_is_pad[:, 0].detach().cpu().numpy()
+            # d_max default large until Stage-1 stats land; minority still exempt.
+            d_max = float(getattr(self, "action_cls_d_max", 1e9))
+            keep = build_ce_mask(np.asarray(prim_ids), dist_np, d_max=d_max, is_pad=pad0)
+            logits = self.action_expert.classify_from_tokens(tokens_out["action"], action_pre)
+            if keep.any():
+                keep_t = torch.as_tensor(keep, device=logits.device)
+                loss_ce = F.cross_entropy(logits[keep_t], prim_t[keep_t])
+            else:
+                loss_ce = logits.sum() * 0.0
+
+        loss_total = (
+            self.loss_lambda_video * loss_video
+            + self.loss_lambda_action * loss_action
+            + self.loss_lambda_ce * loss_ce
+        )
         loss_dict = {
             "loss_video": self.loss_lambda_video * float(loss_video.detach().item()),
             "loss_action": self.loss_lambda_action * float(loss_action.detach().item()),
+            "loss_ce": self.loss_lambda_ce * float(loss_ce.detach().item()),
         }
         return loss_total, loss_dict
 
@@ -629,7 +673,20 @@ class FastWAM(torch.nn.Module):
 
         pred_video = self.video_expert.post_dit(tokens_out["video"], video_pre)
         pred_action = self.action_expert.post_dit(tokens_out["action"], action_pre)
+        # Cache for scheme-B classify at the terminal denoise step (t_final).
+        self._last_action_tokens = tokens_out["action"]
+        self._last_action_pre = action_pre
         return pred_video, pred_action
+
+    def classify_last_action_tokens(self) -> Optional[torch.Tensor]:
+        """Return [B,10] logits from the most recent joint action forward, or None."""
+        if getattr(self.action_expert, "head_cls", None) is None:
+            return None
+        tokens = getattr(self, "_last_action_tokens", None)
+        pre = getattr(self, "_last_action_pre", None)
+        if tokens is None or pre is None:
+            return None
+        return self.action_expert.classify_from_tokens(tokens, pre)
 
     @torch.no_grad()
     def _predict_action_noise(

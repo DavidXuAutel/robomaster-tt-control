@@ -30,7 +30,7 @@ class ActionHead(nn.Module):
 
 
 class ActionDiT(nn.Module):
-    ACTION_BACKBONE_SKIP_PREFIXES = ("action_encoder.", "head.")
+    ACTION_BACKBONE_SKIP_PREFIXES = ("action_encoder.", "head.", "head_cls.")
     ACTION_BACKBONE_META_KEYS = (
         "hidden_dim",
         "ffn_dim",
@@ -41,6 +41,7 @@ class ActionDiT(nn.Module):
         "freq_dim",
         "eps",
     )
+    NUM_ACTION_PRIMITIVES = 10
 
     def __init__(
         self,
@@ -54,6 +55,7 @@ class ActionDiT(nn.Module):
         attn_head_dim: int,
         num_layers: int,
         use_gradient_checkpointing: bool = False,
+        enable_action_cls: bool = False,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -63,6 +65,7 @@ class ActionDiT(nn.Module):
         self.freq_dim = freq_dim
         self.num_heads = num_heads
         self.attn_head_dim = attn_head_dim
+        self.enable_action_cls = bool(enable_action_cls)
 
         if num_heads <= 0:
             raise ValueError(f"`num_heads` must be > 0, got {num_heads}")
@@ -95,7 +98,14 @@ class ActionDiT(nn.Module):
                 for _ in range(num_layers)
             ]
         )
+        # head_fm: flow-matching velocity (scheme B — kept)
         self.head = nn.Linear(hidden_dim, action_dim)
+        # head_cls: timestep-conditioned 10-way primitive logits (scheme B — optional)
+        self.head_cls: Optional[ActionHead]
+        if self.enable_action_cls:
+            self.head_cls = ActionHead(hidden_dim, self.NUM_ACTION_PRIMITIVES, eps)
+        else:
+            self.head_cls = None
         self.freqs = precompute_freqs_cis(attn_head_dim, end=1024)
 
         self.use_gradient_checkpointing = use_gradient_checkpointing
@@ -300,6 +310,24 @@ class ActionDiT(nn.Module):
 
     def post_dit(self, tokens: torch.Tensor, pre_state: Dict[str, Any]) -> torch.Tensor:
         return self.head(tokens)
+
+    def classify_from_tokens(self, tokens: torch.Tensor, pre_state: Dict[str, Any]) -> torch.Tensor:
+        """Scheme B: logits [B, 10] from first action token + timestep embedding ``t``.
+
+        ``t_final`` at inference is the ``timestep_action`` of the last joint
+        forward (same ``pre_state["t"]`` produced by ``pre_dit``).
+        """
+        if self.head_cls is None:
+            raise RuntimeError("classify_from_tokens requires enable_action_cls=True")
+        if tokens.ndim != 3:
+            raise ValueError(f"`tokens` must be [B,T,H], got {tuple(tokens.shape)}")
+        t = pre_state.get("t")
+        if t is None:
+            raise ValueError("`pre_state` must contain time embedding `t` from pre_dit")
+        pooled = tokens[:, 0, :]
+        # ActionHead expects [B,T,H]; feed a length-1 sequence then squeeze.
+        logits = self.head_cls(pooled.unsqueeze(1), t)
+        return logits.squeeze(1)
 
     def forward(
         self,

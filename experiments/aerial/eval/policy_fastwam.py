@@ -62,6 +62,7 @@ class FastWAMAerialPolicy:
         # dump. The runner toggles dump_video per step to bound VAE-decode cost.
         self.dump_video = bool(dump_video)
         self.last_generated_frames: Optional[list[Any]] = None
+        self.last_primitive: Optional[int] = None
 
     def _normalize_state(self, state: np.ndarray) -> torch.Tensor:
         if self.processor is None:
@@ -142,6 +143,12 @@ class FastWAMAerialPolicy:
 
         self.last_generated_frames = pred.get("video") if want_video else None
 
+        # Scheme B: prefer argmax(head_cls) when the checkpoint exposes it.
+        if "primitive" in pred:
+            self.last_primitive = int(pred["primitive"])
+        else:
+            self.last_primitive = None
+
         action_tensor = pred["action"]
         action_chunk = self._denormalize_action(action_tensor)
         if action_chunk.ndim == 3:
@@ -156,6 +163,8 @@ class FastWAMAerialPolicy:
     ) -> int:
         """Run FastWAM and map the first replan step to an OpenFly primitive id."""
         action_chunk = self._infer_action_chunk(obs_rgb, state, instruction)
+        if self.last_primitive is not None:
+            return int(self.last_primitive)
         n_exec = min(self.replan_steps, action_chunk.shape[0])
         exec_chunk = action_chunk[:n_exec]
         return actions_chunk_to_primitive(exec_chunk)

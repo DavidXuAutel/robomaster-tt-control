@@ -87,6 +87,54 @@ def test_convert_rejects_non_v1_action_source():
         convert_trajectory(_trajectory(), FIXTURE, action_source="primitive")
 
 
+def test_stop_relabel_zeros_near_goal_and_terminal_frames():
+    # Fixture start positions are 6, 3, 0 m from the goal [6,0,1].
+    frames = convert_trajectory(_trajectory(), FIXTURE, stop_relabel_radius=4.0)
+
+    assert len(frames) == 3
+    # frame0 starts 6 m out (>= radius) → keep its forward delta.
+    np.testing.assert_allclose(frames[0]["action"], [3.0, 0.0, 0.0, 0.0])
+    # frame1 starts 3 m out (< radius) → zeroed to stop.
+    np.testing.assert_allclose(frames[1]["action"], [0.0, 0.0, 0.0, 0.0])
+    # frame2 is terminal → always stop.
+    np.testing.assert_allclose(frames[2]["action"], [0.0, 0.0, 0.0, 0.0])
+    for fr in frames:
+        assert fr["action"].dtype == np.float32
+
+
+def test_stop_relabel_forces_terminal_stop_even_outside_radius():
+    # Radius 0 means no frame is "near" the goal, but the terminal frame is
+    # still zeroed (the episode must command stop at its end).
+    frames = convert_trajectory(_trajectory(), FIXTURE, stop_relabel_radius=0.0)
+
+    np.testing.assert_allclose(frames[0]["action"], [3.0, 0.0, 0.0, 0.0])
+    np.testing.assert_allclose(frames[1]["action"], [3.0, 0.0, 0.0, 0.0])
+    np.testing.assert_allclose(frames[2]["action"], [0.0, 0.0, 0.0, 0.0])
+
+
+def test_stop_relabel_none_is_noop():
+    baseline = convert_trajectory(_trajectory(), FIXTURE)
+    relabeled = convert_trajectory(_trajectory(), FIXTURE, stop_relabel_radius=None)
+    for a, b in zip(baseline, relabeled):
+        np.testing.assert_array_equal(a["action"], b["action"])
+
+
+def test_stop_relabel_rejects_negative_radius():
+    with pytest.raises(ValueError, match="non-negative"):
+        convert_trajectory(_trajectory(), FIXTURE, stop_relabel_radius=-1.0)
+
+
+def test_stop_relabel_delta_maps_to_stop_primitive():
+    # The zeroed action must round-trip to OpenFly primitive 0 (stop) via the
+    # same classifier the CE loss uses — this is what wires stop supervision in.
+    from experiments.aerial.collapse_fix.labels import delta_nearest_with_dist
+
+    frames = convert_trajectory(_trajectory(), FIXTURE, stop_relabel_radius=4.0)
+    prim, dist = delta_nearest_with_dist(frames[2]["action"].astype(float))
+    assert prim == 0
+    assert dist == 0.0
+
+
 def test_write_lerobot_dataset_stores_task_language(tmp_path):
     frames = convert_trajectory(_trajectory(), FIXTURE)
     out_root = tmp_path / "dataset"

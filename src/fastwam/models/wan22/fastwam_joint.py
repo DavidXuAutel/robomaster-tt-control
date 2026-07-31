@@ -235,6 +235,11 @@ class FastWAMJoint(FastWAM):
         result: dict[str, Any] = {
             "action": latents_action[0].detach().to(device="cpu", dtype=torch.float32),
         }
+        logits = self.classify_last_action_tokens()
+        if logits is not None:
+            # t_final = timestep of the last _predict_joint_noise call (cached in pre_state["t"]).
+            result["action_cls_logits"] = logits[0].detach().to(device="cpu", dtype=torch.float32)
+            result["primitive"] = int(torch.argmax(logits[0]).item())
         if return_video:
             # Decode the jointly-denoised world-model latents that conditioned this
             # action into RGB frames (list[PIL.Image], length == num_video_frames).

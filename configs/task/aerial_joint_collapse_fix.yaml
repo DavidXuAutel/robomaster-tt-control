@@ -1,0 +1,35 @@
+# @package _global_
+# Collapse-fix recipe (v3.2 scheme B). Does not alter aerial_joint_1cam_1e-4.
+#
+# Launch example (enable cls head via override so we don't clobber action_dit_config):
+#   ... task=aerial_joint_collapse_fix \
+#       model.action_dit_config.enable_action_cls=true \
+#       model.loss.lambda_ce=1.0 model.loss.lambda_action=0.1
+
+defaults:
+  - override /data: aerial_openfly_collapse_fix
+  - override /model: fastwam_joint
+  - _self_
+
+batch_size: 8
+num_workers: 4
+
+model:
+  mot_checkpoint_mixed_attn: false
+  loss:
+    lambda_video: 1.0
+    # λ_fm (flow-matching) kept small; CE is the primary action objective.
+    lambda_action: 0.1
+    lambda_ce: 1.0
+
+lr_scheduler_type: "cosine"
+learning_rate: 1e-4
+num_epochs: 1
+max_steps: 50
+log_every: 5
+save_every: 50
+eval_every: 0
+
+gradient_accumulation_steps: 1
+weight_decay: 1e-2
+resume: null
