@@ -207,7 +207,8 @@ bash experiments/aerial/scripts/orch_eval_worker.sh
 - [x] **第 2 步：** `STEPS=500,1000,1500` 对齐 `SAVE_EVERY`/`MAX_STEPS`。
 - [x] **第 3 步：** 独立 `EVAL_QUEUE_DIR`；worker 将用 `ORACLE_STOP=0`。
 - [x] **第 4 步：** `--dry-run` 已通过。
-- [ ] **第 5 步：** 正式拉起 watcher + worker（无 `--dry-run`）。
+- [x] **第 5 步：** 正式拉起 watcher + worker（无 `--dry-run`）。
+  （`:30905` watcher+worker 已常驻；队列 `eval_queue_collapse_fix`；等 step_000500。）
 
 ### 脚本状态
 
