@@ -1,9 +1,9 @@
 # @package _global_
 # Collapse-fix recipe (v3.2 scheme B). Does not alter aerial_joint_1cam_1e-4.
 #
-# Launch example (enable cls head via override so we don't clobber action_dit_config):
+# Launch example (use Hydra `+` so we don't clobber action_dit_config struct):
 #   ... task=aerial_joint_collapse_fix \
-#       model.action_dit_config.enable_action_cls=true \
+#       +model.action_dit_config.enable_action_cls=true \
 #       model.loss.lambda_ce=1.0 model.loss.lambda_action=0.1
 
 defaults:

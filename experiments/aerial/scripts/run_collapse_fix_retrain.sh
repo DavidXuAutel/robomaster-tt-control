@@ -137,7 +137,13 @@ PY
 
 launch() {  # $1=max_steps $2=save_every $3=logfile
   local steps="$1" save="$2" logfile="$3"
-  log "launch: max_steps=$steps save_every=$save cls=on λ=(v=$LAMBDA_VIDEO,fm=$LAMBDA_ACTION,ce=$LAMBDA_CE) -> $logfile"
+  # Use on-host Wan checkpoints only — never ModelScope/HF re-download.
+  # redirect_common_files=true remaps VAE/T5 to DiffSynth safetensors and
+  # triggers a multi-GB download even when checkpoints/Wan-AI/*.pth exist.
+  export DIFFSYNTH_SKIP_DOWNLOAD="${DIFFSYNTH_SKIP_DOWNLOAD:-true}"
+  export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+  export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+  log "launch: max_steps=$steps save_every=$save cls=on λ=(v=$LAMBDA_VIDEO,fm=$LAMBDA_ACTION,ce=$LAMBDA_CE) redirect_common_files=false skip_download=$DIFFSYNTH_SKIP_DOWNLOAD -> $logfile"
   accelerate launch --config_file "$ACCEL_CONFIG" --num_processes "$NUM_PROCESSES" \
     scripts/train.py \
       task="$TASK" \
@@ -145,7 +151,8 @@ launch() {  # $1=max_steps $2=save_every $3=logfile
       max_steps="$steps" \
       save_every="$save" \
       "data.train.dataset_dirs=[$RELABELED_SUBSET]" \
-      model.action_dit_config.enable_action_cls=true \
+      +model.action_dit_config.enable_action_cls=true \
+      model.redirect_common_files=false \
       model.loss.lambda_video="$LAMBDA_VIDEO" \
       model.loss.lambda_action="$LAMBDA_ACTION" \
       model.loss.lambda_ce="$LAMBDA_CE" \

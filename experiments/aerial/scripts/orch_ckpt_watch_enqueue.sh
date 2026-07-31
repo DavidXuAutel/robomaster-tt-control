@@ -22,15 +22,19 @@ case "${1:-}" in
   --dry-run) DRY_RUN=1 ;;
   --once) ONCE=1 ;;
   -h|--help)
-    echo "Usage: STAMP=... $0 [--dry-run|--once]"
-    echo "Polls B1 weights and enqueues step_000250..step_005000 (every 250) evals without blocking train."
+    echo "Usage: STAMP=... [STEPS=250,500,...] [TASK=...] $0 [--dry-run|--once]"
+    echo "Polls weights and enqueues evals without blocking train."
+    echo "Steps default to 250..5000 (every 250); override with STEPS to match a run's save_every."
     exit 0
     ;;
   "") ;;
   *) echo "Unknown argument: $1" >&2; exit 2 ;;
 esac
 
-B1_STEPS="$(seq -s, 250 250 5000)"
+# Step list to watch/enqueue. Defaults to B1's 250-spaced 250..5000. Override
+# via STEPS to match a run's own save_every, e.g. collapse-fix uses SAVE_EVERY=500:
+#   STEPS="$(seq -s, 500 500 5000)" TASK=aerial_joint_collapse_fix ... orch_ckpt_watch_enqueue.sh
+B1_STEPS="${STEPS:-$(seq -s, 250 250 5000)}"
 
 command=(
   "$PYTHON_BIN" -m experiments.aerial.orchestration.b1_discover
