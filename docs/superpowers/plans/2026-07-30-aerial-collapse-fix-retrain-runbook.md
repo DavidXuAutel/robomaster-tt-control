@@ -63,6 +63,9 @@
 | `experiments/aerial/eval/policy_fastwam.py` | 闭环在有 `primitive` 时用 `argmax(cls)` |
 | `experiments/aerial/scripts/orch_ckpt_watch_enqueue.sh` | 并行评测：轮询 weights → 入队（`STEPS`/`WEIGHTS_DIR`/`EVAL_QUEUE_DIR`） |
 | `experiments/aerial/scripts/orch_eval_worker.sh` | 并行评测：认领 job，`ORACLE_STOP=0` 学习 stop |
+| `experiments/aerial/scripts/collapse_fix_status.sh` | **进度查询**：训练（step/loss_ce/ETA）+ 评测（SR/NE/stop%/hit@20）一屏汇总 |
+| `experiments/aerial/scripts/collapse_fix_status_remote.sh` | 一键 SSH 到远端跑上面的 status（本机拉远端进度；`--dry-run` 先核对 host/port/runtime） |
+| `experiments/aerial/scripts/plot_loss.py` | 从 train log 画 loss 曲线 PNG（含 `loss_ce`，副轴）+ CSV；status 里 `PLOT=1` 会自动调它 |
 | `experiments/aerial/collapse_fix/compute_dmax.py` | 仅供参考的 d_max（见 §d_max） |
 
 **本机路径约定（`:31126` / `:30905` 当前 run）：**
@@ -79,8 +82,38 @@
 | eval ann | `/home/a25689/aerial_eval_cache/Annotation/seen_airsim16_m1a20.json` |
 | `OPENFLY_ROOT` | `/home/a25689/aerial_eval_cache/OpenFly-Platform` |
 
+> **进度查询（训练 + 评测一屏）：** 任一主机上跑
+> `bash experiments/aerial/scripts/collapse_fix_status.sh`（`WATCH=1` 循环）。
+> 默认读上表路径:训练段给 step/loss_ce/ckpt/ETA(ETA 由 ckpt mtime 推算，
+> `:30905` 上看不到 train log 时自动退化为「盘上 ckpt」)；评测段给
+> `eval_queue_collapse_fix` 计数 + 逐 ckpt 的 SR/NE/SPL/stop%/close_m/hit@20
+> （`stop%`=`n_stop_primitive/n`,验根因 #1;`close_m`/`hit@20` 验根因 #2）。
+>
+> **loss 曲线已整合进 status：** 默认每次跑 status 都会调 `plot_loss.py` 出图
+> (`$LOG_DIR/loss_curve.png` + `.csv`),`PLOT=0` 关闭,`PLOT_OUT`/`PLOT_SMOOTH`
+> 可调;`--dry-run` 那台没 train log 时自动跳过。也可单独跑
+> `python experiments/aerial/scripts/plot_loss.py <log或logdir>`。图:左轴
+> total/action/video(flow-matching),右副轴 `loss_ce`(停止分类器,CE nats)。
+> **重点看 `loss_ce` 是否早期(~step 10)就饱和到很低**——那是根因 #1(学会终止)
+> 的训练侧信号。
+>
+> **从本机一键拉远端进度：**
+> `bash experiments/aerial/scripts/collapse_fix_status_remote.sh --dry-run` 先打印
+> 将执行的 `ssh` 命令核对 `SSH_HOST`/`SSH_PORT`/`RUNTIME`,确认无误后去掉 `--dry-run`
+> 即在远端跑一次 status。`TARGET` 一键切主机(host+port 一起翻转,不会只改一个):
+> `TARGET=train`(缺省)= 推理/训练机 `a25689@10.239.121.21:31126`(本地有 train log
+> + 共享 ckpt/queue,一次即出两段);`TARGET=eval` = 测试/评测机
+> `a25689@10.239.121.23:30905`。`WATCH=1` 在远端循环;`STAMP`/`OUTPUT_DIR`/`STEPS`/…
+> env 自动透传;`SSH_HOST`/`SSH_PORT`/`RUNTIME` 可显式覆盖。**注意**:`RUNTIME`
+> 默认 `/home/a25689/aerial_wam_runtime/robomaster-tt-control`；先 `--dry-run`
+> 核对远端该目录下已有 `collapse_fix_status.sh`。
+
 > **Wan 权重：** 禁止再下；用 `checkpoints/Wan-AI/` + `redirect_common_files=false` +
-> `DIFFSYNTH_SKIP_DOWNLOAD=true`（见 `.cursor/rules/aerial-wan-weights-local.mdc`）。
+> `DIFFSYNTH_SKIP_DOWNLOAD=true`。
+> **注意：** 规则文件 `.cursor/rules/aerial-wan-weights-local.mdc` **仅存在于主仓
+> `robomaster-tt-control`**,并**未** vendor 进 `aerial-wam` 分支。在训练机上
+> checkout 该分支的执行者看不到它 —— 本条(禁下 Wan/DiffSynth 权重、用本机
+> `checkpoints/Wan-AI/`)即其内容摘要,以之为准;需完整规则请回主仓查阅。
 
 ---
 
@@ -140,7 +173,14 @@ MAX_STEPS=1500 SAVE_EVERY=500 OUTPUT_DIR="$OUTPUT_DIR" \
 - [x] **第 1 步：** 启动完整训练;checkpoint 落在
   `$OUTPUT_DIR/checkpoints/weights/step_*.pt`（run 已启动；等 500/1000/1500）。
 - [ ] **第 2 步：** 观察 `loss_ce` 下降、预测原语直方图从「只有前进」的塌缩里铺开（用 `plot_loss.py` 记录/绘图）。
-- [ ] **第 3 步：** 目标 ≤5 个 epoch 等效量（当前子集上）;数据扩充留到后续阶段。
+- [ ] **第 3 步：** 本 run 锁定 `MAX_STEPS=1500`。注意步数口径:`batch_size=8`
+  × 2 proc = 有效 batch 16,当前子集(~200 episode / 2709 帧,窗口量级 ~1.1k–2.7k)
+  下 1500 step ≈ **9–21 个 epoch 等效量**,已**超过**设计蓝本原定的「≤5 epoch」
+  软目标。之所以仍跑 1500:smoke 显示 `loss_ce` 在 ~10 step 即饱和到 0.02(离散
+  stop/原语头学得极快),额外步数主要留给 **video/fm 头**继续收敛。
+  **代价:小子集上跑 ~20 epoch 有记忆化/过拟合风险** —— 根因 #2(目标盲)本就要靠
+  后续**数据扩充**解决,不是靠在小子集上多跑。若 Task 4 SR 在 step_000500→001500
+  之间不升反降,优先取更早的 ckpt 并把数据扩充提前,而非再加步数。
   （1500 step @ ~0.09 step/s ≈ 4.5h wall；与并行任务 4 重叠。）
 
 ---
