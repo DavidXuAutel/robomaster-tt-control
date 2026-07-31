@@ -475,6 +475,9 @@ def eval_hydra_overrides(task: str) -> list[str]:
         "model.load_text_encoder=true",
         "model.redirect_common_files=false",
     ]
+    # Scheme B: closed-loop must build head_cls or argmax(cls) never fires.
+    if "collapse_fix" in str(task):
+        overrides.append("+model.action_dit_config.enable_action_cls=true")
     extra = os.environ.get("AERIAL_EVAL_HYDRA_OVERRIDES", "")
     overrides.extend(item.strip() for item in extra.split(",") if item.strip())
     return overrides

@@ -1,10 +1,11 @@
 # @package _global_
 # Collapse-fix recipe (v3.2 scheme B). Does not alter aerial_joint_1cam_1e-4.
 #
-# Launch example (use Hydra `+` so we don't clobber action_dit_config struct):
-#   ... task=aerial_joint_collapse_fix \
-#       +model.action_dit_config.enable_action_cls=true \
-#       model.loss.lambda_ce=1.0 model.loss.lambda_action=0.1
+# enable_action_cls lives in this task so train AND closed-loop eval both get
+# head_cls (eval only passes task=…; without this key it silently falls back to
+# continuous nearest-primitive and Task 4 would not measure learned stop).
+# Train launcher still passes +model.action_dit_config.enable_action_cls=true
+# for self-documenting logs / Hydra struct safety.
 
 defaults:
   - override /data: aerial_openfly_collapse_fix
@@ -16,6 +17,8 @@ num_workers: 4
 
 model:
   mot_checkpoint_mixed_attn: false
+  action_dit_config:
+    enable_action_cls: true
   loss:
     lambda_video: 1.0
     # λ_fm (flow-matching) kept small; CE is the primary action objective.
