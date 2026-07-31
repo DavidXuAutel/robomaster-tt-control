@@ -94,9 +94,9 @@ def test_gas_sensor_disconnect_fails():
     assert any(e.get("reason") == "sensor_disconnected" for e in out)
 
 
-def test_dog_sdk_falls_back_to_stub():
+def test_dog_sdk_explicit_stub_mode():
     out = []
-    sdk = DogSdkAdapter(out.append)  # no backends
+    sdk = DogSdkAdapter(out.append, mode="stub")
     sdk.begin_inspect(
         make_event(
             EventType.DOG_INSPECT,

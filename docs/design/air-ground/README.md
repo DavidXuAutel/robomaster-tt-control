@@ -4,39 +4,40 @@
 迭代规格：`../2026-07-31-air-ground-g1-g2-design.md`  
 验收门：`../../handover/2026-07-30-air-ground-phased-gates.md`
 
-## 是否每个模块都要详细设计？
+## 闸门（主人 2026-07-31 批准）
 
-| 类型 | 要不要单独详设 | 说明 |
+- M1–M5 **纯软件**按序自动：详设 → 实现 → 单测/回归  
+- 装依赖 / 真机 / 猜型号场地 → **暂停汇报**  
+- 模拟只标 `synthetic` / `SKIP`，不冒充真机  
+
+## 模块清单
+
+| ID | 目录 | 状态 |
 |---|---|---|
-| 控制面 / 安全 / 事件契约（M0） | **要** | abort、误派狗、串行 scout 会炸演示 |
-| 感知契约（M1） | **要** | 锚点/物体解耦、AprilTag fail-fast |
-| 测试基建 / 场景 runner（M2） | **要**（可偏测试设计） | 防假绿，双账本 |
-| Dog 显式 mode + FakeNav（M3） | **要**（短） | 防 stub 假绿 |
-| Autel spike 四态（M4） | **精简 checklist 即可** | 不扩 SDK 抽象 |
-| 地图校验 + 文档（M5） | **精简** | 规则表 + SOP |
+| M0 | `modules/M0-control-plane/` | **已实现** |
+| M1 | `modules/M1-marker-detect/` | **已实现** |
+| M2 | `modules/M2-g2-scripted/` | **已实现**（synthetic_contract） |
+| M3 | `modules/M3-dog-backend/` | **已实现**（软件 FakeNav） |
+| M4 | `modules/M4-autel-spike/` | **已实现**（四态；硬件 NOT_RUN） |
+| M5 | `modules/M5-map-docs/` | **已实现** |
 
-流程：详设 → Codex 批判审 → 改稿落盘 → 开发 → 单测/回归 → Codex 测审 → 下一模块。
+## 回归命令
 
-## 模块清单（本迭代）
-
-| ID | 目录 | 目标 | 状态 |
-|---|---|---|---|
-| M0 | `modules/M0-control-plane/` | Brain 防火墙、串行 scout、abort 广播、mission_id | **已实现**（pytest mission 套件绿） |
-| M1 | `modules/M1-marker-detect/` | MarkerSpec、蓝锚/红物体、apriltag fail-fast | 待开始 |
-| M2 | `modules/M2-g2-scripted/` | 合成 20/20 runner、evidence 校验 | 待开始 |
-| M3 | `modules/M3-dog-backend/` | DogSdk 显式 mode + FakeNav | 待开始 |
-| M4 | `modules/M4-autel-spike/` | 四态 spike、删假断言 | 待开始 |
-| M5 | `modules/M5-map-docs/` | SharedMap 校验、狗探测清单 | 待开始 |
-
-## 目录约定
-
-每个模块目录固定三件套（可缺 review 直至 Codex 跑完）：
-
-```text
-modules/Mx-name/
-  design.md           # 详细设计（接口、行为、测试矩阵）
-  codex-review.md     # Codex 审稿原文摘要 + 采纳/拒绝表
-  notes.md            # 可选：实现偏差、真机笔记
+```bash
+.venv/bin/python -m pytest \
+  tests/test_mission_*.py \
+  tests/test_marker_detect.py \
+  tests/test_g2_scripted_scenes.py \
+  tests/test_g1_fake_nav.py \
+  tests/test_dog_stub.py \
+  tests/test_drone_scout_adapters.py \
+  tests/test_shared_map.py \
+  -q
 ```
 
-跨模块总览与 HTML 仍放在 `docs/design/` 根下，不塞进 modules。
+## 暂停项（需主人）
+
+- 安装 `pupil-apriltags`  
+- Tello 实拍 `recorded_tello` 账本  
+- 狗型号确认后挂真 `NavBackend`  
+- Autel hardware spike（`--require-hardware`）  

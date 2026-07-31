@@ -1,7 +1,6 @@
-"""Tello ScoutAdapter：复用颜色检测 + 区域确认，上报 drone.target_found。
+"""Tello ScoutAdapter：蓝锚 + 红物体解耦，上报 drone.target_found。
 
-真机飞行仍走现有 main.py / wander；本适配器负责「侦察任务契约」侧，
-可在仿真帧或离线视频上跑通 G2。
+真机飞行仍走现有 main.py / wander；本适配器负责侦察任务契约侧。
 """
 
 from __future__ import annotations
@@ -9,13 +8,19 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Mapping, Optional
 
 import cv2
 import numpy as np
 
 from adapters.drone_base import EmitFn, ScoutAdapter
-from mission_brain.detect import RegionConfirmer, find_color_blob
+from mission_brain.detect import (
+    PRESET_ANCHOR_BLUE,
+    PRESET_OBJECT_A_RED,
+    MarkerSpec,
+    RegionConfirmer,
+    detect_marker,
+)
 from mission_brain.events import EventType, make_event
 from mission_brain.map_model import SharedMap
 
@@ -33,12 +38,21 @@ class TelloScoutAdapter(ScoutAdapter):
         target_label: str = "object_a",
         evidence_dir: Optional[str] = None,
         need_anchor_frames: int = 3,
+        anchor_mode: str = "color",
+        object_spec: MarkerSpec = PRESET_OBJECT_A_RED,
+        anchor_color_spec: MarkerSpec = PRESET_ANCHOR_BLUE,
+        apriltag_detector: Any = None,
     ) -> None:
         super().__init__(emit, source=self.name)
         self.map = shared_map
         self.default_target_label = target_label
         self.evidence_dir = Path(evidence_dir or "data/mission_evidence")
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
+        self.need_anchor_frames = int(need_anchor_frames)
+        self.anchor_mode = anchor_mode
+        self.object_spec = object_spec
+        self.anchor_color_spec = anchor_color_spec
+        self.apriltag_detector = apriltag_detector
         self._connected = False
         self._airborne = False
         self._aborted = False
@@ -47,7 +61,6 @@ class TelloScoutAdapter(ScoutAdapter):
         self._reported = False
 
     def connect(self) -> bool:
-        # 真机连接由 tt_control.tello_client 负责；此处标记适配器就绪
         self._connected = True
         logger.info("TelloScoutAdapter ready (control path via existing Tello client)")
         return True
@@ -75,22 +88,35 @@ class TelloScoutAdapter(ScoutAdapter):
         self._reported = False
         region_id = str(command["region_id"])
         region = self.map.get(region_id)
-        # 将该区全部 anchor 映射到 region_id
         anchor_map = {a: region_id for a in region.anchor_ids} or {
             "AX-01": region_id
         }
-        color_anchor = region.anchor_ids[0] if region.anchor_ids else "AX-01"
+        # 颜色模式：取第一个非 TAG- 锚点作 color_anchor_id；否则 AX-01
+        color_anchor = next(
+            (a for a in region.anchor_ids if not str(a).startswith("TAG-")),
+            region.anchor_ids[0] if region.anchor_ids else "AX-01",
+        )
+        tag_ids = [
+            int(str(a).split("-", 1)[1])
+            for a in region.anchor_ids
+            if str(a).startswith("TAG-") and str(a).split("-", 1)[1].isdigit()
+        ]
         self._confirmer = RegionConfirmer(
             anchor_map,
-            need_frames=3,
-            mode="color",
-            color_anchor_id=color_anchor,
+            need_frames=self.need_anchor_frames,
+            mode=self.anchor_mode,
+            color_anchor_id=str(color_anchor),
+            color_spec=self.anchor_color_spec,
+            detector=self.apriltag_detector,
+            allowed_tag_ids=tag_ids or None,
         )
         self.active_scout = dict(command)
         logger.info(
-            "begin scout region=%s route=%s",
+            "begin scout region=%s route=%s mode=%s frames=%s",
             region_id,
             command.get("drone_route_id"),
+            self.anchor_mode,
+            self.need_anchor_frames,
         )
 
     def process_frame(self, frame: np.ndarray, now: Optional[float] = None) -> None:
@@ -103,9 +129,16 @@ class TelloScoutAdapter(ScoutAdapter):
         if region_hit is None:
             return
         region_id, anchor = region_hit
-        # 同帧还要看到目标物体 A
-        det = find_color_blob(frame, label=self._target_label)
-        if det is None or det.confidence < 0.55:
+        obj_spec = MarkerSpec(
+            label=self._target_label,
+            kind=self.object_spec.kind,
+            hsv_ranges=self.object_spec.hsv_ranges,
+            tag_ids=self.object_spec.tag_ids,
+            min_area_ratio=self.object_spec.min_area_ratio,
+            min_confidence=self.object_spec.min_confidence,
+        )
+        det = detect_marker(frame, obj_spec)
+        if det is None or det.confidence < obj_spec.min_confidence:
             return
         evidence_uri = self._save_evidence(frame, region_id, t)
         self._reported = True
@@ -143,5 +176,7 @@ class TelloScoutAdapter(ScoutAdapter):
     def _save_evidence(self, frame: np.ndarray, region_id: str, t: float) -> str:
         name = f"tello_{region_id}_{int(t * 1000)}.jpg"
         path = self.evidence_dir / name
-        cv2.imwrite(str(path), frame)
+        ok = cv2.imwrite(str(path), frame)
+        if not ok:
+            raise RuntimeError(f"failed to write evidence: {path}")
         return str(path)

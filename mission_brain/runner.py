@@ -17,9 +17,11 @@ from mission_brain.map_model import SharedMap
 from mission_brain.supervisor import MissionSupervisor
 
 
-def _red_frame(w: int = 960, h: int = 720) -> np.ndarray:
+def _demo_frame(w: int = 960, h: int = 720) -> np.ndarray:
+    """蓝锚 + 红物体（M1 解耦后 demo 帧）。"""
     img = np.full((h, w, 3), 40, dtype=np.uint8)
-    cv2.circle(img, (w // 2, h // 2), 120, (40, 40, 220), -1)
+    cv2.circle(img, (w // 3, h // 2), 100, (230, 80, 40), -1)
+    cv2.circle(img, (2 * w // 3, h // 2), 100, (40, 40, 220), -1)
     return img
 
 
@@ -74,7 +76,7 @@ def run_demo_mission(
     )
     sup.publish_operator(start)
 
-    frame = _red_frame()
+    frame = _demo_frame()
     now = t0
     for _ in range(20):
         now += 0.1

@@ -1,7 +1,8 @@
 """机器狗 SDK 适配层：统一 dog.inspect / gas.sample 契约。
 
-真机时注入 NavBackend + GasBackend（厂商 SDK / ROS2 / RS485）。
-未注入时回退 DogStubAdapter，保证开发与 G0 不阻塞。
+显式 mode:
+  - stub: 明确使用 DogStubAdapter
+  - backend: 必须注入 nav+perception+gas，缺一即报错（禁止隐式回退）
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ class GasBackend(Protocol):
 
 
 class DogSdkAdapter(DogAdapter):
-    """真机入口。backend 齐全时走 SDK；否则包装 stub。"""
+    """真机入口；mode 必须显式指定。"""
 
     name = "dog_sdk"
 
@@ -50,6 +51,7 @@ class DogSdkAdapter(DogAdapter):
         self,
         emit: EmitFn,
         *,
+        mode: str = "stub",
         nav: Optional[NavBackend] = None,
         perception: Optional[PerceptionBackend] = None,
         gas: Optional[GasBackend] = None,
@@ -57,19 +59,31 @@ class DogSdkAdapter(DogAdapter):
         calibration_max_age_s: float = 7 * 24 * 3600,
     ) -> None:
         super().__init__(emit, source=self.name)
+        if mode not in ("stub", "backend"):
+            raise ValueError("DogSdkAdapter.mode 必须是 stub 或 backend")
+        self.mode = mode
         self.nav = nav
         self.perception = perception
         self.gas = gas
         self.calibration_max_age_s = calibration_max_age_s
-        self._use_stub = nav is None or perception is None or gas is None
+        self._use_stub = mode == "stub"
+        if mode == "backend":
+            missing = [
+                n
+                for n, b in (("nav", nav), ("perception", perception), ("gas", gas))
+                if b is None
+            ]
+            if missing:
+                raise ValueError(
+                    f"mode=backend 缺少 backend: {', '.join(missing)}（禁止隐式 stub）"
+                )
         self._stub = stub or DogStubAdapter(
             emit,
             nav_delay_s=0.0,
             search_delay_s=0.0,
             sample_delay_s=0.0,
         )
-        if self._use_stub:
-            logger.info("DogSdkAdapter: backends incomplete → using stub")
+        logger.info("DogSdkAdapter mode=%s", self.mode)
 
         self._inspect: Optional[Dict[str, Any]] = None
         self._gas_cmd: Optional[Dict[str, Any]] = None

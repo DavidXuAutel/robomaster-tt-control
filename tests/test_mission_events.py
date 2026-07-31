@@ -70,4 +70,4 @@ def test_shared_map_load_example():
     m = SharedMap.load("configs/mission/shared_map.example.json")
     assert m.resolve_dog_goal("region_x") == "wp_region_x_staging"
     assert m.region_for_anchor("AX-01").region_id == "region_x"
-    assert "global_pose" not in FORBIDDEN_KEYS or True
+    assert "global_pose" in FORBIDDEN_KEYS

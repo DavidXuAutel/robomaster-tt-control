@@ -81,6 +81,7 @@ def _harness(*, boom_dog: bool = False, use_sdk: bool = False):
     if use_sdk:
         dog = DogSdkAdapter(
             emit,
+            mode="backend",
             nav=nav,
             perception=FakePerception(),
             gas=FakeGas(),
@@ -275,7 +276,8 @@ def test_s_ok_01_single_region_happy_stub():
     import numpy as np
 
     frame = np.full((720, 960, 3), 40, dtype=np.uint8)
-    cv2.circle(frame, (480, 360), 120, (40, 40, 220), -1)
+    cv2.circle(frame, (320, 360), 100, (230, 80, 40), -1)
+    cv2.circle(frame, (640, 360), 100, (40, 40, 220), -1)
     for i in range(15):
         clock["t"] = 1000.0 + i * 0.1
         scout.process_frame(frame, now=clock["t"])
