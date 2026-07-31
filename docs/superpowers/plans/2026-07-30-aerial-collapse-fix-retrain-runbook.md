@@ -127,52 +127,74 @@ bash experiments/aerial/scripts/run_collapse_fix_retrain.sh train
 
 **任务 3 与任务 4 默认是串行的**（先在 `:31126` 训完，再逐 ckpt 到 `:30905`
 评测）。但两者跑在不同主机上，且评测消费的是 checkpoint 文件，所以可以让评测
-在训练还在跑时就「边出边评」——用现有 B1 编排工具即可，无需新代码。
+在训练还在跑时就「边出边评」——用现有 B1 编排工具即可。
 
-**思路：** `:31126` 训练照常写 `checkpoints/weights/step_*.pt`；在 `:30905`
-起一个 watcher 轮询 weights 目录，每出现一个满足大小阈值的 ckpt 就把它作为一个
-评测 job 入队；再起一个 worker 认领 job、用 `ORACLE_STOP=0`（学习到的 stop）跑
-闭环。二者通过共享的 `eval_queue` 目录解耦。
+### 可行性约束（先读 —— 先前草案的漏洞）
+
+1. **`:30905` 必须看得见 weights。** 训练默认写 `./runs/train/<hydra-stamp>/`，评测机
+   看不到。必须用 `OUTPUT_DIR` 指到双方都能访问的路径（本机 `/home/a25689` 整盘是
+   Ceph，用 `aerial_cache_shared/runs/aerial_collapse_fix/...` 即可）。
+2. **`STEPS` 必须对齐本次 `MAX_STEPS`/`SAVE_EVERY`。** 例：`MAX_STEPS=1500`、
+   `SAVE_EVERY=500` → `STEPS=500,1000,1500`。SOP 里若写到 `5000` 会空等永不出现的
+   ckpt（watcher 本身不退出，但浪费且误导）。
+3. **专用 `EVAL_QUEUE_DIR`。** 默认队列常残留旧 B0/B1 job；worker 会先认领它们，
+   污染 AirSim / 结果。collapse-fix 用独立队列，例如
+   `.../orchestration/eval_queue_collapse_fix`。
+4. **评测必须启用 `head_cls`。** 仅 `task=aerial_joint_collapse_fix` 不够时，
+   旧版会静默退回 continuous→nearest-primitive，**测不到「学习到的 stop」**。
+   现已：task yaml 含 `enable_action_cls: true`，且 `run_closed_loop` 对
+   `collapse_fix` task 追加 `+enable_action_cls`。
+5. **`dataset_stats.json` 必须在 ckpt 旁**（trainer 写在 `output_dir/`；discover
+   会 mirror 到 shared weights）。缺了反归一化错，动作塌成 yaw-only。
+6. **`ORACLE_STOP=0`（默认）** 才是任务 4 口径；显式写出防 shell 残留 `=1`。
+
+### 推荐并行命令
 
 ```bash
-# 在 :30905（评测机），watcher —— 监视本次 collapse-fix 训练的 weights 目录
-STAMP=<collapse-fix-run-stamp> \
-TASK=aerial_joint_collapse_fix \
-WEIGHTS_DIR=<训练 checkpoint_root>/weights \
-STEPS="$(seq -s, 500 500 5000)" \
-ANN=<path/to/eval_annotation.json> \
-OPENFLY_ROOT=<path/to/OpenFly-Platform> \
-bash experiments/aerial/scripts/orch_ckpt_watch_enqueue.sh
+# ---- :31126 训练（Task 3）----
+STAMP=20260731-collapse-fix-1500
+OUTPUT_DIR=/home/a25689/aerial_cache_shared/runs/aerial_collapse_fix/m1b-${STAMP}
+MAX_STEPS=1500 SAVE_EVERY=500 OUTPUT_DIR="$OUTPUT_DIR" \
+  bash experiments/aerial/scripts/run_collapse_fix_retrain.sh train
 
-# 在 :30905，worker（另开一个 shell）—— 认领 job，用学习到的 stop 评测
+# ---- :30905 watcher（Task 4 入队）----
+STAMP=20260731-collapse-fix-1500
+WEIGHTS_DIR=/home/a25689/aerial_cache_shared/runs/aerial_collapse_fix/m1b-${STAMP}/checkpoints/weights
+STAMP=$STAMP \
+TASK=aerial_joint_collapse_fix \
+WEIGHTS_DIR=$WEIGHTS_DIR \
+SHARED_WEIGHTS_DIR=$WEIGHTS_DIR \
+STEPS="$(seq -s, 500 500 1500)" \
+EVAL_QUEUE_DIR=/home/a25689/aerial_cache_shared/orchestration/eval_queue_collapse_fix \
+ANN=/home/a25689/aerial_eval_cache/Annotation/seen_airsim16_m1a20.json \
+OPENFLY_ROOT=/home/a25689/aerial_eval_cache/OpenFly-Platform \
+bash experiments/aerial/scripts/orch_ckpt_watch_enqueue.sh --dry-run   # 先核对
+# 去掉 --dry-run 后常驻
+
+# ---- :30905 worker（认领 + 学习 stop 评测）----
 ORACLE_STOP=0 \
+EVAL_QUEUE_DIR=/home/a25689/aerial_cache_shared/orchestration/eval_queue_collapse_fix \
 bash experiments/aerial/scripts/orch_eval_worker.sh
 ```
 
-- [ ] **第 1 步：** 确认 `WEIGHTS_DIR` 指向本次训练 trainer 实际的
-  `checkpoint_root/weights`（**不是** B1 默认的 `b1-${STAMP}/...` 路径）。
-- [ ] **第 2 步：** `STEPS` 用 `500,1000,…` 对齐 `SAVE_EVERY=500`（默认是 B1 的
-  250 间距，若不覆盖会去等永不出现的 250-step ckpt）。
-- [ ] **第 3 步：** worker 用 `ORACLE_STOP=0`（学习 stop）——这正是任务 4 的评测
-  口径。脚本默认就是 `0`（见 `orch_eval_worker.sh:22`），显式写出是为了防止 shell
-  里残留 `ORACLE_STOP=1`；只有 `=1` 才会走 oracle stop，那评的就不是「策略自己会
-  不会终止」。
-- [ ] **第 4 步：** 先 `orch_ckpt_watch_enqueue.sh --dry-run` 核对入队的 steps /
-  weights 路径 / queue 目录再正式起。
+- [ ] **第 1 步：** `OUTPUT_DIR`/`WEIGHTS_DIR` 指向本次训练的 shared checkpoint 树
+  （**不是** B1 默认 `b1-${STAMP}`）。
+- [ ] **第 2 步：** `STEPS` 与 `SAVE_EVERY`/`MAX_STEPS` 对齐（本 run：500/1000/1500）。
+- [ ] **第 3 步：** 独立 `EVAL_QUEUE_DIR`；worker `ORACLE_STOP=0`。
+- [ ] **第 4 步：** 先 `--dry-run` 核对 steps / weights / queue，再正式起 watcher+worker。
 
 ### 本节涉及的脚本与代码改动
 
 | 脚本 / 代码 | 是否需改 | 说明 |
 |-------------|----------|------|
-| `experiments/aerial/scripts/orch_ckpt_watch_enqueue.sh` | **已改（本方案）** | 新增 `STEPS` 环境变量覆盖（`B1_STEPS="${STEPS:-$(seq -s, 250 250 5000)}"`）。不设 `STEPS` 时逐比特保持 B1 原有 250-间距行为；collapse-fix 用 `STEPS="$(seq -s, 500 500 5000)"` 对齐 `SAVE_EVERY=500`。`--help` 同步更新。`STAMP`/`WEIGHTS_DIR`/`TASK`/`ANN`/`OPENFLY_ROOT` 本就是 env 覆盖，按上面命令设即可。 |
-| `experiments/aerial/scripts/orch_eval_worker.sh` | **无需改** | task 从 job JSON 读取，脚本本身与任务无关；`ORACLE_STOP` 已是 env 开关，跑时带 `ORACLE_STOP=0` 即可。 |
-| `experiments/aerial/orchestration/b1_discover.py` | **无需改** | 全参数驱动（`--stamp/--weights-dir/--queue-dir/--results-root/--ann/--openfly-root/--task/--steps/--poll-s/--min-bytes`）。仅结果目录名带 `b1_` 前缀、job kind 记为 `b1`（纯命名，功能不受影响）。 |
-| `experiments/aerial/orchestration/eval_queue.py` | **无需改** | 队列原语（enqueue/claim/complete）与任务无关，原样复用。 |
-| `experiments/aerial/scripts/run_collapse_fix_retrain.sh` | **无需改** | 训练侧不感知评测；只需把 watcher 的 `WEIGHTS_DIR` 指到本次训练 trainer 的 `checkpoint_root/weights`。 |
+| `run_collapse_fix_retrain.sh` | **已改** | `OUTPUT_DIR` + 本机 Wan（`redirect_common_files=false`）+ `+enable_action_cls`。 |
+| `orch_ckpt_watch_enqueue.sh` | **已改** | `STEPS` 可覆盖；collapse-fix 对齐 `SAVE_EVERY`。 |
+| `orch_eval_worker.sh` | **无需改** | 认领任意队列；靠独立 `EVAL_QUEUE_DIR` 隔离。 |
+| `aerial_joint_collapse_fix.yaml` | **已改** | `model.action_dit_config.enable_action_cls: true`（训/评同源）。 |
+| `run_closed_loop.py` | **已改** | `collapse_fix` task 自动 `+enable_action_cls`。 |
+| `b1_discover.py` / `eval_queue.py` | **无需改** | 全参数驱动；结果目录仍叫 `b1_<stamp>`（纯命名）。 |
 
-> **命名提示：** 复用 B1 编排后，结果会落在 `results/b1_<stamp>/...`、job 标为
-> `b1`。这只是历史命名，评的是 collapse-fix ckpt。若在意可后续给
-> `b1_discover.py` 加 `--kind`/结果前缀参数，但对本次评测非必需，不阻塞。
+> **命名提示：** 结果落在 `results/b1_<stamp>/...`、job kind=`b1` 只是历史命名。
 
 ---
 
