@@ -53,14 +53,34 @@
 
 | 路径 | 在重训中的角色 |
 |------|-----------------|
-| `experiments/aerial/scripts/run_collapse_fix_retrain.sh` | reconvert → preflight → smoke → train 启动器（本方案的驱动） |
+| `experiments/aerial/scripts/run_collapse_fix_retrain.sh` | reconvert → preflight → smoke → train；支持 `OUTPUT_DIR` / 本机 Wan |
 | `experiments/aerial/convert_openfly_to_lerobot.py` | `--stop-relabel-radius` stop relabel（不变量 #2a / #3） |
-| `configs/task/aerial_joint_collapse_fix.yaml` | λ 配方 + `override /data: aerial_openfly_collapse_fix` |
+| `configs/task/aerial_joint_collapse_fix.yaml` | λ 配方 + `enable_action_cls: true` + `override /data: aerial_openfly_collapse_fix` |
 | `configs/data/aerial_openfly_collapse_fix.yaml` | `num_frames=9`、`ratio=2`、`skip_padding`（不变量 #2b） |
-| `src/fastwam/models/wan22/action_dit.py` | `head_cls` + `classify_from_tokens`（经 override 启用） |
+| `src/fastwam/models/wan22/action_dit.py` | `head_cls` + `classify_from_tokens` |
 | `src/fastwam/models/wan22/fastwam.py` | CE 分支（`loss_lambda_ce>0` + `head_cls`） |
+| `experiments/aerial/eval/run_closed_loop.py` | `collapse_fix` task 自动 `+enable_action_cls`；`redirect_common_files=false` |
 | `experiments/aerial/eval/policy_fastwam.py` | 闭环在有 `primitive` 时用 `argmax(cls)` |
+| `experiments/aerial/scripts/orch_ckpt_watch_enqueue.sh` | 并行评测：轮询 weights → 入队（`STEPS`/`WEIGHTS_DIR`/`EVAL_QUEUE_DIR`） |
+| `experiments/aerial/scripts/orch_eval_worker.sh` | 并行评测：认领 job，`ORACLE_STOP=0` 学习 stop |
 | `experiments/aerial/collapse_fix/compute_dmax.py` | 仅供参考的 d_max（见 §d_max） |
+
+**本机路径约定（`:31126` / `:30905` 当前 run）：**
+
+| 变量 | 值 |
+|------|-----|
+| `STAMP` | `20260731-collapse-fix-1500` |
+| `OUTPUT_DIR` / run root | `/home/a25689/aerial_cache_shared/runs/aerial_collapse_fix/m1b-${STAMP}` |
+| `WEIGHTS_DIR` | `${OUTPUT_DIR}/checkpoints/weights` |
+| `EVAL_QUEUE_DIR` | `/home/a25689/aerial_cache_shared/orchestration/eval_queue_collapse_fix` |
+| `MAX_STEPS` / `SAVE_EVERY` / `STEPS` | `1500` / `500` / `500,1000,1500` |
+| reconvert ann | `.../FastWAM/data/openfly_raw/Annotation/subset_train.json` |
+| reconvert images | `.../FastWAM/data/openfly_raw` |
+| eval ann | `/home/a25689/aerial_eval_cache/Annotation/seen_airsim16_m1a20.json` |
+| `OPENFLY_ROOT` | `/home/a25689/aerial_eval_cache/OpenFly-Platform` |
+
+> **Wan 权重：** 禁止再下；用 `checkpoints/Wan-AI/` + `redirect_common_files=false` +
+> `DIFFSYNTH_SKIP_DOWNLOAD=true`（见 `.cursor/rules/aerial-wan-weights-local.mdc`）。
 
 ---
 
@@ -69,14 +89,15 @@
 非破坏性：写入 `train_subset_stop20`,原始子集保持不变。
 
 ```bash
-OPENFLY_ANN=<path/to/annotation.json> \
-OPENFLY_IMAGE_ROOT=<path/to/images> \
+OPENFLY_ANN=/home/a25689/aerial_wam_runtime/FastWAM/data/openfly_raw/Annotation/subset_train.json \
+OPENFLY_IMAGE_ROOT=/home/a25689/aerial_wam_runtime/FastWAM/data/openfly_raw \
 bash experiments/aerial/scripts/run_collapse_fix_retrain.sh reconvert
 ```
 
 - [x] **第 1 步：** 运行 `reconvert`;确认 `./data/openfly_lerobot/train_subset_stop20` 已生成。
 - [x] **第 2 步：** 校验:原始 `train_subset` 逐字节未变（不变量 #1）。
 - [x] **第 3 步：**（可选）抽查几条 episode —— 末帧 + 近 goal 帧应带 `action==[0,0,0,0]`。
+  （实测：末帧零动作 200/200；零动作行 740/2709 ≈ 27%。）
 
 > `R=20.0` 对齐 `OPENFLY_SUCCESS_DIST_M`（`experiments/aerial/eval/metrics.py`）。
 > 若评测阈值变动,用 `STOP_RADIUS=<m>` 覆盖。目标目录已存在时,用 `FORCE=1`
@@ -88,113 +109,116 @@ bash experiments/aerial/scripts/run_collapse_fix_retrain.sh reconvert
 
 ```bash
 bash experiments/aerial/scripts/run_collapse_fix_retrain.sh preflight
+# smoke 必须本机 Wan（启动器已默认 redirect_common_files=false + DIFFSYNTH_SKIP_DOWNLOAD）
 bash experiments/aerial/scripts/run_collapse_fix_retrain.sh smoke
 ```
 
 - [x] **第 1 步：** preflight 通过：relabel 数据在位、2 块 GPU、`resume=null`、检测到 `head_cls` 接线、`RESUME`/`AERIAL_ALLOW_LEGACY_RESUME` 为空。
 - [x] **第 2 步：** smoke（`SMOKE_STEPS=10`）打印**有限**的 `loss_video`、`loss_action`（fm）以及 **`loss_ce`** —— 出现非平凡的 `loss_ce` 就是「CE 头确实接上并在接收 stop 标签」的信号。
 - [x] **第 3 步：** 无 NaN;峰值显存 < 90%。记录 steps/s → 据此设 `MAX_STEPS`。
-  （`:31126` 实测 ~0.09 step/s；`loss_ce` 5.97→0.02；峰值显存 ~70.5/81.6 GiB≈86.5%；本机 Wan，`redirect_common_files=false` + `+enable_action_cls`。建议 Task3：`MAX_STEPS=1000` 或 `1500`，`SAVE_EVERY=500`。）
+  （`:31126` 实测 ~0.09 step/s；`loss_ce` 5.97→0.02；峰值显存 ~70.5/81.6 GiB≈86.5%。
+  **本 run 锁定：** `MAX_STEPS=1500`，`SAVE_EVERY=500`。）
 
-> 启动器在 task 配置之上**显式**传入配方（`enable_action_cls=true`、
-> `λ_video/λ_fm/λ_ce`,以及 `data.train.dataset_dirs=[…train_subset_stop20]`）,
-> 因此整条 override 链在日志里自解释。
+> 启动器在 task 配置之上**显式**传入配方（`+enable_action_cls`、
+> `λ_video/λ_fm/λ_ce`、`data.train.dataset_dirs=[…train_subset_stop20]`、
+> `redirect_common_files=false`）,因此整条 override 链在日志里自解释。
 
 ---
 
 ### 任务 3：完整重训（主机 `:31126`）
 
+**必须**设 `OUTPUT_DIR` 到 shared（否则任务 4 / 并行 watcher 看不见 ckpt）。
+勿再依赖 Hydra 默认的 `./runs/train/<stamp>/`。
+
 ```bash
-MAX_STEPS=<来自 smoke> SAVE_EVERY=500 \
-bash experiments/aerial/scripts/run_collapse_fix_retrain.sh train
+STAMP=20260731-collapse-fix-1500
+OUTPUT_DIR=/home/a25689/aerial_cache_shared/runs/aerial_collapse_fix/m1b-${STAMP}
+MAX_STEPS=1500 SAVE_EVERY=500 OUTPUT_DIR="$OUTPUT_DIR" \
+  bash experiments/aerial/scripts/run_collapse_fix_retrain.sh train
 ```
 
-- [ ] **第 1 步：** 启动完整训练;checkpoint 落在 `checkpoints/weights/step_*.pt`。
+- [x] **第 1 步：** 启动完整训练;checkpoint 落在
+  `$OUTPUT_DIR/checkpoints/weights/step_*.pt`（run 已启动；等 500/1000/1500）。
 - [ ] **第 2 步：** 观察 `loss_ce` 下降、预测原语直方图从「只有前进」的塌缩里铺开（用 `plot_loss.py` 记录/绘图）。
 - [ ] **第 3 步：** 目标 ≤5 个 epoch 等效量（当前子集上）;数据扩充留到后续阶段。
+  （1500 step @ ~0.09 step/s ≈ 4.5h wall；与并行任务 4 重叠。）
 
 ---
 
 ### 任务 4：以「学习到的 stop」评测（主机 `:30905`）
 
-- [ ] **第 1 步：** 用 `ORACLE_STOP=0`（经 `argmax(cls)` 的学习 stop）+ `closest_approach` 诊断入队各 ckpt。
+**推荐与任务 3 并行**（见下一节）。串行亦可：训完后再对
+`step_000500/1000/1500` 入队。口径一律 `ORACLE_STOP=0`（学习 stop）。
+
+- [ ] **第 1 步：** 用独立队列 + `ORACLE_STOP=0`（`argmax(cls)`）+ `closest_approach`
+  诊断评各 ckpt（**不要**用默认 `eval_queue`，内有旧 b0v2 job）。
 - [ ] **第 2 步：** 将 SR / NE / SPL 与 b0_v2（SR=0）及 Stage-0 oracle-stop 天花板（~10%）对比。
 - [ ] **第 3 步：** 锁定基线前,过 v3.2 §1 的硬成功标准。
 
 ---
 
-## 并行评测（可选 —— 与任务 3 重叠以省整体墙钟）
+## 并行评测（与任务 3 重叠 —— 本 run 采用）
 
-**任务 3 与任务 4 默认是串行的**（先在 `:31126` 训完，再逐 ckpt 到 `:30905`
-评测）。但两者跑在不同主机上，且评测消费的是 checkpoint 文件，所以可以让评测
-在训练还在跑时就「边出边评」——用现有 B1 编排工具即可。
+训练在 `:31126` 写 shared `OUTPUT_DIR`；`:30905` watcher 轮询 `WEIGHTS_DIR`、
+入队到**专用** `EVAL_QUEUE_DIR`；worker 以 `ORACLE_STOP=0` 认领。默认 B1
+`eval_queue` **禁止**混用。
 
-### 可行性约束（先读 —— 先前草案的漏洞）
+### 可行性约束（硬性）
 
-1. **`:30905` 必须看得见 weights。** 训练默认写 `./runs/train/<hydra-stamp>/`，评测机
-   看不到。必须用 `OUTPUT_DIR` 指到双方都能访问的路径（本机 `/home/a25689` 整盘是
-   Ceph，用 `aerial_cache_shared/runs/aerial_collapse_fix/...` 即可）。
-2. **`STEPS` 必须对齐本次 `MAX_STEPS`/`SAVE_EVERY`。** 例：`MAX_STEPS=1500`、
-   `SAVE_EVERY=500` → `STEPS=500,1000,1500`。SOP 里若写到 `5000` 会空等永不出现的
-   ckpt（watcher 本身不退出，但浪费且误导）。
-3. **专用 `EVAL_QUEUE_DIR`。** 默认队列常残留旧 B0/B1 job；worker 会先认领它们，
-   污染 AirSim / 结果。collapse-fix 用独立队列，例如
-   `.../orchestration/eval_queue_collapse_fix`。
-4. **评测必须启用 `head_cls`。** 仅 `task=aerial_joint_collapse_fix` 不够时，
-   旧版会静默退回 continuous→nearest-primitive，**测不到「学习到的 stop」**。
-   现已：task yaml 含 `enable_action_cls: true`，且 `run_closed_loop` 对
-   `collapse_fix` task 追加 `+enable_action_cls`。
-5. **`dataset_stats.json` 必须在 ckpt 旁**（trainer 写在 `output_dir/`；discover
-   会 mirror 到 shared weights）。缺了反归一化错，动作塌成 yaw-only。
-6. **`ORACLE_STOP=0`（默认）** 才是任务 4 口径；显式写出防 shell 残留 `=1`。
+1. **`:30905` 必须看得见 weights** → 训练用 `OUTPUT_DIR` 指向
+   `aerial_cache_shared/runs/aerial_collapse_fix/...`（勿用 Hydra 默认本地 stamp）。
+2. **`STEPS` = 实际会落盘的 step** → 本 run：`500,1000,1500`。
+3. **专用 `EVAL_QUEUE_DIR`** → `.../eval_queue_collapse_fix`。
+4. **评测必须建 `head_cls`** → task yaml + `run_closed_loop` 已对 `collapse_fix`
+   自动 `+enable_action_cls`。
+5. **`dataset_stats.json` 在 run root / weights 旁**。
+6. **`ORACLE_STOP=0`**；显式写出防 shell 残留 `=1`。
 
-### 推荐并行命令
+### 命令（本 run）
 
 ```bash
-# ---- :31126 训练（Task 3）----
+# ---- :31126 训练（Task 3）—— 已启动则跳过 ----
 STAMP=20260731-collapse-fix-1500
 OUTPUT_DIR=/home/a25689/aerial_cache_shared/runs/aerial_collapse_fix/m1b-${STAMP}
 MAX_STEPS=1500 SAVE_EVERY=500 OUTPUT_DIR="$OUTPUT_DIR" \
   bash experiments/aerial/scripts/run_collapse_fix_retrain.sh train
 
-# ---- :30905 watcher（Task 4 入队）----
+# ---- :30905 watcher ----
 STAMP=20260731-collapse-fix-1500
 WEIGHTS_DIR=/home/a25689/aerial_cache_shared/runs/aerial_collapse_fix/m1b-${STAMP}/checkpoints/weights
-STAMP=$STAMP \
-TASK=aerial_joint_collapse_fix \
-WEIGHTS_DIR=$WEIGHTS_DIR \
-SHARED_WEIGHTS_DIR=$WEIGHTS_DIR \
-STEPS="$(seq -s, 500 500 1500)" \
-EVAL_QUEUE_DIR=/home/a25689/aerial_cache_shared/orchestration/eval_queue_collapse_fix \
-ANN=/home/a25689/aerial_eval_cache/Annotation/seen_airsim16_m1a20.json \
-OPENFLY_ROOT=/home/a25689/aerial_eval_cache/OpenFly-Platform \
-bash experiments/aerial/scripts/orch_ckpt_watch_enqueue.sh --dry-run   # 先核对
-# 去掉 --dry-run 后常驻
+EVAL_QUEUE_DIR=/home/a25689/aerial_cache_shared/orchestration/eval_queue_collapse_fix
+mkdir -p "$EVAL_QUEUE_DIR"/{pending,running,done,failed}
+STAMP=$STAMP TASK=aerial_joint_collapse_fix \
+  WEIGHTS_DIR=$WEIGHTS_DIR SHARED_WEIGHTS_DIR=$WEIGHTS_DIR \
+  STEPS="$(seq -s, 500 500 1500)" \
+  EVAL_QUEUE_DIR=$EVAL_QUEUE_DIR \
+  ANN=/home/a25689/aerial_eval_cache/Annotation/seen_airsim16_m1a20.json \
+  OPENFLY_ROOT=/home/a25689/aerial_eval_cache/OpenFly-Platform \
+  bash experiments/aerial/scripts/orch_ckpt_watch_enqueue.sh --dry-run
+# 核对无误后去掉 --dry-run，nohup 常驻
 
-# ---- :30905 worker（认领 + 学习 stop 评测）----
+# ---- :30905 worker ----
 ORACLE_STOP=0 \
 EVAL_QUEUE_DIR=/home/a25689/aerial_cache_shared/orchestration/eval_queue_collapse_fix \
 bash experiments/aerial/scripts/orch_eval_worker.sh
 ```
 
-- [ ] **第 1 步：** `OUTPUT_DIR`/`WEIGHTS_DIR` 指向本次训练的 shared checkpoint 树
-  （**不是** B1 默认 `b1-${STAMP}`）。
-- [ ] **第 2 步：** `STEPS` 与 `SAVE_EVERY`/`MAX_STEPS` 对齐（本 run：500/1000/1500）。
-- [ ] **第 3 步：** 独立 `EVAL_QUEUE_DIR`；worker `ORACLE_STOP=0`。
-- [ ] **第 4 步：** 先 `--dry-run` 核对 steps / weights / queue，再正式起 watcher+worker。
+- [x] **第 1 步：** `OUTPUT_DIR`/`WEIGHTS_DIR` 指向本次 shared checkpoint 树。
+- [x] **第 2 步：** `STEPS=500,1000,1500` 对齐 `SAVE_EVERY`/`MAX_STEPS`。
+- [x] **第 3 步：** 独立 `EVAL_QUEUE_DIR`；worker 将用 `ORACLE_STOP=0`。
+- [x] **第 4 步：** `--dry-run` 已通过。
+- [ ] **第 5 步：** 正式拉起 watcher + worker（无 `--dry-run`）。
 
-### 本节涉及的脚本与代码改动
+### 脚本状态
 
-| 脚本 / 代码 | 是否需改 | 说明 |
-|-------------|----------|------|
-| `run_collapse_fix_retrain.sh` | **已改** | `OUTPUT_DIR` + 本机 Wan（`redirect_common_files=false`）+ `+enable_action_cls`。 |
-| `orch_ckpt_watch_enqueue.sh` | **已改** | `STEPS` 可覆盖；collapse-fix 对齐 `SAVE_EVERY`。 |
-| `orch_eval_worker.sh` | **无需改** | 认领任意队列；靠独立 `EVAL_QUEUE_DIR` 隔离。 |
-| `aerial_joint_collapse_fix.yaml` | **已改** | `model.action_dit_config.enable_action_cls: true`（训/评同源）。 |
-| `run_closed_loop.py` | **已改** | `collapse_fix` task 自动 `+enable_action_cls`。 |
-| `b1_discover.py` / `eval_queue.py` | **无需改** | 全参数驱动；结果目录仍叫 `b1_<stamp>`（纯命名）。 |
-
-> **命名提示：** 结果落在 `results/b1_<stamp>/...`、job kind=`b1` 只是历史命名。
+| 脚本 / 代码 | 说明 |
+|-------------|------|
+| `run_collapse_fix_retrain.sh` | `OUTPUT_DIR`、本机 Wan、`+enable_action_cls` |
+| `orch_ckpt_watch_enqueue.sh` | `STEPS` 可覆盖 |
+| `orch_eval_worker.sh` | 靠独立 `EVAL_QUEUE_DIR` 隔离 |
+| `aerial_joint_collapse_fix.yaml` | `enable_action_cls: true` |
+| `run_closed_loop.py` | `collapse_fix` → 自动 `+enable_action_cls` |
+| `b1_discover.py` / `eval_queue.py` | 无需改；结果目录名仍为 `b1_<stamp>`（纯命名） |
 
 ---
 
@@ -223,10 +247,10 @@ bash experiments/aerial/scripts/orch_eval_worker.sh
 
 ## 备注 / 风险
 
-- 沙箱无法重转数据、无法访问 GPU、无法 SSH 主机 —— 任务 1–4 由用户在
-  `:31126` / `:30905` 执行。本方案 + 启动器即 SOP。
+- 任务在 `:31126` / `:30905` 执行；Agent 可通过 SSH 操作。本手册 + 启动器即 SOP。
 - 所有纯 Python 的转换/标签逻辑已在本地单测
   （`test_convert_openfly_fixture.py`、`test_collapse_fix_labels.py`）;torch
   路径（head_cls、CE、denoise）由主机验证。
 - 不要改动基线 `aerial_openfly.yaml` / `aerial_joint_1cam_1e-4.yaml` 或原始
   `train_subset` —— 塌缩修复路径与之完全并行。
+- **禁止**再下载 Wan2.2 / DiffSynth 权重；用本机 `checkpoints/Wan-AI/`。
