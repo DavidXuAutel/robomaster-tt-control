@@ -20,7 +20,7 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 | 改环绕（Orbit）代码或参数 | `design/2026-07-27-orbit-control-principles.md`（仅 Claude 可改） |
 | 改漫游（Wander）代码或参数 | `design/2026-07-27-wander-explore-design.md`（仅 Claude 可改） |
 | 了解项目全部能力 | `handover/2026-07-25-capability-inventory.md` |
-| 空地协同（无人机×机器狗）演示 | `handover/2026-07-30-air-ground-phased-gates.md` + `design/2026-07-30-air-ground-mission-architecture.md` |
+| 空地协同（无人机×机器狗）演示 | `handover/2026-07-30-air-ground-phased-gates.md` + `design/2026-07-30-air-ground-mission-architecture.md` + `design/2026-07-31-air-ground-g1-g2-design.md` |
 
 ## 现有文档
 
@@ -35,6 +35,7 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-27-orbit-control-principles.md` — **POI 环绕模块设计原则与参数守则**（安全不变量 + 历史坑 + 参数安全范围；**仅 Claude 可改**）
 - `2026-07-27-wander-explore-design.md` — **随机漫游模块实现规格书**（含分工与验收阶梯；**仅 Claude 可改**）
 - `2026-07-30-air-ground-mission-architecture.md` — 空地协同 MissionBrain 架构说明（语义地图 + 事件契约 + 适配器边界）
+- `2026-07-31-air-ground-g1-g2-design.md` — G1–G2 真机适配设计（Codex 审过：串行 Scout / abort 广播 / 防假绿）
 
 ### dev-notes/ — 开发过程笔记
 - `2026-07-18-avoidance-dev-notes.md` — 视觉避障离线开发说明
