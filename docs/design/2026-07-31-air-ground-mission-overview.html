@@ -371,6 +371,7 @@
   <a href="#s2">2. 剧本</a>
   <a href="#s3">3. 分工</a>
   <a href="#s4">4. 语义地图</a>
+  <a href="#s4b">4b. SLAM 与路点</a>
   <a href="#s5">5. 为何这样设计</a>
   <a href="#s6">6. 三项关键选择</a>
   <a href="#s7">7. 分阶段验收</a>
@@ -405,7 +406,7 @@
       机器狗用自己的
       <span class="term-wrap">
         <button type="button" class="term" aria-describedby="tip-slam">LiDAR SLAM</button>
-        <span class="tooltip" role="tooltip" id="tip-slam">激光雷达即时定位与建图：狗用激光扫周围，在自己地图里知道身在何处、怎么走到路点。</span>
+        <span class="tooltip" role="tooltip" id="tip-slam">狗自己的米制地图系统：激光建图 + 实时定位。不是「按区域编号走路」，而是在连续坐标里规划路径到某个路点。</span>
       </span> 到点干活。
     </p>
     <p style="margin:0;color:var(--muted);font-size:.92rem;">
@@ -472,7 +473,7 @@
     <li><strong>派狗</strong>：Brain 查语义地图，把 region 换成狗地图里的
       <span class="term-wrap">
         <button type="button" class="term" aria-describedby="tip-goal">dog_goal_id</button>
-        <span class="tooltip" role="tooltip" id="tip-goal">预先在狗的 SLAM 地图里标好的路点 ID，例如区域入口观察点；不是飞机估出来的 XYZ 坐标。</span>
+        <span class="tooltip" role="tooltip" id="tip-goal">狗导航软件里给某个预标位置起的名字/ID（如 wp_region_x_staging）。狗收到这个 ID 就去地图里对应坐标，不是经纬度，也不是飞机报的 XYZ。</span>
       </span>，发 <code>dog.inspect</code>。</li>
     <li><strong>狗到点重找</strong>：导航到集结点 → <code>dog.arrived</code> → 用机载相机再找一遍物体 A → <code>dog.target_found</code>。</li>
     <li><strong>气检动作</strong>：<code>gas.sample</code> → 读数回传 <code>gas.completed</code> → <code>mission.completed</code>。</li>
@@ -549,6 +550,70 @@
   </div>
 </section>
 
+<section id="s4b">
+  <h2>4b. LiDAR SLAM、路点、语义地图怎么对齐？</h2>
+
+  <h3>LiDAR SLAM 在干什么（不是「按区域编号走路」）</h3>
+  <p>
+    更像给狗一张<strong>连续的室内平面图（米制坐标）</strong>：激光一边扫障碍，一边回答「我现在在地图哪一点、朝哪」。
+    导航时是「从当前位置规划路径走到目标坐标」，<strong>不是</strong>「进入区域编号 X 就算到了」。
+    「区域」是人给任务起的名字；狗实际走的是地图上的一个点。
+  </p>
+  <div class="card">
+    <p style="margin:0 0 8px;"><strong>具体样例（厂房一角）</strong></p>
+    <ol class="steps" style="margin:0;">
+      <li><strong>建图（提前做一次）</strong>：人遥控狗绕场走一圈，LiDAR 扫出墙、柱、通道，保存为狗的地图文件（厂商 App/SDK 里那张图）。</li>
+      <li><strong>标路点（仍是提前）</strong>：在软件里点选「气源模拟区门口」→ 存成路点名 <code>wp_region_x_staging</code>，内部绑定该点在狗地图里的 (x, y, yaw)。<strong>不是经纬度</strong>（室内 GPS/RTK 基本不可用）。</li>
+      <li><strong>任务时定位</strong>：狗开机，激光匹配已有地图 → 知道自己在哪。</li>
+      <li><strong>收到 goto</strong>：命令是「去 <code>wp_region_x_staging</code>」→ 在地图里查这个 ID 的坐标 → 自主避障走到门口集结点。</li>
+      <li><strong>到点之后</strong>：在集结点附近用相机<strong>局部搜索</strong>红色物体 A（不是漫无目的全场探索；搜索半径/策略由狗侧任务定）。找到再气检。</li>
+    </ol>
+  </div>
+
+  <h3>和语义/拓扑地图的关系</h3>
+  <div class="compare">
+    <div class="col good">
+      <h4>狗的 SLAM 地图（米制、权威）</h4>
+      <ul>
+        <li>有真实几何：墙、通道、可走区域</li>
+        <li>有路点坐标：<code>wp_*</code> → (x,y,yaw)</li>
+        <li>只有狗（及狗厂商软件）完整持有</li>
+      </ul>
+    </div>
+    <div class="col" style="background:var(--steel-soft);border-color:#c5d4e6;">
+      <h4>语义地图 JSON（任务对照表）</h4>
+      <ul>
+        <li>只有名字对齐：<code>region_x</code> → <code>wp_region_x_staging</code></li>
+        <li>不存点云，也不存经纬度</li>
+        <li>Brain / 飞机 / 人都读这份表</li>
+      </ul>
+    </div>
+  </div>
+  <p>
+    <strong>对齐方式 = 人工标定同名 ID</strong>：建狗地图时标出路点名；写 JSON 时把同一字符串填进 <code>dog_goal_id</code>。
+    语义一致靠「名字约定 + 验收时人眼确认狗真能到那个门口」，不是靠 GPS 坐标自动对齐。
+  </p>
+
+  <h3>「路点 ID」是不是入口，到了再找物体？</h3>
+  <p>
+    <strong>对，v1 就是这个意思。</strong>
+    <code>dog_goal_id</code> 是<strong>集结点 / staging waypoint</strong>（通常标在区域入口或安全观察点），不是物体 A 本身的坐标。
+    流程：导航到集结点 → <code>dog.arrived</code> → <strong>本地重找</strong>物体 A → 再气检。
+    这样即使飞机报错了半米，狗仍以自己眼睛为准。
+  </p>
+
+  <h3>无人机到底告诉狗什么？</h3>
+  <div class="callout ok">
+    <b class="label">链路（不是飞机直连狗塞坐标）</b>
+    无人机上报 <code>region_id</code>（+ 锚点/证据）→
+    <strong>MissionBrain 查语义地图</strong> 换成 <code>dog_goal_id</code> →
+    再发 <code>dog.inspect</code> 给狗。<br />
+    所以：飞机<strong>不</strong>告诉狗经纬度，也<strong>不</strong>直接下发路点字符串给狗；
+    飞机只报「我在 region_x 看到了 A」；路标入口由 Brain 查表得出。
+    狗听到的有效导航目标就是那个预标路点 ID。
+  </div>
+</section>
+
 <section id="s5">
   <h2>5. 关键设计点：为什么这样选</h2>
 
@@ -619,10 +684,30 @@
   <h2>6. 三项关键选择（白话说明）</h2>
 
   <div class="card">
-    <h3 style="margin-top:0;">① 标记物怎么贴：单点蓝锚 + 红物体；多区强制 AprilTag</h3>
+    <h3 style="margin-top:0;">① 标记物怎么贴：
+      <span class="term-wrap">
+        <button type="button" class="term" aria-describedby="tip-blue-anchor">单点蓝锚</button>
+        <span class="tooltip" role="tooltip" id="tip-blue-anchor">只测一个演示区时：门口贴一块蓝色色板当「区域锚点」。相机看到蓝 = 确认到了这个区。同一种蓝无法区分两个区，故多区不能靠蓝。</span>
+      </span>
+      +
+      <span class="term-wrap">
+        <button type="button" class="term" aria-describedby="tip-red-obj">红物体</button>
+        <span class="tooltip" role="tooltip" id="tip-red-obj">演示用的物体 A：红色高对比标记板（可贴在阀门/气源模拟物上）。与蓝锚不同色，避免「看见红色既当门口又当目标」的混淆。</span>
+      </span>
+      ；
+      <span class="term-wrap">
+        <button type="button" class="term" aria-describedby="tip-multi-tag">多区强制 AprilTag</button>
+        <span class="tooltip" role="tooltip" id="tip-multi-tag">场地有两个及以上区域时：每个区门口贴不同 ID 的 AprilTag（如 TAG-0、TAG-1）。靠唯一 ID 区分「我在区 X 还是区 Y」，不能再用同色蓝板冒充。</span>
+      </span>
+    </h3>
     <p><strong>在干什么：</strong>规定「门口标签」和「物体 A」长什么样，好让相机稳定认出来。</p>
     <ul>
-      <li><strong>物体 A</strong>：红色标记板（演示目标）。</li>
+      <li><strong>物体 A</strong>：
+        <span class="term-wrap">
+          <button type="button" class="term" aria-describedby="tip-red-obj-2">红色标记板</button>
+          <span class="tooltip" role="tooltip" id="tip-red-obj-2">演示目标物体 A 的外观约定：饱和红色色板，便于 HSV 颜色检测；与门口锚点必须不同通道（颜色或 Tag）。</span>
+        </span>
+        （演示目标）。</li>
       <li><strong>区域锚点</strong>：证明飞机「在哪个区」。只测一个区时，蓝色板够用；两个区以上必须用不同 ID 的
         <span class="term-wrap">
           <button type="button" class="term" aria-describedby="tip-tag">AprilTag</button>
@@ -736,7 +821,11 @@
   <h2>8. 术语速查（正文虚线词可点按 / 悬停）</h2>
   <dl class="glossary">
     <div class="g-item" id="g-lidar"><dt>LiDAR</dt><dd>激光雷达：扫周围得距离点云，狗用来建图、定位、避障。</dd></div>
-    <div class="g-item"><dt>SLAM</dt><dd>边走边建图并定位；本方案里狗侧是权威米制地图。</dd></div>
+    <div class="g-item"><dt>SLAM</dt><dd>边走边建图并定位；连续米制坐标，不是「区域编号导航」。本方案狗侧地图权威。</dd></div>
+    <div class="g-item"><dt>staging / 集结点</dt><dd>区域入口或安全观察点上预标的路点；狗先到这里，再局部重找物体 A。</dd></div>
+    <div class="g-item"><dt>单点蓝锚</dt><dd>只测一区时门口蓝色彩板；证明「到锚点附近」，不能区分多区。</dd></div>
+    <div class="g-item"><dt>红物体</dt><dd>物体 A 的红色标记板；与锚点不同色，避免双用途混淆。</dd></div>
+    <div class="g-item"><dt>多区 AprilTag</dt><dd>每区门口不同 Tag ID，用来唯一确认 region。</dd></div>
     <div class="g-item"><dt>工控机 / 机载算力</dt><dd>狗身上跑导航与检测的电脑（照片里的 Legion 一类）。</dd></div>
     <div class="g-item"><dt>RTK</dt><dd>室外高精度 GPS 修正；室内基本无用。</dd></div>
     <div class="g-item"><dt>AprilTag</dt><dd>机器人定位用的标签族；多区域时用来唯一标识入口。</dd></div>
