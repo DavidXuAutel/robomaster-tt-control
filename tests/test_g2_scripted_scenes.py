@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import pytest
 
 from mission_brain.g2_runner import G2Scene, paint_blue_red, run_all, run_g2_scene
 from mission_brain.map_model import SharedMap
@@ -134,6 +135,28 @@ def _build_scenes() -> list[G2Scene]:
     )
     assert len(scenes) >= 20
     return scenes
+
+
+def test_g2_real_apriltag_wrong_tag_no_dispatch(tmp_path):
+    """真库 + 官方 Tag1 图：侦察 region_x(要 TAG-0) 不得派狗。"""
+    pytest.importorskip("pupil_apriltags")
+    from pathlib import Path
+
+    fix = Path(__file__).resolve().parent / "fixtures/mission/apriltags/tag36h11_00001.png"
+    g = cv2.imread(str(fix), cv2.IMREAD_GRAYSCALE)
+    big = cv2.resize(g, (200, 200), interpolation=cv2.INTER_NEAREST)
+    canvas = np.full((400, 400), 255, dtype=np.uint8)
+    canvas[100:300, 100:300] = big
+    frame = cv2.cvtColor(canvas, cv2.COLOR_GRAY2BGR)
+    scene = G2Scene(
+        scene_id="S15b_real_wrong_tag",
+        frames=[frame] * 5,
+        expect="no_dispatch",
+        anchor_mode="apriltag",
+        need_anchor_frames=1,
+    )
+    r = run_g2_scene(scene, _map(), evidence_dir=str(tmp_path / "S15b"))
+    assert r.ok, (r.detail, r.events)
 
 
 def test_synthetic_contract_20(tmp_path):
