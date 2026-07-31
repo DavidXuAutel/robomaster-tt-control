@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>大众空地协同演示 · 方案总览</title>
+<style>
+  :root {
+    --ink: #15202b;
+    --muted: #5a6a78;
+    --line: #d7e0e8;
+    --bg: #eef3f6;
+    --card: #ffffff;
+    --accent: #0d6b58;
+    --accent-ink: #084c3f;
+    --accent-soft: #e3f3ee;
+    --steel: #2c4a6e;
+    --steel-soft: #e8eef6;
+    --amber: #9a5b12;
+    --amber-soft: #fff4e5;
+    --rose: #9b2c2c;
+    --rose-soft: #fdecec;
+    --code: #0f172a;
+    --shadow: 0 1px 2px rgba(21,32,43,.04), 0 10px 28px rgba(21,32,43,.06);
+    --toc-h: 52px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    color: var(--ink);
+    font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Segoe UI", sans-serif;
+    line-height: 1.62;
+    background:
+      radial-gradient(1100px 480px at 8% -8%, #d7ebe4 0%, transparent 55%),
+      radial-gradient(900px 420px at 100% 0%, #dde7f2 0%, transparent 50%),
+      var(--bg);
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 36px 20px 96px; }
+
+  .toc {
+    position: sticky; top: 0; z-index: 40;
+    margin: 0 -20px 28px;
+    padding: 10px 20px;
+    background: rgba(238,243,246,.94);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+    display: flex; flex-wrap: wrap; gap: 8px 14px;
+    font-size: .82rem;
+  }
+  .toc a {
+    color: var(--steel); text-decoration: none; font-weight: 600;
+    white-space: nowrap;
+  }
+  .toc a:hover { color: var(--accent); }
+  .toc a.is-active {
+    color: var(--accent-ink);
+    text-decoration: underline;
+    text-underline-offset: 4px;
+  }
+  @media (max-width: 720px) {
+    .toc {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+    }
+  }
+
+  section[id] { scroll-margin-top: 72px; }
+  @media (max-width: 720px) {
+    section[id] { scroll-margin-top: 64px; }
+  }
+
+  .kicker {
+    font-size: .75rem; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent-ink); font-weight: 700; margin-bottom: 8px;
+  }
+  h1 {
+    font-size: clamp(1.55rem, 3vw, 1.95rem);
+    letter-spacing: -.02em; margin: 0 0 10px; line-height: 1.25;
+  }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: .98rem; max-width: 48rem; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 22px; }
+  .pill {
+    display: inline-flex; align-items: center;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: .75rem; font-weight: 700;
+    background: var(--steel-soft); color: var(--steel);
+  }
+  .pill.ok { background: var(--accent-soft); color: var(--accent-ink); }
+  .pill.warn { background: var(--amber-soft); color: var(--amber); }
+
+  h2 {
+    font-size: 1.22rem; margin: 40px 0 14px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--line);
+  }
+  h3 { font-size: 1.02rem; margin: 22px 0 8px; color: var(--accent-ink); }
+  p { margin: 0 0 12px; }
+  section > p:not(.src),
+  section > ul,
+  section > ol { max-width: 48rem; }
+  ul, ol { margin: 0 0 14px; padding-left: 1.25rem; }
+  li { margin: 5px 0; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px 20px;
+    margin: 12px 0;
+    box-shadow: var(--shadow);
+  }
+  .card.lead {
+    background: linear-gradient(180deg, #f8fcfa, #eef8f4);
+    border-color: #b9dccf;
+  }
+  .lead-line { font-size: 1.08rem; font-weight: 600; margin-bottom: 10px; }
+
+  .callout {
+    border-radius: 12px; padding: 14px 16px; margin: 14px 0;
+    border: 1px solid; font-size: .95rem;
+  }
+  .callout.why { background: var(--steel-soft); border-color: #c5d4e6; }
+  .callout.ok { background: var(--accent-soft); border-color: #b9dccf; }
+  .callout.warn { background: var(--amber-soft); border-color: #f0d3a8; color: #6b3f0c; }
+  .callout.no { background: var(--rose-soft); border-color: #f0c4c4; color: #7a2222; }
+  .callout b.label {
+    display: block; font-size: .72rem; letter-spacing: .06em;
+    text-transform: uppercase; margin-bottom: 4px; opacity: .85;
+  }
+
+  /* Accessible term tooltips */
+  .term-wrap { position: relative; display: inline; }
+  button.term {
+    appearance: none; -webkit-appearance: none;
+    margin: 0; padding: 0;
+    border: 0; border-bottom: 1px dashed var(--accent);
+    background: transparent;
+    color: var(--accent-ink);
+    font: inherit; font-weight: 600;
+    cursor: help;
+    line-height: inherit;
+  }
+  button.term:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+  .tooltip {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 10px);
+    transform: translateX(-50%) translateY(4px);
+    width: max-content;
+    max-width: min(320px, calc(100vw - 24px));
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: #15202b;
+    color: #f5f7fa;
+    font-size: .78rem;
+    font-weight: 500;
+    line-height: 1.45;
+    box-shadow: 0 8px 24px rgba(0,0,0,.22);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .15s ease, transform .15s ease, visibility .15s;
+    z-index: 50;
+    text-align: left;
+  }
+  .tooltip.is-open,
+  .term-wrap:hover .tooltip,
+  .term-wrap:focus-within .tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(var(--tip-x, -50%)) translateY(0);
+    pointer-events: auto;
+  }
+  @media (max-width: 720px) {
+    .tooltip {
+      position: fixed;
+      left: 12px !important;
+      right: 12px;
+      bottom: 16px;
+      top: auto;
+      width: auto;
+      max-width: none;
+      transform: none !important;
+      z-index: 60;
+    }
+    .tooltip.is-open,
+    .term-wrap:hover .tooltip,
+    .term-wrap:focus-within .tooltip {
+      transform: none !important;
+    }
+  }
+
+  code, .mono {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: .86em;
+  }
+  code {
+    background: #eef2f6; padding: 1px 5px; border-radius: 4px; color: var(--code);
+  }
+  .src code,
+  #index code,
+  footer { overflow-wrap: anywhere; word-break: break-word; }
+
+  .flow {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin: 14px 0;
+  }
+  @media (max-width: 800px) { .flow { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 480px) { .flow { grid-template-columns: 1fr; } }
+  .node {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 12px 14px;
+    text-align: left;
+  }
+  .node .role {
+    font-size: .7rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 4px;
+  }
+  .node .name { font-weight: 700; font-size: .95rem; margin-bottom: 4px; }
+  .node .desc { font-size: .82rem; color: var(--muted); margin: 0; }
+  .node.scout { border-top: 3px solid #2c6fad; }
+  .node.brain { border-top: 3px solid var(--accent); }
+  .node.dog { border-top: 3px solid #8a5a12; }
+  .node.map { border-top: 3px solid #5b4b8a; }
+
+  .event-flow {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    list-style: none; padding: 0; margin: 10px 0 4px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: .8rem; color: var(--muted);
+  }
+  .event-flow li {
+    margin: 0;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .event-flow li:not(:last-child)::after {
+    content: "→";
+    margin-left: 8px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  @media (max-width: 480px) {
+    .event-flow { flex-direction: column; align-items: stretch; }
+    .event-flow li:not(:last-child)::after {
+      content: "↓";
+      display: block;
+      margin: 6px 0 0;
+      text-align: center;
+    }
+  }
+
+  .table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 12px 0;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--card);
+  }
+  .table-scroll table {
+    width: 100%;
+    min-width: 620px;
+    border-collapse: collapse;
+    margin: 0;
+    font-size: .9rem;
+    border: 0;
+  }
+  th, td {
+    text-align: left; padding: 11px 12px;
+    border-bottom: 1px solid var(--line); vertical-align: top;
+  }
+  th { background: #f0f4f8; font-size: .78rem; letter-spacing: .02em; }
+  tr:last-child td { border-bottom: none; }
+  tr.rec td { background: var(--accent-soft); }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+
+  .compare {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  }
+  @media (max-width: 700px) { .compare { grid-template-columns: 1fr; } }
+  .compare .col {
+    border-radius: 12px; padding: 14px 16px; border: 1px solid var(--line);
+  }
+  .compare .bad { background: var(--rose-soft); border-color: #f0c4c4; }
+  .compare .good { background: var(--accent-soft); border-color: #b9dccf; }
+  .compare h4 { margin: 0 0 8px; font-size: .92rem; }
+  .tag-soft {
+    display: inline-block; font-size: .72rem; font-weight: 700;
+    padding: 2px 8px; border-radius: 6px; margin-right: 6px;
+  }
+  .tag-soft.bad { background: #f5d0d0; color: var(--rose); }
+  .tag-soft.good { background: #cfe9df; color: var(--accent-ink); }
+
+  .steps { counter-reset: s; list-style: none; padding: 0; margin: 10px 0; max-width: none; }
+  .steps li {
+    counter-increment: s; position: relative;
+    padding: 10px 0 10px 42px; border-bottom: 1px dashed var(--line);
+  }
+  .steps li:last-child { border-bottom: none; }
+  .steps li::before {
+    content: counter(s);
+    position: absolute; left: 0; top: 10px;
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--accent-soft); color: var(--accent-ink);
+    font-weight: 700; font-size: .85rem;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .map-ex {
+    background: #0f1a22; color: #d7e6ef;
+    border-radius: 12px; padding: 14px 16px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: .78rem; line-height: 1.55; overflow-x: auto;
+    margin: 10px 0 0;
+  }
+  .map-ex .c { color: #7dcea0; }
+  .map-ex .k { color: #7eb6e8; }
+  .map-ex .s { color: #e8c27a; }
+
+  .glossary {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;
+  }
+  @media (max-width: 700px) { .glossary { grid-template-columns: 1fr; } }
+  .g-item {
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; background: #fff;
+  }
+  .g-item dt { font-weight: 700; font-size: .9rem; margin-bottom: 2px; }
+  .g-item dd { margin: 0; font-size: .82rem; color: var(--muted); }
+
+  footer {
+    margin-top: 48px; padding-top: 16px;
+    border-top: 1px solid var(--line);
+    color: var(--muted); font-size: .78rem;
+  }
+  .src { font-size: .82rem; color: var(--muted); }
+  .src a { color: var(--steel); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .tooltip { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc" aria-label="目录">
+  <a href="#s1">1. 一句话</a>
+  <a href="#s2">2. 剧本</a>
+  <a href="#s3">3. 分工</a>
+  <a href="#s4">4. 语义地图</a>
+  <a href="#s5">5. 为何这样设计</a>
+  <a href="#s6">6. 三项关键选择</a>
+  <a href="#s7">7. 分阶段验收</a>
+  <a href="#s8">8. 术语表</a>
+  <a href="#index">9. 文档索引</a>
+</nav>
+
+<header>
+  <div class="kicker">Volkswagen Demo · Air–Ground Collaboration</div>
+  <h1>空地协同演示方案总览</h1>
+  <p class="sub">无人机先侦察发现目标 → 中枢编排派任务 → 机器狗到点重找并完成气检。共享的是「区域任务地图」，不是同一张稠密点云。</p>
+  <div class="meta">
+    <span class="pill ok">G0 骨架已合入</span>
+    <span class="pill warn">G1–G2 设计待确认开工</span>
+    <span class="pill">2026-07-31</span>
+    <span class="pill">硬件：Tello / 道通 4T / 宇树狗 / Mac / A26125</span>
+  </div>
+</header>
+
+<section id="s1">
+  <h2>1. 一句话架构</h2>
+  <div class="card lead">
+    <p class="lead-line">
+      <span class="term-wrap">
+        <button type="button" class="term" aria-describedby="tip-scout">Scout</button>
+        <span class="tooltip" role="tooltip" id="tip-scout">侦察角色：飞机在空中巡逻、认区域、找标记物，负责「发现」而不是给狗发精确坐标。</span>
+      </span>（无人机）找目标 ·
+      <span class="term-wrap">
+        <button type="button" class="term" aria-describedby="tip-brain">MissionBrain</button>
+        <span class="tooltip" role="tooltip" id="tip-brain">任务大脑：像交通指挥，按状态机决定下一步派谁干什么；不直接拧飞机摇杆、不替狗避障。</span>
+      </span> 派单 ·
+      机器狗用自己的
+      <span class="term-wrap">
+        <button type="button" class="term" aria-describedby="tip-slam">LiDAR SLAM</button>
+        <span class="tooltip" role="tooltip" id="tip-slam">激光雷达即时定位与建图：狗用激光扫周围，在自己地图里知道身在何处、怎么走到路点。</span>
+      </span> 到点干活。
+    </p>
+    <p style="margin:0;color:var(--muted);font-size:.92rem;">
+      共享
+      <span class="term-wrap">
+        <button type="button" class="term" aria-describedby="tip-semmap">语义/拓扑地图</button>
+        <span class="tooltip" role="tooltip" id="tip-semmap">不共享毫米级点云，只共享「区域X → 狗该去哪个路点 / 飞机飞哪段 / 门口贴哪个标签」这种任务层对照表。</span>
+      </span>；
+      物体 A =
+      <span class="term-wrap">
+        <button type="button" class="term" aria-describedby="tip-marker">标记物</button>
+        <span class="tooltip" role="tooltip" id="tip-marker">高对比色板或 AprilTag 一类人工标记，稳定好检，适合演示；不是开放词汇「任意工业零件识别」。</span>
+      </span>。
+    </p>
+  </div>
+
+  <div class="flow" aria-label="四角色">
+    <div class="node scout">
+      <div class="role">Scout</div>
+      <div class="name">无人机</div>
+      <p class="desc">漫游/巡航 · 认区域锚点 · 发现物体 A · 上报证据图</p>
+    </div>
+    <div class="node brain">
+      <div class="role">Orchestrator</div>
+      <div class="name">MissionBrain</div>
+      <p class="desc">
+        <span class="term-wrap">
+          <button type="button" class="term" aria-describedby="tip-fsm">FSM</button>
+          <span class="tooltip" role="tooltip" id="tip-fsm">有限状态机：任务只能处于少数明确状态（侦察中/狗导航中/气检中…），按事件跳转，行为可预期、可测。</span>
+        </span>
+        编排 · 超时/中止 · 幂等派单
+      </p>
+    </div>
+    <div class="node dog">
+      <div class="role">Ground</div>
+      <div class="name">机器狗</div>
+      <p class="desc">权威米制地图 · 到集结点 · 本地重找 A · RS485 气检</p>
+    </div>
+    <div class="node map">
+      <div class="role">Shared</div>
+      <div class="name">语义地图 JSON</div>
+      <p class="desc">region → dog_goal / drone_route / anchor</p>
+    </div>
+  </div>
+  <ol class="event-flow" aria-label="核心事件顺序">
+    <li>drone.target_found</li>
+    <li>dog.inspect</li>
+    <li>dog.arrived</li>
+    <li>dog.target_found</li>
+    <li>gas.completed</li>
+  </ol>
+</section>
+
+<section id="s2">
+  <h2>2. 端到端剧本（演示在干什么）</h2>
+  <ol class="steps">
+    <li><strong>开任务</strong>：Brain 收到 <code>mission.start</code>（目标标签、候选区域、截止时间）。</li>
+    <li><strong>空中侦察</strong>：无人机
+      <span class="term-wrap">
+        <button type="button" class="term" aria-describedby="tip-scoutstate">SCOUTING</button>
+        <span class="tooltip" role="tooltip" id="tip-scoutstate">状态：飞机正在指定区域巡航找目标。</span>
+      </span>，复用现有 wander/巡航能力。</li>
+    <li><strong>发现并确认区域</strong>：同时看到区域锚点 + 物体 A → 发 <code>drone.target_found</code>（带 region、置信度、证据图路径）。</li>
+    <li><strong>派狗</strong>：Brain 查语义地图，把 region 换成狗地图里的
+      <span class="term-wrap">
+        <button type="button" class="term" aria-describedby="tip-goal">dog_goal_id</button>
+        <span class="tooltip" role="tooltip" id="tip-goal">预先在狗的 SLAM 地图里标好的路点 ID，例如区域入口观察点；不是飞机估出来的 XYZ 坐标。</span>
+      </span>，发 <code>dog.inspect</code>。</li>
+    <li><strong>狗到点重找</strong>：导航到集结点 → <code>dog.arrived</code> → 用机载相机再找一遍物体 A → <code>dog.target_found</code>。</li>
+    <li><strong>气检动作</strong>：<code>gas.sample</code> → 读数回传 <code>gas.completed</code> → <code>mission.completed</code>。</li>
+    <li><strong>失败安全</strong>：超时 / 断链 / 人工中止 →
+      <span class="term-wrap">
+        <button type="button" class="term" aria-describedby="tip-fail">SAFE_FAILED</button>
+        <span class="tooltip" role="tooltip" id="tip-fail">安全失败终态：任务明确失败并留证据，同时要求飞机悬停/降落、狗 cancel 停步，不能假装还在执行。</span>
+      </span>。</li>
+  </ol>
+</section>
+
+<section id="s3">
+  <h2>3. 谁负责什么（与不负责什么）</h2>
+  <div class="table-scroll" role="region" aria-label="角色分工表" tabindex="0">
+    <table>
+      <caption class="sr-only">空地协同各角色职责与边界</caption>
+      <thead>
+        <tr><th>角色</th><th>负责</th><th>不负责</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>无人机（Tello 沙箱 → 道通演示）</td>
+          <td>侦察、区域级定位、证据图</td>
+          <td>给狗发「假全局坐标」、替狗导航</td>
+        </tr>
+        <tr>
+          <td>MissionBrain（建议跑 A26125）</td>
+          <td>任务 FSM、超时/重试/中止、事件校验</td>
+          <td>下发速度杆量、融合稠密地图</td>
+        </tr>
+        <tr>
+          <td>机器狗（宇树，型号待确认）</td>
+          <td>权威 SLAM、到路点、本地重找、气检</td>
+          <td>依赖无人机位姿闭环</td>
+        </tr>
+        <tr>
+          <td>A26125 / Mac</td>
+          <td>Brain、可选重检测、开发联调</td>
+          <td>进飞控/狗安全环路</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="src">代码入口：<code>mission_brain/</code> · <code>adapters/</code> · <code>configs/mission/shared_map.example.json</code></p>
+</section>
+
+<section id="s4">
+  <h2>4. 语义地图长什么样？</h2>
+  <p>
+    不是激光点云，也不是一张大家都对齐的 3D 网格；而是一份版本化 JSON：
+    「区域名 → 狗去哪、飞机飞哪段、门口贴哪个锚点」。
+  </p>
+  <div class="card">
+    <p style="margin:0 0 8px;font-size:.9rem;color:var(--muted);">场地可以这样理解：</p>
+    <pre class="map-ex" aria-label="语义地图示意">场地
+├── <span class="c">region_x</span>  演示区（气源/阀门模拟）
+│   ├── dog_goal_id     = <span class="s">wp_region_x_staging</span>   <span class="k">← 狗 SLAM 里预标的集结点</span>
+│   ├── drone_route_id  = <span class="s">route_region_x_scout</span>  <span class="k">← 飞机巡航段</span>
+│   └── anchor_ids      = <span class="s">TAG-0</span> / <span class="s">AX-01</span>          <span class="k">← 门口锚点</span>
+└── <span class="c">region_y</span>  备用区
+    ├── wp_region_y_staging
+    ├── route_region_y_scout
+    └── TAG-1 / AX-02</pre>
+  </div>
+  <div class="callout why">
+    <b class="label">Why · 为什么共享这个而不是共享 SLAM</b>
+    工业巡检狗本来就会在自己的 LiDAR 地图里设路点；飞机（尤其 Tello）很难提供可靠全局米制坐标。
+    业界空地协作前沿（如 Kumar Robotics 的
+    <span class="term-wrap">
+      <button type="button" class="term" aria-describedby="tip-spomp">SPOMP</button>
+      <span class="tooltip" role="tooltip" id="tip-spomp">Semantic Persistent Occupancy Map：空中建语义正射图、再与地面机器人对齐的研究系统；理念是「共享语义层」，不是硬融同一张稠密点云。</span>
+    </span>）也强调语义层协作。
+    我们的 v1 与这条叙事同构，但工程上只做「任务拓扑表」，不搬整套研究系统——演示可靠优先。
+  </div>
+</section>
+
+<section id="s5">
+  <h2>5. 关键设计点：为什么这样选</h2>
+
+  <h3>5.1 狗吃 SLAM，飞机吃侦察 —— 不融同一张稠密图</h3>
+  <div class="compare">
+    <div class="col bad">
+      <h4><span class="tag-soft bad">对照</span>共享稠密 SLAM</h4>
+      <ul>
+        <li>空对地视角差大，点云/视觉难对齐</li>
+        <li>Tello 无可靠全局定位；标定与漂移吃工期</li>
+        <li>任一端地图坏了，整条链路假坐标派错狗</li>
+      </ul>
+    </div>
+    <div class="col good">
+      <h4><span class="tag-soft good">推荐</span>语义/拓扑任务地图</h4>
+      <ul>
+        <li>狗地图权威（米制导航本职）</li>
+        <li>飞机只报 <code>region_id</code> + 锚点证据</li>
+        <li>到点后狗必须重新发现 A（不信飞机坐标）</li>
+      </ul>
+    </div>
+  </div>
+  <p class="src">参考叙事：SPOMP / lang-air-ground-teaming（语义协作）；v1 <strong>拒绝</strong>把它们整仓搬进演示。</p>
+
+  <h3>5.2 MissionBrain = 编排 FSM，不是 WAM</h3>
+  <p>
+    <span class="term-wrap">
+      <button type="button" class="term" aria-describedby="tip-wam">WAM</button>
+      <span class="tooltip" role="tooltip" id="tip-wam">World-Action Model：看图直接出飞行动作的策略模型。适合作为 Scout/狗内部的「怎么飞/怎么走」插件，不适合当多机任务调度中枢。</span>
+    </span>
+    回答「这一帧该怎么动」；MissionBrain 回答「现在该谁上场、超时怎么办、能不能再派一次」。
+    混在一起会导致：模型抖一下就重复派狗、中止语义不清、无法做契约回放测试。
+  </p>
+  <div class="callout ok">
+    <b class="label">设计收益</b>
+    幂等
+    <span class="term-wrap">
+      <button type="button" class="term" aria-describedby="tip-idem">idempotent</button>
+      <span class="tooltip" role="tooltip" id="tip-idem">同一条命令即使因网络重传收到两次，也只执行一次。靠 event_id 去重 + 「已经派过狗」标志位。</span>
+    </span>
+    派单、阶段超时、abort 可测；WAM 以后可插在 Scout/Dog 策略缝，不替代 Brain。
+  </div>
+
+  <h3>5.3 事件契约：只传任务事实，禁止重载荷</h3>
+  <p>
+    总线只走 <code>drone.target_found</code> / <code>dog.inspect</code> / <code>gas.completed</code> 等轻事件。
+    <strong>禁止</strong>塞全局 pose、点云、实时视频——那些该走专用通道或本地落盘（<code>evidence_uri</code>）。
+  </p>
+  <div class="callout why">
+    <b class="label">Why</b>
+    参考工业多机系统的「命令/事件面与感知面分离」：调度通道要小、可日志、可回放；
+    视频和点云一旦进总线，带宽与假坐标风险一起爆。
+  </div>
+
+  <h3>5.4 Tello 沙箱 → 道通承接大场</h3>
+  <p>
+    Tello：室内算法与契约验证快、成本低。<br />
+    道通 4T：大场地 / 室外可选
+    <span class="term-wrap">
+      <button type="button" class="term" aria-describedby="tip-rtk">RTK</button>
+      <span class="tooltip" role="tooltip" id="tip-rtk">实时动态差分定位：用基站或网络修正 GPS，室外可达厘米级；室内几乎没用。</span>
+    </span>、航点任务更接近演示飞机。
+    两边对齐同一 Scout 契约，避免「Tello 接口变成生产接口」。
+  </p>
+</section>
+
+<section id="s6">
+  <h2>6. 三项关键选择（白话说明）</h2>
+
+  <div class="card">
+    <h3 style="margin-top:0;">① 标记物怎么贴：单点蓝锚 + 红物体；多区强制 AprilTag</h3>
+    <p><strong>在干什么：</strong>规定「门口标签」和「物体 A」长什么样，好让相机稳定认出来。</p>
+    <ul>
+      <li><strong>物体 A</strong>：红色标记板（演示目标）。</li>
+      <li><strong>区域锚点</strong>：证明飞机「在哪个区」。只测一个区时，蓝色板够用；两个区以上必须用不同 ID 的
+        <span class="term-wrap">
+          <button type="button" class="term" aria-describedby="tip-tag">AprilTag</button>
+          <span class="tooltip" role="tooltip" id="tip-tag">一种专为机器人定位设计的二维码族（常用 tag36h11）。比普通 QR 更适合当「我是几号锚点」的定位原语，检出稳、可算相对姿态。</span>
+        </span>。</li>
+    </ul>
+    <div class="callout why">
+      <b class="label">Why · 为何不能两区都贴同一种蓝板</b>
+      颜色检测只能回答「看见蓝色了」，不能回答「这是区 X 还是区 Y」。
+      若强行用同色区分，系统会把「当前正在搜的区」贴到色块上——这是自证循环，会把狗派错路点。
+      AprilTag 每个 ID 唯一，才能做多区。
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0;">② 本迭代不做 MQTT，先用进程内总线</h3>
+    <p><strong>在干什么：</strong>决定「飞机 / Brain / 狗」之间事件怎么传。</p>
+    <ul>
+      <li><strong>现在（本迭代）</strong>：同一程序里的
+        <span class="term-wrap">
+          <button type="button" class="term" aria-describedby="tip-bus">EventBus</button>
+          <span class="tooltip" role="tooltip" id="tip-bus">进程内事件总线：模块之间在内存里发布/订阅事件，适合本机联调与自动化测试，不经过网络。</span>
+        </span>——适合脚本回放、单机测契约。</li>
+      <li><strong>以后联调</strong>：再上
+        <span class="term-wrap">
+          <button type="button" class="term" aria-describedby="tip-mqtt">MQTT</button>
+          <span class="tooltip" role="tooltip" id="tip-mqtt">一种轻量发布/订阅消息协议，常用于物联网与机器人跨设备通信。适合 Mac、服务器、狗工控机不在同一进程时传任务事件。</span>
+        </span>
+        或 WebSocket，把同一套事件搬到跨电脑。</li>
+    </ul>
+    <div class="callout why">
+      <b class="label">Why · 为何先不做 MQTT</b>
+      当前还有 abort 广播、串行侦察等控制面缺口；一上网络会把「状态机绿、真狗还在走」这类 bug 放大到三台机器。
+      工程顺序：先把进程内 supervisor 做对（同一 abort 必须同时到 Brain + 狗 cancel），再换传输层。
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0;">③ 合成契约 与 真机录制 分开记账</h3>
+    <p><strong>在干什么：</strong>规定「怎样才算 G2（无人机单独）验收过了」，防止假绿。</p>
+    <div class="table-scroll" role="region" aria-label="双账本说明表" tabindex="0">
+      <table>
+        <caption class="sr-only">合成契约与真机录制双账本</caption>
+        <thead><tr><th>账本</th><th>测什么</th><th>能对外说什么</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>
+              <span class="term-wrap">
+                <button type="button" class="term" aria-describedby="tip-synth">synthetic_contract</button>
+                <span class="tooltip" role="tooltip" id="tip-synth">用程序生成的图片/参数化场景，专门验证：事件字段对不对、会不会误派狗、重复消息会不会派两次。</span>
+              </span>
+            </td>
+            <td>软件契约、状态机、零误派狗</td>
+            <td>「契约与逻辑 20/20」——<strong>不能</strong>说真机已过</td>
+          </tr>
+          <tr class="rec">
+            <td>
+              <span class="term-wrap">
+                <button type="button" class="term" aria-describedby="tip-rec">recorded_tello</button>
+                <span class="tooltip" role="tooltip" id="tip-rec">用 Tello 在真实场地拍下的小数据集（正例、只有锚点、只有红板、暗光、模糊等），验证检测在真实画面上是否靠谱。</span>
+              </span>
+            </td>
+            <td>真实光照/模糊/反光下的检出</td>
+            <td>「真机感知 N/N」——这才算真机 G2</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout why">
+      <b class="label">Why · 参考数据工程习惯</b>
+      合成数据擅长覆盖边界（乱序、重复、低置信）；实拍数据才代表部署分布。
+      混成一个「20/20」分数，等于让检测器自己出题自己答——演示现场光照一变就会穿帮。
+    </div>
+  </div>
+</section>
+
+<section id="s7">
+  <h2>7. 分阶段怎么验收（G0–G5）</h2>
+  <div class="table-scroll" role="region" aria-label="G0 至 G5 分阶段验收表" tabindex="0">
+    <table>
+      <caption class="sr-only">分阶段验收门 G0 到 G5</caption>
+      <thead><tr><th>门</th><th>内容</th><th>状态意图</th></tr></thead>
+      <tbody>
+        <tr><td><strong>G0</strong></td><td>契约回放：乱序/重复/abort 不炸</td><td>自动化已齐</td></tr>
+        <tr><td><strong>G1</strong></td><td>狗单独：同路点 10 次到点 + 安全停</td><td>先 FakeNav，型号确认后挂真 SDK</td></tr>
+        <tr><td><strong>G2</strong></td><td>机单独：合成契约 + 真机录制双账本；Autel 尖刺</td><td>设计已审，待开工</td></tr>
+        <tr><td><strong>G3</strong></td><td>交接：狗到点后独立重找 A，10/10</td><td>分测后</td></tr>
+        <tr><td><strong>G4</strong></td><td>气检：有效采样窗；断传感器/标定过期显式失败</td><td>分测后</td></tr>
+        <tr><td><strong>G5</strong></td><td>大场端到端 10 连跑（含 NOT_FOUND / 断链 / abort）</td><td>室外联调</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout warn">
+    <b class="label">场地节奏</b>
+    室内：单点测 G0–G4 逻辑与感知。室外：G5 集成；演示飞机倾向道通 4T，Tello 继续当侦察沙箱。
+  </div>
+
+  <h3>v1 明确不做</h3>
+  <div class="callout no">
+    <b class="label">Rejected</b>
+    共享稠密 SLAM · 跨视角
+    <span class="term-wrap">
+      <button type="button" class="term" aria-describedby="tip-vpr">VPR</button>
+      <span class="tooltip" role="tooltip" id="tip-vpr">视觉位置识别：靠图像问「我在哪」。空对地视角差极大时很脆，不宜作 v1 依赖。</span>
+    </span>
+    依赖 · Hydra 级场景图 · LLM 任务规划 · Wi‑Fi RTT · WAM 替代 MissionBrain · UWB（可作 v2）
+  </div>
+</section>
+
+<section id="s8">
+  <h2>8. 术语速查（正文虚线词可点按 / 悬停）</h2>
+  <dl class="glossary">
+    <div class="g-item" id="g-lidar"><dt>LiDAR</dt><dd>激光雷达：扫周围得距离点云，狗用来建图、定位、避障。</dd></div>
+    <div class="g-item"><dt>SLAM</dt><dd>边走边建图并定位；本方案里狗侧是权威米制地图。</dd></div>
+    <div class="g-item"><dt>工控机 / 机载算力</dt><dd>狗身上跑导航与检测的电脑（照片里的 Legion 一类）。</dd></div>
+    <div class="g-item"><dt>RTK</dt><dd>室外高精度 GPS 修正；室内基本无用。</dd></div>
+    <div class="g-item"><dt>AprilTag</dt><dd>机器人定位用的标签族；多区域时用来唯一标识入口。</dd></div>
+    <div class="g-item"><dt>FSM</dt><dd>有限状态机：任务阶段清晰、可测、可超时。</dd></div>
+    <div class="g-item"><dt>MissionBrain</dt><dd>任务编排中枢：派谁、何时中止；不下杆量。</dd></div>
+    <div class="g-item"><dt>Scout</dt><dd>空中侦察代理：发现 + 报区域，不指挥狗行走。</dd></div>
+    <div class="g-item"><dt>dog_goal_id</dt><dd>狗地图里预标路点；派狗只许用这个，不许用飞机 XYZ。</dd></div>
+    <div class="g-item"><dt>EventBus / MQTT</dt><dd>前者本机内存传事件；后者跨设备消息协议（联调再上）。</dd></div>
+    <div class="g-item"><dt>WAM</dt><dd>观察→动作策略；可做插件，不替代编排。</dd></div>
+    <div class="g-item"><dt>SPOMP</dt><dd>空地语义地图协作研究路线；我们借叙事，不搬整仓。</dd></div>
+    <div class="g-item"><dt>G0–G5</dt><dd>分阶段验收门：从无硬件契约到大场 10 连跑。</dd></div>
+    <div class="g-item"><dt>幂等 / abort</dt><dd>重复消息不重复执行；中止必须落到狗 cancel 与飞机停。</dd></div>
+  </dl>
+</section>
+
+<section id="index">
+  <h2>9. 文档与代码索引</h2>
+  <ul>
+    <li>架构说明：<code>docs/design/2026-07-30-air-ground-mission-architecture.md</code></li>
+    <li>G1–G2 设计稿（Codex 审过）：<code>docs/design/2026-07-31-air-ground-g1-g2-design.md</code></li>
+    <li>验收门：<code>docs/handover/2026-07-30-air-ground-phased-gates.md</code></li>
+    <li>地图样例：<code>configs/mission/shared_map.example.json</code></li>
+    <li>本页：<code>docs/design/2026-07-31-air-ground-mission-overview.html</code></li>
+  </ul>
+</section>
+
+<footer>
+  大众空地协同演示 · 方案总览 · 虚线术语可悬停或点按查看白话解释<br />
+  路径：docs/design/2026-07-31-air-ground-mission-overview.html
+</footer>
+
+</div>
+<script>
+(function () {
+  const wraps = Array.from(document.querySelectorAll(".term-wrap"));
+  const isMobile = () => window.matchMedia("(max-width: 720px)").matches;
+
+  function placeTooltip(wrap) {
+    const tip = wrap.querySelector(".tooltip");
+    const btn = wrap.querySelector(".term");
+    if (!tip || !btn || isMobile()) {
+      wrap.style.removeProperty("--tip-x");
+      tip && tip.style.removeProperty("left");
+      return;
+    }
+    const tipWidth = Math.min(320, window.innerWidth - 24);
+    const rect = btn.getBoundingClientRect();
+    const center = rect.left + rect.width / 2;
+    let shiftPct = -50;
+    if (center + tipWidth / 2 > window.innerWidth - 12) shiftPct = -80;
+    if (center - tipWidth / 2 < 12) shiftPct = -20;
+    wrap.style.setProperty("--tip-x", shiftPct + "%");
+  }
+
+  function closeAll(except) {
+    wraps.forEach((w) => {
+      if (w !== except) {
+        const t = w.querySelector(".tooltip");
+        if (t) t.classList.remove("is-open");
+      }
+    });
+  }
+
+  wraps.forEach((wrap) => {
+    const btn = wrap.querySelector(".term");
+    const tip = wrap.querySelector(".tooltip");
+    if (!btn || !tip) return;
+
+    const open = () => {
+      placeTooltip(wrap);
+      if (isMobile()) {
+        closeAll(wrap);
+        tip.classList.add("is-open");
+      }
+    };
+    const maybeClose = () => {
+      if (!isMobile()) tip.classList.remove("is-open");
+    };
+
+    btn.addEventListener("mouseenter", () => { placeTooltip(wrap); });
+    btn.addEventListener("focus", () => { placeTooltip(wrap); tip.classList.add("is-open"); });
+    btn.addEventListener("blur", () => {
+      setTimeout(() => {
+        if (!wrap.contains(document.activeElement)) tip.classList.remove("is-open");
+      }, 0);
+    });
+    btn.addEventListener("click", (e) => {
+      if (!isMobile()) return;
+      e.preventDefault();
+      const willOpen = !tip.classList.contains("is-open");
+      closeAll();
+      if (willOpen) open();
+    });
+    wrap.addEventListener("mouseleave", maybeClose);
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!isMobile()) return;
+    if (!(e.target instanceof Element) || !e.target.closest(".term-wrap")) closeAll();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeAll();
+  });
+  window.addEventListener("resize", () => {
+    wraps.forEach((w) => {
+      if (w.querySelector(".tooltip.is-open") || w.matches(":hover, :focus-within")) {
+        placeTooltip(w);
+      }
+    });
+  });
+
+  // TOC active section
+  const links = Array.from(document.querySelectorAll(".toc a"));
+  const sections = links
+    .map((a) => document.querySelector(a.getAttribute("href")))
+    .filter(Boolean);
+  if ("IntersectionObserver" in window && sections.length) {
+    const io = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((en) => en.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (!visible) return;
+        const id = "#" + visible.target.id;
+        links.forEach((a) => a.classList.toggle("is-active", a.getAttribute("href") === id));
+      },
+      { rootMargin: "-20% 0px -65% 0px", threshold: [0, 0.2, 0.5, 1] }
+    );
+    sections.forEach((s) => io.observe(s));
+  }
+})();
+</script>
+</body>
+</html>
