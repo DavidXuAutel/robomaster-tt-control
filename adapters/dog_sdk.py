@@ -77,11 +77,14 @@ class DogSdkAdapter(DogAdapter):
         self._arrived_emitted = False
         self._found_emitted = False
         self._sample_done = False
+        self._aborted = False
+        self.abort_count = 0
 
     def begin_inspect(self, command: Mapping[str, Any]) -> None:
         if self._use_stub:
             self._stub.begin_inspect(command)
             return
+        self._aborted = False
         self.mission_id = str(command["mission_id"])
         self._inspect = dict(command)
         self._nav_started = False
@@ -109,6 +112,8 @@ class DogSdkAdapter(DogAdapter):
         if self._use_stub:
             self._stub.begin_gas_sample(command)
             return
+        if self._aborted:
+            return
         self._gas_cmd = dict(command)
         self._sample_done = False
 
@@ -116,13 +121,23 @@ class DogSdkAdapter(DogAdapter):
         if self._use_stub:
             self._stub.abort(reason)
             return
+        self._aborted = True
+        self.abort_count += 1
+        self._inspect = None
+        self._gas_cmd = None
+        self._nav_started = False
         if self.nav is not None:
-            self.nav.cancel()
+            try:
+                self.nav.cancel()
+            except Exception:  # noqa: BLE001 — latch already set
+                logger.exception("nav.cancel failed; abort latch kept")
         logger.warning("dog sdk abort: %s", reason)
 
     def tick(self, now: Optional[float] = None) -> None:
         if self._use_stub:
             self._stub.tick(now)
+            return
+        if self._aborted:
             return
         t = float(now if now is not None else time.time())
         if self._inspect and self._nav_started and not self._arrived_emitted:

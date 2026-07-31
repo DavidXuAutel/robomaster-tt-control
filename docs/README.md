@@ -37,6 +37,7 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-30-air-ground-mission-architecture.md` — 空地协同 MissionBrain 架构说明（语义地图 + 事件契约 + 适配器边界）
 - `2026-07-31-air-ground-g1-g2-design.md` — G1–G2 真机适配设计（Codex 审过：串行 Scout / abort 广播 / 防假绿）
 - `2026-07-31-air-ground-mission-overview.html` — 空地协同方案总览（术语悬停 + 设计理由，面向阅读）
+- `air-ground/` — 分模块详设与 Codex 审稿索引（M0 控制面已实现）
 
 ### dev-notes/ — 开发过程笔记
 - `2026-07-18-avoidance-dev-notes.md` — 视觉避障离线开发说明

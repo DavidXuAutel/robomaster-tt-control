@@ -17,13 +17,12 @@ class DogAdapter(ABC):
         self.mission_id: Optional[str] = None
 
     def on_brain_event(self, event: Mapping[str, Any]) -> None:
+        # 取消仅由 MissionSupervisor 拥有，不在此监听 mission.abort
         et = str(event.get("type", ""))
         if et == "dog.inspect":
             self.begin_inspect(event)
         elif et == "gas.sample":
             self.begin_gas_sample(event)
-        elif et == "mission.abort":
-            self.abort(str(event.get("reason", "abort")))
 
     @abstractmethod
     def begin_inspect(self, command: Mapping[str, Any]) -> None:

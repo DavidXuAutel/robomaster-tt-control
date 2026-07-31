@@ -9,6 +9,7 @@ IDLE → SCOUTING → DOG_NAV → DOG_SEARCH → GAS_SAMPLE → COMPLETE
 from __future__ import annotations
 
 import logging
+import math
 import time
 from enum import Enum
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set
@@ -20,6 +21,15 @@ logger = logging.getLogger(__name__)
 
 EmitFn = Callable[[Dict[str, Any]], None]
 
+_ACTIVE_STATES = frozenset(
+    {
+        "SCOUTING",
+        "DOG_NAV",
+        "DOG_SEARCH",
+        "GAS_SAMPLE",
+    }
+)
+
 
 class MissionState(str, Enum):
     IDLE = "IDLE"
@@ -29,6 +39,14 @@ class MissionState(str, Enum):
     GAS_SAMPLE = "GAS_SAMPLE"
     COMPLETE = "COMPLETE"
     SAFE_FAILED = "SAFE_FAILED"
+
+
+def _finite(x: Any) -> bool:
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(v)
 
 
 class MissionBrain:
@@ -47,6 +65,9 @@ class MissionBrain:
         sample_window_s: float = DEFAULT_SAMPLE_WINDOW_S,
         stage_timeout_s: float = DEFAULT_STAGE_TIMEOUT_S,
         min_confidence: float = 0.6,
+        max_anchor_age_ms: float = 5000.0,
+        freshness_s: float = 5.0,
+        clock_skew_s: float = 1.0,
     ) -> None:
         self.map = shared_map
         self._emit = emit
@@ -54,6 +75,9 @@ class MissionBrain:
         self.sample_window_s = float(sample_window_s)
         self.stage_timeout_s = float(stage_timeout_s)
         self.min_confidence = float(min_confidence)
+        self.max_anchor_age_ms = float(max_anchor_age_ms)
+        self.freshness_s = float(freshness_s)
+        self.clock_skew_s = float(clock_skew_s)
 
         self.state = MissionState.IDLE
         self.mission_id: Optional[str] = None
@@ -66,9 +90,12 @@ class MissionBrain:
 
         self._seen_event_ids: Set[str] = set()
         self._stage_entered_at: Optional[float] = None
+        self._mission_started_at: Optional[float] = None
         self._dispatched_dog_inspect = False
         self._dispatched_gas_sample = False
-        self._scout_commands: Set[str] = set()  # region_id already scouted
+
+        self._scout_index: int = -1
+        self.active_scout_region: Optional[str] = None
         self._scout_failures: Set[str] = set()
 
     def reset(self) -> None:
@@ -82,28 +109,30 @@ class MissionBrain:
         self.fail_reason = None
         self._seen_event_ids.clear()
         self._stage_entered_at = None
+        self._mission_started_at = None
         self._dispatched_dog_inspect = False
         self._dispatched_gas_sample = False
-        self._scout_commands.clear()
+        self._scout_index = -1
+        self.active_scout_region = None
         self._scout_failures.clear()
 
     def handle(self, event: Mapping[str, Any]) -> None:
         et = validate_event(event)
         eid = str(event["event_id"])
+
+        if et is EventType.MISSION_ABORT:
+            self._on_abort(event)
+            return
+
         if eid in self._seen_event_ids:
             logger.debug("ignore duplicate event_id=%s type=%s", eid, et.value)
             return
         self._seen_event_ids.add(eid)
 
-        if et is EventType.MISSION_ABORT:
-            self._fail("abort", str(event.get("reason", "abort")), causation_id=eid)
-            return
-
         if et is EventType.HEARTBEAT:
             return
 
         if self.state in (MissionState.COMPLETE, MissionState.SAFE_FAILED):
-            # 终态只接受新 mission.start（换任务）
             if et is not EventType.MISSION_START:
                 return
 
@@ -140,13 +169,16 @@ class MissionBrain:
             return
         t = float(now if now is not None else self._now())
         if self.deadline is not None and t > float(self.deadline):
-            self._fail("deadline", "mission deadline exceeded")
+            self._fail("deadline", "deadline")
             return
         if (
             self._stage_entered_at is not None
             and (t - self._stage_entered_at) > self.stage_timeout_s
         ):
-            self._fail(self.state.value.lower(), f"stage timeout in {self.state.value}")
+            if self.state is MissionState.SCOUTING:
+                self._on_scout_region_timeout()
+            else:
+                self._fail(self.state.value.lower(), "stage_timeout")
 
     # --- transitions ---
 
@@ -154,25 +186,67 @@ class MissionBrain:
         self.state = state
         self._stage_entered_at = self._now()
 
+    def _on_abort(self, event: Mapping[str, Any]) -> None:
+        eid = str(event["event_id"])
+        if self.mission_id is None or self.state is MissionState.IDLE:
+            return
+        if str(event.get("mission_id")) != self.mission_id:
+            logger.info(
+                "ignore abort for other mission got=%s active=%s",
+                event.get("mission_id"),
+                self.mission_id,
+            )
+            return
+        if eid in self._seen_event_ids:
+            return
+        self._seen_event_ids.add(eid)
+        self._fail("abort", str(event.get("reason", "abort")), causation_id=eid)
+
     def _on_mission_start(self, event: Mapping[str, Any]) -> None:
+        if self.state.value in _ACTIVE_STATES:
+            logger.warning(
+                "reject mission.start while active state=%s mission=%s",
+                self.state.value,
+                self.mission_id,
+            )
+            return
+
+        now = float(self._now())
+        deadline = float(event["deadline"])
+        if not _finite(deadline) or now > deadline:
+            # 过期 start：进入失败终态（无 scout）
+            self.reset()
+            self._seen_event_ids.add(str(event["event_id"]))
+            self.mission_id = str(event["mission_id"])
+            self.deadline = deadline
+            self._fail("start", "deadline", causation_id=str(event["event_id"]))
+            return
+
         self.reset()
         self._seen_event_ids.add(str(event["event_id"]))
         self.mission_id = str(event["mission_id"])
         self.target_label = str(event["target_label"])
         self.region_ids = [str(r) for r in event["region_ids"]]
-        self.deadline = float(event["deadline"])
-        for rid in self.region_ids:
-            self.map.get(rid)  # 启动前校验地图
+        self.deadline = deadline
+        self._mission_started_at = now
+        if not self.region_ids:
+            self._fail("start", "no_regions", causation_id=str(event["event_id"]))
+            return
+        try:
+            for rid in self.region_ids:
+                self.map.get(rid)
+        except KeyError:
+            self._fail("start", "unknown_region", causation_id=str(event["event_id"]))
+            return
         self._enter(MissionState.SCOUTING)
-        for rid in self.region_ids:
-            self._emit_scout(rid, causation_id=str(event["event_id"]))
+        self._scout_index = 0
+        self._emit_scout(self.region_ids[0], causation_id=str(event["event_id"]))
 
     def _emit_scout(self, region_id: str, *, causation_id: str) -> None:
-        if region_id in self._scout_commands:
-            return
         assert self.mission_id and self.target_label
         region = self.map.get(region_id)
-        self._scout_commands.add(region_id)
+        self.active_scout_region = region_id
+        self._stage_entered_at = self._now()
         self._emit(
             make_event(
                 EventType.DRONE_SCOUT,
@@ -188,25 +262,88 @@ class MissionBrain:
             )
         )
 
+    def _advance_scout(self, *, causation_id: str, failed_region: str) -> None:
+        self._scout_failures.add(failed_region)
+        nxt = self._scout_index + 1
+        if nxt >= len(self.region_ids):
+            self._fail(
+                "scout",
+                "all_regions_exhausted",
+                causation_id=causation_id,
+            )
+            return
+        self._scout_index = nxt
+        self._emit_scout(self.region_ids[nxt], causation_id=causation_id)
+
+    def _on_scout_region_timeout(self) -> None:
+        if self.active_scout_region is None:
+            self._fail("scout", "stage_timeout")
+            return
+        self._advance_scout(
+            causation_id="stage-timeout",
+            failed_region=self.active_scout_region,
+        )
+
+    def _firewall_ok(self, event: Mapping[str, Any]) -> bool:
+        now = float(self._now())
+        if self.deadline is not None and now > float(self.deadline):
+            logger.info("reject found: now past deadline")
+            return False
+        conf = event.get("confidence")
+        age = event.get("anchor_age_ms")
+        observed = event.get("observed_at")
+        if not (_finite(conf) and _finite(age) and _finite(observed)):
+            logger.info("reject found: non-finite numeric field")
+            return False
+        conf_f = float(conf)
+        age_f = float(age)
+        obs_f = float(observed)
+        if conf_f < self.min_confidence:
+            logger.info("ignore low-confidence find conf=%.2f", conf_f)
+            return False
+        if age_f < 0 or age_f > self.max_anchor_age_ms:
+            logger.info("reject found: bad anchor_age_ms=%s", age_f)
+            return False
+        if obs_f > now + self.clock_skew_s:
+            logger.info("reject found: observed_at in future")
+            return False
+        if (now - obs_f) > self.freshness_s:
+            logger.info("reject found: stale observation")
+            return False
+        if self.deadline is not None and obs_f > float(self.deadline):
+            logger.info("reject found: observed_at past deadline")
+            return False
+        region_id = str(event["region_id"])
+        if region_id != self.active_scout_region:
+            logger.info(
+                "reject found: region %s != active scout %s",
+                region_id,
+                self.active_scout_region,
+            )
+            return False
+        if region_id not in self.region_ids:
+            return False
+        if str(event.get("target_label")) != self.target_label:
+            logger.info("reject found: target_label mismatch")
+            return False
+        anchor_id = str(event["anchor_id"])
+        region = self.map.get(region_id)
+        if anchor_id not in region.anchor_ids:
+            logger.info(
+                "reject found: anchor %s not in region %s anchors=%s",
+                anchor_id,
+                region_id,
+                region.anchor_ids,
+            )
+            return False
+        return True
+
     def _on_drone_target_found(self, event: Mapping[str, Any]) -> None:
         if self.state is not MissionState.SCOUTING:
             return
-        conf = float(event["confidence"])
-        if conf < self.min_confidence:
-            logger.info("ignore low-confidence find conf=%.2f", conf)
+        if not self._firewall_ok(event):
             return
         region_id = str(event["region_id"])
-        if region_id not in self.region_ids:
-            return
-        # 地图锚点一致性（若上报了 anchor）
-        anchor_id = str(event["anchor_id"])
-        region = self.map.get(region_id)
-        if region.anchor_ids and anchor_id not in region.anchor_ids:
-            logger.warning(
-                "anchor %s not in region %s anchors; still accept region_id",
-                anchor_id,
-                region_id,
-            )
         self.active_region_id = region_id
         self.last_evidence_uri = str(event.get("evidence_uri", ""))
         self._enter(MissionState.DOG_NAV)
@@ -237,16 +374,18 @@ class MissionBrain:
     def _on_drone_scout_failed(self, event: Mapping[str, Any]) -> None:
         if self.state is not MissionState.SCOUTING:
             return
-        # 全部候选区失败才 fail
         failed_region = str(event["region_id"])
-        self._scout_commands.add(failed_region)
-        self._scout_failures.add(failed_region)
-        if self._scout_failures.issuperset(self.region_ids):
-            self._fail(
-                "scout",
-                "all regions scout_failed",
-                causation_id=str(event["event_id"]),
+        if failed_region != self.active_scout_region:
+            logger.info(
+                "ignore scout_failed for non-active region %s (active=%s)",
+                failed_region,
+                self.active_scout_region,
             )
+            return
+        self._advance_scout(
+            causation_id=str(event["event_id"]),
+            failed_region=failed_region,
+        )
 
     def _on_dog_arrived(self, event: Mapping[str, Any]) -> None:
         if self.state is not MissionState.DOG_NAV:
@@ -260,8 +399,8 @@ class MissionBrain:
             return
         if str(event["region_id"]) != self.active_region_id:
             return
-        conf = float(event["confidence"])
-        if conf < self.min_confidence:
+        conf = event.get("confidence")
+        if not _finite(conf) or float(conf) < self.min_confidence:
             return
         self.last_evidence_uri = str(event.get("evidence_uri", self.last_evidence_uri))
         self._enter(MissionState.GAS_SAMPLE)

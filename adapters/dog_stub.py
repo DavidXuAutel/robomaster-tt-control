@@ -61,6 +61,8 @@ class DogStubAdapter(DogAdapter):
         self._arrived = False
         self._found = False
         self._sampled = False
+        self._aborted = False
+        self.abort_count = 0
         self.calibration_at: float = time.time()
 
     def reset(self) -> None:
@@ -71,9 +73,12 @@ class DogStubAdapter(DogAdapter):
         self._arrived = False
         self._found = False
         self._sampled = False
+        self._aborted = False
+        self.abort_count = 0
         self.mission_id = None
 
     def begin_inspect(self, command: Mapping[str, Any]) -> None:
+        self._aborted = False
         self.mission_id = str(command["mission_id"])
         self._inspect = dict(command)
         self._arrived = False
@@ -100,10 +105,16 @@ class DogStubAdapter(DogAdapter):
         self._sampled = False
 
     def abort(self, reason: str) -> None:
+        self._aborted = True
+        self.abort_count += 1
         self.phase = DogStubPhase.FAILED
+        self._inspect = None
+        self._gas_cmd = None
         logger.warning("dog stub abort: %s", reason)
 
     def tick(self, now: Optional[float] = None) -> None:
+        if self._aborted:
+            return
         t = float(now if now is not None else time.time())
         if self.phase is DogStubPhase.NAVIGATING:
             self._tick_nav(t)
