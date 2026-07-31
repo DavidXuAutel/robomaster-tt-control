@@ -67,6 +67,9 @@ LAMBDA_CE="${LAMBDA_CE:-1.0}"
 LOG_DIR="${LOG_DIR:-logs/ft/collapse_fix}"
 mkdir -p "$LOG_DIR"
 PYTHON_BIN="${PYTHON_BIN:-python}"
+# Optional fixed output_dir so :30905 watcher can poll a known shared path
+# (default Hydra stamp under ./runs/train/ is local-only on :31126).
+OUTPUT_DIR="${OUTPUT_DIR:-}"
 
 log() { echo "[collapse-fix] $*"; }
 die() { echo "[collapse-fix][ERROR] $*" >&2; exit 1; }
@@ -143,19 +146,26 @@ launch() {  # $1=max_steps $2=save_every $3=logfile
   export DIFFSYNTH_SKIP_DOWNLOAD="${DIFFSYNTH_SKIP_DOWNLOAD:-true}"
   export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
   export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
-  log "launch: max_steps=$steps save_every=$save cls=on λ=(v=$LAMBDA_VIDEO,fm=$LAMBDA_ACTION,ce=$LAMBDA_CE) redirect_common_files=false skip_download=$DIFFSYNTH_SKIP_DOWNLOAD -> $logfile"
+  log "launch: max_steps=$steps save_every=$save cls=on λ=(v=$LAMBDA_VIDEO,fm=$LAMBDA_ACTION,ce=$LAMBDA_CE) redirect_common_files=false skip_download=$DIFFSYNTH_SKIP_DOWNLOAD output_dir=${OUTPUT_DIR:-<hydra-default>} -> $logfile"
+  local launch_args=(
+    task="$TASK"
+    resume=null
+    max_steps="$steps"
+    save_every="$save"
+    "data.train.dataset_dirs=[$RELABELED_SUBSET]"
+    +model.action_dit_config.enable_action_cls=true
+    model.redirect_common_files=false
+    model.loss.lambda_video="$LAMBDA_VIDEO"
+    model.loss.lambda_action="$LAMBDA_ACTION"
+    model.loss.lambda_ce="$LAMBDA_CE"
+  )
+  if [[ -n "$OUTPUT_DIR" ]]; then
+    mkdir -p "$OUTPUT_DIR"
+    launch_args+=("output_dir=$OUTPUT_DIR")
+  fi
   accelerate launch --config_file "$ACCEL_CONFIG" --num_processes "$NUM_PROCESSES" \
     scripts/train.py \
-      task="$TASK" \
-      resume=null \
-      max_steps="$steps" \
-      save_every="$save" \
-      "data.train.dataset_dirs=[$RELABELED_SUBSET]" \
-      +model.action_dit_config.enable_action_cls=true \
-      model.redirect_common_files=false \
-      model.loss.lambda_video="$LAMBDA_VIDEO" \
-      model.loss.lambda_action="$LAMBDA_ACTION" \
-      model.loss.lambda_ce="$LAMBDA_CE" \
+      "${launch_args[@]}" \
     2>&1 | tee "$logfile"
 }
 
