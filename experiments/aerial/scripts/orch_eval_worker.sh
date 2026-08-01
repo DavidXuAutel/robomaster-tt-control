@@ -20,6 +20,12 @@ WM_DUMP_EVERY="${WM_DUMP_EVERY:-0}"
 # uses the learned stop primitive. closest_approach / oracle_hit@20/30/40 are logged
 # either way, so a plain gate run already gets the closest-approach diagnostic.
 ORACLE_STOP="${ORACLE_STOP:-0}"
+# Pin the queue at process start. ``source $EVAL_ENV_FILE`` (e.g. env.sh) often
+# exports EVAL_QUEUE_DIR back to the *default* shared queue; without this pin,
+# mark_done/mark_failed look in the wrong tree and the job stays stuck in the
+# dedicated queue's running/ forever (and the next claim may steal default-queue
+# b0v2 jobs onto this worker).
+QUEUE_DIR="$EVAL_QUEUE_DIR"
 RUN_ONCE=0
 DRY_RUN=0
 
@@ -57,7 +63,7 @@ mark_failed_job() {
   local job_id="$1"
   local error="$2"
   "$PYTHON_BIN" -m experiments.aerial.orchestration.eval_queue \
-    --queue-dir "$EVAL_QUEUE_DIR" --mark-failed "$job_id" --error "$error"
+    --queue-dir "$QUEUE_DIR" --mark-failed "$job_id" --error "$error"
 }
 
 run_job() {
@@ -79,6 +85,8 @@ run_job() {
   fi
   # shellcheck disable=SC1090
   source "$EVAL_ENV_FILE"
+  # env.sh may have overwritten EVAL_QUEUE_DIR — restore the pinned worker queue.
+  export EVAL_QUEUE_DIR="$QUEUE_DIR"
   export AIRSIM_HOST=10.229.20.125
   export AIRSIM_PORT=41451
   export AIRSIM_ALLOW_LOCAL_LAUNCH=0
@@ -116,7 +124,7 @@ run_job() {
     PYTHONPATH=. "${command[@]}"
   ); then
     if "$PYTHON_BIN" -m experiments.aerial.orchestration.eval_queue \
-      --queue-dir "$EVAL_QUEUE_DIR" --mark-done "$job_id"; then
+      --queue-dir "$QUEUE_DIR" --mark-done "$job_id"; then
       return 0
     fi
     mark_failed_job "$job_id" "evaluation produced invalid or missing metrics"
@@ -130,7 +138,7 @@ run_job() {
 
 while true; do
   job_json="$("$PYTHON_BIN" -m experiments.aerial.orchestration.eval_queue \
-    --queue-dir "$EVAL_QUEUE_DIR" --claim)"
+    --queue-dir "$QUEUE_DIR" --claim)"
   if [[ -z "$job_json" ]]; then
     if (( RUN_ONCE )); then
       exit 0

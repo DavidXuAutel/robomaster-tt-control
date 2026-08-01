@@ -147,3 +147,72 @@ def test_failed_eval_is_marked_failed_not_done(tmp_path: Path):
     assert result.returncode == 7
     assert (queue / "failed" / "b0-step_001000.json").is_file()
     assert not (queue / "done" / "b0-step_001000.json").exists()
+
+
+def test_env_sh_must_not_steal_mark_done_onto_default_queue(tmp_path: Path):
+    """Regression: sourced env.sh exporting EVAL_QUEUE_DIR used to leave jobs
+    stuck in the dedicated queue's running/ because mark_done looked elsewhere.
+    """
+    dedicated = tmp_path / "eval_queue_collapse_fix"
+    default = tmp_path / "eval_queue"
+    for q in (dedicated, default):
+        for sub in ("pending", "running", "done", "failed"):
+            (q / sub).mkdir(parents=True)
+
+    job = _job(tmp_path, "collapse-step_001000")
+    enqueue(dedicated, job)
+
+    env_file = tmp_path / "env.sh"
+    # Mimic production env.sh which unconditionally resets EVAL_QUEUE_DIR.
+    env_file.write_text(
+        f"export EVAL_QUEUE_DIR={default!s}\n"
+        "export AIRSIM_HOST=10.229.20.125\n",
+        encoding="utf-8",
+    )
+
+    fake_python = tmp_path / "python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [[ \"${1:-}\" == \"-c\" ]] || "
+        "[[ \" $* \" == *\" experiments.aerial.orchestration.eval_queue \"* ]]; then\n"
+        f"  exec {sys.executable!s} \"$@\"\n"
+        "fi\n"
+        # Successful closed-loop: write valid metrics next to --out.
+        "out=\"\"\n"
+        "prev=\"\"\n"
+        "for arg in \"$@\"; do\n"
+        "  if [[ \"$prev\" == \"--out\" ]]; then out=\"$arg\"; fi\n"
+        "  prev=\"$arg\"\n"
+        "done\n"
+        "if [[ -n \"$out\" ]]; then\n"
+        "  mkdir -p \"$(dirname \"$out\")\"\n"
+        "  printf '%s\\n' '{\"NE\": 12.3, \"SR\": 0.0, \"n\": 20}' > \"$out\"\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--once"],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PYTHONPATH": ".",
+            "PYTHON_BIN": str(fake_python),
+            "EVAL_QUEUE_DIR": str(dedicated),
+            "EVAL_ENV_FILE": str(env_file),
+            "EVAL_WORKER_LOCK": str(tmp_path / "worker.lock"),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert (dedicated / "done" / "collapse-step_001000.json").is_file()
+    assert not (dedicated / "running" / "collapse-step_001000.json").exists()
+    assert list((default / "done").glob("*.json")) == []
+    assert list((default / "running").glob("*.json")) == []
+    assert list((default / "failed").glob("*.json")) == []
