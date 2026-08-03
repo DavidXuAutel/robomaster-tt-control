@@ -2,11 +2,17 @@
 
 RoboMaster TT 视觉避障项目的 Agent 入口文档。每次新 Agent 进入本项目，先读此文件。
 
+**要飞真机或采数据？** 读完本文件后接着读
+`docs/handover/2026-07-28-flight-modes-and-data-collection-runbook.md`
+（模块选型 × 配置档、启动命令、采数 SOP、交付规范、故障速查）。
+若采的是 **人工示教 + 意图标注**（给 WAM/Kairos 动作头 SFT），再读
+`docs/handover/2026-07-29-teleop-intent-data-collection.md`。
+
 ## 项目简介
 
 基于 Depth Anything V2 深度估计的 RoboMaster TT 无人机半自动视觉避障系统。运行在 Mac (Apple M5) 上，通过 Wi-Fi 与 Tello 无人机通信。
 
-## 当前进展（2026-07-25）
+## 当前进展（2026-07-28）
 
 ### 已实现 & 真机验证
 
@@ -14,7 +20,8 @@ RoboMaster TT 视觉避障项目的 Agent 入口文档。每次新 Agent 进入�
 |------|------|----------|
 | 手动飞行 (键盘/GUI) | ✅ | `tt_control/control.py`, `tt_control/app.py` |
 | 半自动视觉避障 (遇障横移绕行) | ✅ | `tt_control/avoidance.py` (AvoidanceController) |
-| POI 环绕飞行 (视觉伺服居中+绕圈) | ✅ 07-27 真机长时验证 (2min+ 无 abort) | `tt_control/avoidance.py` (OrbitController) |
+| POI 环绕飞行 (视觉伺服居中+绕圈) | ✅ 07-28 椅子绕飞采数 4min43s 无 abort | `tt_control/avoidance.py` (OrbitController) |
+| 随机漫游探索 (Wander) | ✅ 07-28 笼内真机采数 | `tt_control/wander.py` |
 | FSM 状态机 (APPROACH→AVOID_TURN→...→ORBIT) | ✅ | `tt_control/avoidance_fsm.py` |
 | 深度推理 (Depth Anything V2, 本地 MPS) | ✅ | `server/da_v2_service.py`, `tt_control/depth_backend.py` |
 | 手势控制 (手掌起飞+打响指降落) | ✅ | `tt_control/gesture_control.py` |
@@ -25,11 +32,13 @@ RoboMaster TT 视觉避障项目的 Agent 入口文档。每次新 Agent 进入�
 
 ### 下一步计划
 
-1. **P0 - 随机探索采集（Wander）**：设计已定稿 →
-   `docs/design/2026-07-27-wander-explore-design.md`（实现规格书，
-   只允许 Claude 修改；实现方 DeepSeek/Grok 照规格执行，含分工与验收阶梯）
+1. **P0 - 扩大采集规模**：已交付 2 份（漫游 `ep_20260727_204010`、
+   椅子绕飞 `ep_20260727_205833`），继续在不同布局/光照下累积
 2. **P0 - 固定路线重复采集**：预设几条路线，不同光照/布局下重复采数
 3. **P1 - 走廊跟随 / 动态目标跟踪 / 贴墙飞行**：复用现有视觉伺服逻辑
+4. **P2 - 拆除最后一处模块耦合**：`WanderPolicy` 借用
+   `AvoidanceController.zone_nearness()`，使 `avoid.band_top/band_bottom`
+   被漫游与绕飞共享，见 `docs/dev-notes/2026-07-28-orbit-wander-decoupling.md`
 
 目标：为 WAM 世界模型训练积累多样化飞行数据。
 
@@ -56,20 +65,25 @@ orbit/fsm 节）经过 5 天真机调试，每个参数和结构都对应一次�
 ## 快速启动
 
 ```bash
-# 1. 找飞机
+# 1. 找飞机（飞机重启后 IP 会变，每次飞前必扫；主程序占着 8889 时需先关）
 python3 station_mode.py find
 
 # 2. 启动控制界面（自动拉起本地深度子进程，退出时自动停）
+#    --config 决定飞哪个模块：orbit-chair=椅子绕飞 / wander-cage=笼内漫游
 .venv/bin/python main.py \
-  --tello-ip 192.168.0.100 \
+  --config configs/orbit-chair.json \
+  --tello-ip <上一步扫到的 IP> \
   --local-ip 192.168.0.103 \
   --inference depth-anything \
   --start-depth-service \
   -v
 
-# 可选：录制飞行数据
-.venv/bin/python main.py ... --start-depth-service --record --record-hz 10
+# 采数时追加录制（一次起飞 = 一个 episode）
+.venv/bin/python main.py --config <档> ... --start-depth-service --record --record-hz 10
 ```
+
+模块选型、采数 SOP 与交付规范见
+`docs/handover/2026-07-28-flight-modes-and-data-collection-runbook.md`。
 
 ## 飞行操作
 
@@ -115,6 +129,10 @@ server/
 
 | 文档 | 内容 |
 |------|------|
+| `docs/handover/2026-07-28-flight-modes-and-data-collection-runbook.md` | **飞行/采数必读**：模块×配置档、启动命令、采数 SOP、交付规范、故障速查 |
+| `docs/handover/2026-07-29-teleop-intent-data-collection.md` | **人工示教 + 意图标注**：动作头 SFT 任务清单、SOP、manifest、打包 |
+| `docs/handover/templates/teleop_manifest.csv` | 示教交付总表模板 |
+| `docs/dev-notes/2026-07-28-orbit-wander-decoupling.md` | 绕飞与漫游的模块边界、耦合点核查与约定 |
 | `docs/handover/2026-07-25-capability-inventory.md` | 全部 11 个模块的详细能力清单 |
 | `docs/handover/2026-07-25-orbit-avoidance-handover.md` | 环绕飞行开发交接（参数/调试/排障） |
 | `docs/design/2026-07-25-wam-training-scenarios.md` | WAM 训练 21 个场景规划 + 数据采集设计 |
