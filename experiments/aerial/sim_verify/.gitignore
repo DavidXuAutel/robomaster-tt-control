@@ -11,5 +11,7 @@ artifacts/
 !artifacts/phase1_125_*
 !artifacts/l2f_clean_retest.json
 !artifacts/l2f_clean_retest_224.json
+!artifacts/l2f_crossnet_224_from_h100.json
+!artifacts/phase2_rl_rollout_topology.md
 __pycache__/
 *.pyc
