@@ -191,21 +191,30 @@ nc -vz 127.0.0.1 41451             # 确认端口活着
 ### 3.2 H100 侧 🔵
 ```bash
 ssh a25689@10.239.121.21 -p 31126
-# 建轻量环境（只需 airsim 客户端 + numpy）：
-python3 -m venv ~/sim_verify_venv && source ~/sim_verify_venv/bin/activate
-pip install -r sim_verify/requirements.txt
-cd sim_verify && cp config.env.example config.env
-#   AIRSIM_HOST=10.229.20.125      # 4090 内网 IP
-#   AIRSIM_PORT=41451
-nc -vz 10.229.20.125 41451
-python probes/t0_connectivity.py   # 先只测连通
-python probes/t2_capability.py     # 纯 airsim 客户端，H100 上就能跑
+# 系统 python 常无 ensurepip；且 home 在 Ceph 上建 venv 很慢 → 用 /tmp + get-pip：
+python3 -m venv --without-pip /tmp/sim_verify_venv_a25689
+curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+/tmp/sim_verify_venv_a25689/bin/python /tmp/get-pip.py
+/tmp/sim_verify_venv_a25689/bin/pip install -r ~/sim_verify/requirements.txt
+# 若 import cv2 报缺 libGL：改用 opencv-python-headless（requirements 已默认）
+cd ~/sim_verify && cp -n config.env.example config.env
+#   AIRSIM_HOST=10.229.20.125   AIRSIM_PORT=41451
+#   AIRSIM_CAMERA=front_custom  AIRSIM_VEHICLE=drone_1
+# 无 nc 时用 python socket 测端口；再跑探针：
+source ~/sim_verify/config.env
+/tmp/sim_verify_venv_a25689/bin/python probes/t0_connectivity.py
+/tmp/sim_verify_venv_a25689/bin/python probes/t2_capability.py
 ./verdict.py
 ```
 > 🟡 **T1（真渲染）在 H100 上跑需要 OpenFly 的 `scripts/sim/airsim_bridge.py` 及其
 > python 依赖也在 H100 上可导入。** 若 `airsim_bridge.py` 只依赖 `airsim` 包，把
 > `OPENFLY_ROOT` 指向一份 clone 即可；若它拉 ROS2 等重依赖，**T1 就留在 4090 上跑，
 > T0/T2 放 H100**——两机结果都 merge 进同一份 report 即可判定。
+>
+> **Phase-2 @31126（2026-08-03）已就绪：** `~/sim_verify` + `/tmp/sim_verify_venv_a25689`；
+> 4090 `0.0.0.0:41451` 可达；H100→`10.229.20.125:41451` **T0 PASS**（Multirotor）。
+> **未下载 Wan2.2**（共享盘已有 `aerial_cache_shared/checkpoints/Wan-AI/Wan2.2-TI2V-5B`）。
+> 单消费者仍成立：H100 与本机其它 client 不得并行抢 `41451`。
 
 ---
 
