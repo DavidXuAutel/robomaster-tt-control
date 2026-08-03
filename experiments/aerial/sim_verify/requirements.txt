@@ -1,0 +1,8 @@
+# Client-side deps for the sim-capability probes. The `airsim` package is a
+# pure-python RPC client, so it runs on the H100 client and talks to the 4090
+# renderer over the network. opencv-python is only needed by the OpenFly
+# AirsimBridge wrapper used in T1.
+airsim>=1.8.1
+numpy>=1.23
+opencv-python>=4.6
+msgpack-rpc-python>=0.4.1
