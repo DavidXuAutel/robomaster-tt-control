@@ -7,5 +7,9 @@
 # Never commit local runtime products.
 config.env
 artifacts/
+# Keep Phase-1 evidence on the branch (otherwise machine switch loses reports).
+!artifacts/phase1_125_*
+!artifacts/l2f_clean_retest.json
+!artifacts/l2f_clean_retest_224.json
 __pycache__/
 *.pyc

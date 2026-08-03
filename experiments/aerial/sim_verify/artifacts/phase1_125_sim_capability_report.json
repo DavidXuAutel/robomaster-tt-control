@@ -1,0 +1,132 @@
+{
+  "t0_connectivity": {
+    "connected": true,
+    "host": "127.0.0.1",
+    "import_airsim": true,
+    "mode_guess": "Multirotor(or compatible)",
+    "pass": true,
+    "port": 41451,
+    "tcp_reachable": true
+  },
+  "t1_render": {
+    "env_name": "env_airsim_16",
+    "mean": 151.30600758744856,
+    "note": "std>3 => real scene, not MockBridge constant fill",
+    "openfly_root": "/home/yao/openfly_stub",
+    "pass": true,
+    "shape": [
+      1080,
+      1920,
+      3
+    ],
+    "std": 84.06537190686444
+  },
+  "t2_capability": {
+    "barometer": {
+      "detail": {
+        "altitude": 131.7831268310547
+      },
+      "pass": true,
+      "sanity": "altitude=131.783"
+    },
+    "client": "MultirotorClient",
+    "collision": {
+      "detail": {
+        "has_collided": true
+      },
+      "pass": true
+    },
+    "continuous_frames": {
+      "detail": {
+        "camera": "front_custom",
+        "dt_max": 0.4519774711225182,
+        "dt_mean": 0.37834339480226237,
+        "dt_min": 0.3614994559902698,
+        "fps": 2.643101515020873,
+        "fps_ok": true,
+        "frames_differ": true,
+        "interval_s_target": 0.05,
+        "mean_abs_diff": 3.825607246822781,
+        "min_fps_required": 2.5,
+        "monotonic": true,
+        "n_frames": 10,
+        "nudge": "velocity_nudge"
+      },
+      "pass": true,
+      "sanity": "fps=2.64 mean_abs_diff=3.825607246822781"
+    },
+    "depth": {
+      "detail": {
+        "camera": "front_custom",
+        "dense": true,
+        "finite_max": 3420.0,
+        "finite_min": 10.75,
+        "finite_std": 1365.1106329696272,
+        "h": 480,
+        "n_finite": 307200,
+        "n_floats": 307200,
+        "w": 640
+      },
+      "pass": true,
+      "sanity": "finite=100% span=3409.25m std=1365.11"
+    },
+    "gps": {
+      "detail": {
+        "alt": 131.99346923828125
+      },
+      "pass": true,
+      "sanity": "alt=131.993"
+    },
+    "host": "127.0.0.1",
+    "imu": {
+      "detail": {
+        "ang_vel": [
+          -0.00020264160411898047,
+          0.000459285598481074,
+          -0.0010336230043321848
+        ],
+        "lin_acc": [
+          0.08146997541189194,
+          0.010464773513376713,
+          -1.771323800086975
+        ]
+      },
+      "pass": true,
+      "sanity": "lin_acc_mag=1.773"
+    },
+    "l2f_interval_s": 0.05,
+    "l2f_min_fps": 2.5,
+    "l2f_n": 10,
+    "physics": {
+      "detail": {
+        "dz": -1.7766723036766052,
+        "moved": true
+      },
+      "pass": true,
+      "sanity": "dz=-1.7766723036766052"
+    },
+    "port": 41451,
+    "scene": {
+      "detail": {
+        "bytes": "see continuous_frames",
+        "camera": "front_custom",
+        "via": "L2f"
+      },
+      "pass": true
+    }
+  },
+  "verdict": {
+    "fork": "A",
+    "matrix": {
+      "collision (L2c)": true,
+      "connected": true,
+      "continuous_frames (L2f)": true,
+      "depth_sane (L2d)": true,
+      "height baro|gps (L2b)": true,
+      "imu (L2a)": true,
+      "physics (L2e)": true,
+      "real_rgb (L1)": true
+    },
+    "reason": "full inertial+dense+physics+continuous RGB available (sanity-checked)"
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "t0_connectivity": {
+    "connected": true,
+    "host": "127.0.0.1",
+    "import_airsim": true,
+    "mode_guess": "Multirotor(or compatible)",
+    "pass": true,
+    "port": 41451,
+    "tcp_reachable": true
+  },
+  "t1_render": {
+    "env_name": "env_airsim_16",
+    "mean": 152.12578928755144,
+    "note": "std>3 => real scene, not MockBridge constant fill",
+    "openfly_root": "/home/yao/openfly_stub",
+    "pass": true,
+    "shape": [
+      1080,
+      1920,
+      3
+    ],
+    "std": 83.73068640417985
+  },
+  "t2_capability": {
+    "barometer": {
+      "detail": {
+        "altitude": 131.57449340820312
+      },
+      "pass": true,
+      "sanity": "altitude=131.574"
+    },
+    "client": "MultirotorClient",
+    "collision": {
+      "detail": {
+        "has_collided": true
+      },
+      "pass": true
+    },
+    "continuous_frames": {
+      "detail": {
+        "camera": "front_custom",
+        "dt_max": 0.41704614786431193,
+        "dt_mean": 0.37519076055226225,
+        "dt_min": 0.36350925196893513,
+        "fps": 2.665310836887479,
+        "fps_ok": false,
+        "frames_differ": true,
+        "interval_s_target": 0.05,
+        "mean_abs_diff": 3.825547456741333,
+        "min_fps_required": 5.0,
+        "monotonic": true,
+        "n_frames": 10,
+        "nudge": "velocity_nudge"
+      },
+      "error": "sanity failed: fps=2.67 < required 5.0",
+      "pass": false,
+      "sanity": "fps=2.67 < required 5.0"
+    },
+    "depth": {
+      "detail": {
+        "camera": "front_custom",
+        "dense": true,
+        "finite_max": 3422.0,
+        "finite_min": 10.75,
+        "finite_std": 1365.4038161573972,
+        "h": 480,
+        "n_finite": 307200,
+        "n_floats": 307200,
+        "w": 640
+      },
+      "pass": true,
+      "sanity": "finite=100% span=3411.25m std=1365.40"
+    },
+    "gps": {
+      "detail": {
+        "alt": 131.99818420410156
+      },
+      "pass": true,
+      "sanity": "alt=131.998"
+    },
+    "host": "127.0.0.1",
+    "imu": {
+      "detail": {
+        "ang_vel": [
+          0.00029590772464871407,
+          0.0005424830596894026,
+          -0.001251857727766037
+        ],
+        "lin_acc": [
+          -0.08153753727674484,
+          -0.02199173904955387,
+          -1.7826623916625977
+        ]
+      },
+      "pass": true,
+      "sanity": "lin_acc_mag=1.785"
+    },
+    "l2f_interval_s": 0.05,
+    "l2f_min_fps": 5.0,
+    "l2f_n": 10,
+    "physics": {
+      "detail": {
+        "dz": -1.7829883098602295,
+        "moved": true
+      },
+      "pass": true,
+      "sanity": "dz=-1.7829883098602295"
+    },
+    "port": 41451,
+    "scene": {
+      "detail": {
+        "bytes": 4235932,
+        "camera": "front_custom"
+      },
+      "pass": true
+    }
+  },
+  "verdict": {
+    "fork": "A-",
+    "matrix": {
+      "collision (L2c)": true,
+      "connected": true,
+      "continuous_frames (L2f)": false,
+      "depth_sane (L2d)": true,
+      "height baro|gps (L2b)": true,
+      "imu (L2a)": true,
+      "physics (L2e)": true,
+      "real_rgb (L1)": true
+    },
+    "reason": "camera+depth ok but missing/failed: continuous_frames (L2f) \u2014 often ComputerVision mode or insufficient frame rate; fix settings and re-verify"
+  }
+}

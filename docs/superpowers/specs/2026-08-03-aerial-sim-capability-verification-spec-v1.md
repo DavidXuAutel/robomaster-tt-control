@@ -29,6 +29,9 @@
 
 ---
 
+> **Phase-1 @ 10.229.20.125（2026-08-03）：** Multirotor 下 L1/L2a–e 通过。干净独占 L2f @ **1920×1080** ≈**3.12 fps**（&lt;5）曾记 A⁻。**工作分辨率复测**（训练默认 **224×224** CaptureSettings，含 `Binaries/Linux/settings.json`）：顺序 ≈**36.3 fps**、批量 ≈**90 fps**，IMU≈9.84 → **`L2F_MIN_FPS=5` 达标，正式 Fork A（工作分辨率）**。1080p ~3 fps 仅作高清可视化约束。详见 `experiments/aerial/sim_verify/artifacts/phase1_125_SUMMARY.md` / `l2f_clean_retest_224.json`。
+
+
 ## 1. 目的与范围
 
 v2 的惯性 + 稠密感知地基**无法**由静态 OpenFly parquet 提供（无 IMU、稀疏宏原语关键帧）。唯一来源是**能渲染任意视角的物理仿真器**。本 spec 只回答一个问题并给出证据：
