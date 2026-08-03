@@ -1,0 +1,8 @@
+episode_id,mode,task,intent,scene,lighting,quality,duration_s,notes
+ep_YYYYMMDD_HHMMSS,teleop,approach,向前接近椅子，停在约 1 米处,笼内中央一把椅子,daylight,ok,35,
+ep_YYYYMMDD_HHMMSS,teleop,orbit_chair,顺时针绕椅子飞一圈，保持椅子在画面中,笼内中央一把椅子,daylight,ok,45,
+ep_YYYYMMDD_HHMMSS,teleop,avoid_left,前方有椅子，向左绕开后继续前飞,笼内前方一把椅子,lamps_on,ok,30,
+ep_YYYYMMDD_HHMMSS,teleop,corridor,沿通道向前飞，保持居中,笼内两侧椅子夹出通道,daylight,ok,40,
+ep_YYYYMMDD_HHMMSS,teleop,yaw_explore,原地左转约 90°，再向前飞,笼内空旷段,daylight,ok,25,
+ep_YYYYMMDD_HHMMSS,teleop,altitude,升高到约 1 米再下降到约 0.6 米,笼内空旷段,dim,ok,20,
+ep_YYYYMMDD_HHMMSS,teleop,orbit_chair,顺时针绕椅子飞一圈，保持椅子在画面中,笼内中央一把椅子,daylight,discard,12,起飞后碰椅子中止重飞

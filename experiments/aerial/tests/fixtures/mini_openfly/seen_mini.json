@@ -1,0 +1,40 @@
+[
+  {
+    "scene_id": "mini_openfly_scene_a",
+    "gpt_instruction": "Fly forward to the goal.",
+    "image_path": "env_airsim_alpha/traj_0",
+    "index_list": ["000000", "000001", "000002"],
+    "action": [1, 1, 0],
+    "pos": [
+      [0.0, 0.0, 1.0],
+      [3.0, 0.0, 1.0],
+      [6.0, 0.0, 1.0]
+    ],
+    "yaw": [0.0, 0.0, 0.0]
+  },
+  {
+    "scene_id": "mini_openfly_scene_b",
+    "gpt_instruction": "Turn left and stop.",
+    "image_path": "env_airsim_beta/traj_1",
+    "index_list": ["000000", "000001", "000002"],
+    "action": [2, 0],
+    "pos": [
+      [0.0, 0.0, 2.0],
+      [0.0, 0.0, 2.0],
+      [0.0, 0.0, 2.0]
+    ],
+    "yaw": [0.0, 0.0, 0.5235987755982988]
+  },
+  {
+    "scene_id": "mini_openfly_scene_c",
+    "gpt_instruction": "Climb up.",
+    "image_path": "env_airsim_gamma/traj_2",
+    "index_list": ["000000", "000001"],
+    "action": [4, 0],
+    "pos": [
+      [1.0, 1.0, 1.0],
+      [1.0, 1.0, 4.0]
+    ],
+    "yaw": [0.0, 0.0]
+  }
+]

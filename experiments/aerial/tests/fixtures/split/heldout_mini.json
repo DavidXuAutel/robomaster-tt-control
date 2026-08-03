@@ -1,0 +1,16 @@
+[
+  {
+    "trajectory_id": "h1",
+    "scene_id": "env_airsim_16",
+    "gpt_instruction": "go to waypoint one",
+    "image_path": "env_airsim_16/h1",
+    "pos": [[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]]
+  },
+  {
+    "trajectory_id": "h2",
+    "scene_id": "env_airsim_16",
+    "gpt_instruction": "go to waypoint two",
+    "image_path": "env_airsim_16/h2",
+    "pos": [[0.0, 0.0, 1.0], [2.0, 0.0, 1.0]]
+  }
+]

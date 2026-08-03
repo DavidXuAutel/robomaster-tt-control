@@ -1,0 +1,57 @@
+train:
+  _target_: fastwam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
+  dataset_dirs:
+    - ./data/openfly_lerobot/train_subset
+  shape_meta:
+    images:
+      - key: ego
+        raw_shape: [3, 224, 224]
+        shape: [3, 224, 224]
+    action:
+      - key: default
+        raw_shape: 4
+        shape: 4
+    state:
+      - key: default
+        raw_shape: 4
+        shape: 4
+  # v3.2 Stage 1: match median episode length (~13). A 9-frame window forces
+  # action_video_freq_ratio=2, not 4: the dataset asserts (num_frames-1)%ratio==0
+  # AND ((num_frames-1)//ratio)%4==0. With ratio=4, (9-1)//4=2, 2%4!=0 → crash at
+  # init (ratio=4 only admits num_frames∈{17,33,…}). ratio=2 gives (8%2=0,
+  # 8//2=4, 4%4=0) and 5 video frames (indices 0,2,4,6,8), 5%4==1 for the VAE.
+  # b0_v2 trains from scratch, so the ratio change costs no pretrained weights.
+  num_frames: 9
+  global_sample_stride: 1
+  action_video_freq_ratio: 2
+  video_size: [224, 224]
+  camera_key: null
+  val_set_proportion: 0.0
+  is_training_set: true
+  skip_padding_as_possible: true
+  concat_multi_camera: "horizontal"
+  processor:
+    _target_: fastwam.datasets.lerobot.processors.fastwam_processor.FastWAMProcessor
+    shape_meta: ${data.train.shape_meta}
+    num_obs_steps: ${data.train.num_frames}
+    num_output_cameras: 1
+    action_output_dim: 4
+    proprio_output_dim: 4
+    delta_action_dim_mask:
+      default: [true, true, true, true]
+    action_state_transforms: null
+    use_stepwise_action_norm: False
+    norm_default_mode: min/max
+    norm_exception_mode: null
+    action_state_merger:
+      _target_: fastwam.datasets.lerobot.transforms.action_state_merger.ConcatLeftAlign
+    train_transforms:
+      - _target_: fastwam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size: [224, 224]
+    val_transforms:
+      - _target_: fastwam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size: [224, 224]
+  text_embedding_cache_dir: ./data/text_embeds_cache/openfly
+  context_len: 128
