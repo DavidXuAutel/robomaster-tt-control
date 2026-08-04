@@ -119,6 +119,13 @@ class RolloutCollector:
             intervened = False
             # Safety shield sits ABOVE the learned policy (spec §2#6). Stub
             # returns no-override today; when wired it swaps in a safe action.
+            #
+            # V0: no online WM, so the shield sees obs only (D̂ / τ / p_coll all
+            # absent -> ThresholdSafetyShield safely never fires). V1 TODO: once
+            # the fast latent WM steps online, pass its DynamicsOutput here as
+            # should_override(obs, wm_out=...) so the p_coll trigger is live —
+            # that path is unit-tested (test_followups) but not yet exercised in
+            # this collection loop.
             if self.safety is not None and self.safety.should_override(obs):
                 action = clip_body_delta(self.safety.override_action(obs), limits)
                 intervened = True

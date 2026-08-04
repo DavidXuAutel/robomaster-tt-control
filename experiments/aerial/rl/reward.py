@@ -17,10 +17,11 @@ collector can call ``.step(obs, action)`` once per env step. ``reward_terms``
 is a pure function for the imagination side (given explicit distances / p_coll).
 
 Arrival radius: ``RewardConfig.success_dist_m`` is the *online* arrival /
-termination gate and defaults to ``OPENFLY_SUCCESS_DIST_M`` only as a fallback —
-the training entrypoint sets a tighter value (see ``configs/aerial_rl.yaml``).
-The 20 m ``OPENFLY_SUCCESS_DIST_M`` is the loose *eval SR metric* radius and is
-intentionally NOT reused as the per-step termination threshold.
+termination gate. It defaults to ``DEFAULT_ONLINE_SUCCESS_DIST_M`` (the tight 3 m
+online radius) so that even a bare ``NavigationReward()`` — one built without going
+through the YAML / ``build_from_config`` path — uses the correct threshold. The
+20 m ``OPENFLY_SUCCESS_DIST_M`` (re-exported as ``EVAL_SUCCESS_DIST_M``) is the
+loose *eval SR metric* radius and is intentionally NOT the per-step termination gate.
 """
 from __future__ import annotations
 
@@ -32,13 +33,21 @@ import numpy as np
 from experiments.aerial.eval.metrics import OPENFLY_SUCCESS_DIST_M
 from experiments.aerial.rl.env.obs import Observation
 
+# Online arrival / termination radius (m). Tighter than the eval SR metric so a
+# bare NavigationReward()/RewardConfig() defaults to THIS, not the loose eval
+# radius — code paths that skip the YAML must not silently terminate at 20 m.
+DEFAULT_ONLINE_SUCCESS_DIST_M = 3.0
+# The loose eval success-rate radius (metrics.OPENFLY_SUCCESS_DIST_M = 20 m),
+# re-exported for reference. Intentionally NOT the per-step termination gate.
+EVAL_SUCCESS_DIST_M = float(OPENFLY_SUCCESS_DIST_M)
+
 
 @dataclass
 class RewardConfig:
     w_progress: float = 1.0
     w_collision: float = 10.0
     w_maneuver: float = 0.01
-    success_dist_m: float = float(OPENFLY_SUCCESS_DIST_M)
+    success_dist_m: float = DEFAULT_ONLINE_SUCCESS_DIST_M
     success_bonus: float = 10.0
 
 

@@ -1,8 +1,27 @@
 import numpy as np
 import pytest
 
-from experiments.aerial.rl.reward import NavigationReward, RewardConfig, reward_terms
+from experiments.aerial.rl.reward import (
+    DEFAULT_ONLINE_SUCCESS_DIST_M,
+    EVAL_SUCCESS_DIST_M,
+    NavigationReward,
+    RewardConfig,
+    reward_terms,
+)
 from experiments.aerial.rl.env.obs import Observation
+
+
+def test_bare_config_default_is_tight_online_radius_not_eval():
+    # A RewardConfig()/NavigationReward() built WITHOUT the YAML path must still
+    # use the tight online radius (3 m), never the loose 20 m eval SR radius.
+    assert RewardConfig().success_dist_m == pytest.approx(DEFAULT_ONLINE_SUCCESS_DIST_M)
+    assert DEFAULT_ONLINE_SUCCESS_DIST_M < EVAL_SUCCESS_DIST_M
+    r = NavigationReward(goal=np.array([10.0, 0.0, 0.0]))
+    r.reset(goal=np.array([10.0, 0.0, 0.0]), start_pos=np.zeros(3))
+    # 5 m out: arrived under a 20 m radius, NOT under the 3 m default.
+    _, done, terms = r.step(_obs([5.0, 0.0, 0.0]), np.zeros(4))
+    assert not done
+    assert terms["arrived"] == 0.0
 
 
 def _obs(pos, collided=False):

@@ -25,7 +25,7 @@ from experiments.aerial.rl.corrector import CorrectorConfig, SerialCorrectorLoop
 from experiments.aerial.rl.dynamics import StubLatentDynamics
 from experiments.aerial.rl.env.action import clip_body_delta
 from experiments.aerial.rl.env.obs import PolicyObservation
-from experiments.aerial.rl.reward import RewardConfig
+from experiments.aerial.rl.reward import DEFAULT_ONLINE_SUCCESS_DIST_M, RewardConfig
 from experiments.aerial.rl.safety import NullSafetyShield, ThresholdSafetyShield
 
 logger = logging.getLogger(__name__)
@@ -159,8 +159,8 @@ def build_from_config(cfg: Any) -> SerialCorrectorLoop:
         w_collision=float(_get(rc, "w_collision", 10.0)),
         w_maneuver=float(_get(rc, "w_maneuver", 0.01)),
         # Online arrival/termination radius — tighter than the eval SR metric
-        # (OPENFLY_SUCCESS_DIST_M=20 m); default 3 m if the YAML omits it.
-        success_dist_m=float(_get(rc, "success_dist_m", 3.0)),
+        # (EVAL_SUCCESS_DIST_M=20 m); falls back to the tight online default.
+        success_dist_m=float(_get(rc, "success_dist_m", DEFAULT_ONLINE_SUCCESS_DIST_M)),
         success_bonus=float(_get(rc, "success_bonus", 10.0)),
     )
 
