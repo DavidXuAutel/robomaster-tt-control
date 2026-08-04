@@ -147,6 +147,7 @@ def check_scale_consistency(
     *,
     thr: V0GateThresholds = DEFAULT_THRESHOLDS,
     fallback_hz: float = 8.0,
+    max_depth_m: Optional[float] = 200.0,
 ) -> Dict[str, Any]:
     """Signal ③ via ``vio.window_scale_report``."""
     report = vio_lib.window_scale_report(
@@ -156,6 +157,7 @@ def check_scale_consistency(
         fallback_hz=fallback_hz,
         min_motion_m=thr.min_motion_m,
         eps=thr.scale_eps,
+        max_depth_m=max_depth_m,
     )
     med = float(report["median_rel_err"])
     n_valid = int(report["n_valid"])

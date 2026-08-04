@@ -214,6 +214,8 @@ def _signal3(
 # Depth-head inference over dataset windows (lazy torch — H100 only)          #
 # --------------------------------------------------------------------------- #
 def _sample_windows(root: Path, *, window: int, max_windows: int) -> List[Any]:
+    """Legacy prefix sampler (first ``window`` frames per episode). Prefer the
+    holdout / scale samplers below for gate scoring."""
     episodes = ds.load_dataset(root, skip_quarantined=True)
     windows: List[Any] = []
     for ep in episodes:
@@ -225,17 +227,137 @@ def _sample_windows(root: Path, *, window: int, max_windows: int) -> List[Any]:
     return windows
 
 
+def _window_forward_frac(window: Any) -> float:
+    """Fraction of net displacement along world +x (camera-forward proxy at yaw≈0).
+
+    Frozen §4.1 ③ applicability: the |Δmedian D̂| proxy is only meaningful when the
+    window has a forward component. Pure side-slip / yaw windows are skipped.
+    """
+    p0 = np.asarray(window[0].obs.position, dtype=np.float64).reshape(3)
+    p1 = np.asarray(window[-1].obs.position, dtype=np.float64).reshape(3)
+    delta = p1 - p0
+    motion = float(np.linalg.norm(delta))
+    if motion < 1e-6:
+        return 0.0
+    return float(abs(delta[0]) / motion)
+
+
+def _sample_scale_windows(
+    root: Path,
+    *,
+    window: int,
+    max_windows: int,
+    n_context: int,
+    min_forward_frac: float = 0.5,
+    min_motion_m: float = 0.5,
+) -> List[Any]:
+    """Non-overlapping windows with RGB context prefix for full-context D̂ at t0.
+
+    Each returned chunk has length ``n_context + window``; the *scored* tail is
+    ``chunk[n_context:]``. Context lets ``_DepthHead`` see ``n_frames`` history at
+    the first scored frame (no left-pad), so ``ŝ_D = |d_last − d_first|`` is not
+    inflated by a single-frame warmup prediction.
+    """
+    episodes = ds.load_dataset(root, skip_quarantined=True)
+    need = int(n_context) + int(window)
+    windows: List[Any] = []
+    for ep in episodes:
+        if len(ep) < need:
+            continue
+        for start in range(0, len(ep) - need + 1, int(window)):
+            chunk = ep[start : start + need]
+            scored = chunk[int(n_context) :]
+            p0 = np.asarray(scored[0].obs.position, dtype=np.float64).reshape(3)
+            p1 = np.asarray(scored[-1].obs.position, dtype=np.float64).reshape(3)
+            motion = float(np.linalg.norm(p1 - p0))
+            if motion < float(min_motion_m):
+                continue
+            if _window_forward_frac(scored) < float(min_forward_frac):
+                continue
+            windows.append(chunk)
+            if len(windows) >= max_windows:
+                return windows
+    return windows
+
+
+def _score_1d_holdout(
+    root: Path,
+    ckpt_path: Path,
+    *,
+    device: str,
+    window: int,
+    thr: metrics.V0GateThresholds,
+    config_path: Path,
+    holdout_frac: float = 0.2,
+    split_seed: int = 0,
+    wm_batch: int = 8,
+) -> Dict[str, Any]:
+    """①d — same episode-holdout median AbsRel protocol as ``train_depth_head``.
+
+    Frozen §4.1: "holdout median AbsRel ≤ 0.30". The previous gate path scored the
+    first ``window`` frames of the first N episodes (train+holdout mixed), which
+    systematically disagreed with the trainer's true-holdout number.
+    """
+    import torch  # lazy: H100 only
+
+    from experiments.aerial.rl.dynamics_torch import _DepthHead
+    from experiments.aerial.rl.train_depth_head import (
+        _holdout_absrel,
+        _load_depth_cfg,
+        _split_train_holdout,
+        _usable_episodes,
+    )
+
+    dh_cfg = _load_depth_cfg(config_path)
+    all_eps = _usable_episodes(root, int(window))
+    _train_eps, holdout_eps = _split_train_holdout(
+        all_eps, holdout_frac=float(holdout_frac), seed=int(split_seed)
+    )
+    if not holdout_eps:
+        return {
+            "ok": False,
+            "absrel": float("nan"),
+            "reason": "no held-out episodes for ①d (need ≥2 usable depth episodes)",
+        }
+    payload = torch.load(str(ckpt_path), map_location="cpu")
+    model = _DepthHead(
+        image_size=int(payload.get("image_size", dh_cfg.get("image_size", 224))),
+        n_frames=int(payload.get("n_frames", dh_cfg.get("n_frames", 4))),
+        base=int(payload.get("base", dh_cfg.get("base", 32))),
+    )
+    model.load_state_dict(payload["model"], strict=True)
+    model.eval().to(device)
+    absrel = _holdout_absrel(
+        model,
+        holdout_eps,
+        wm_batch=int(wm_batch),
+        window=int(window),
+        device=torch.device(device),
+        max_depth_m=float(dh_cfg.get("max_depth_m", 200.0)),
+    )
+    if not np.isfinite(absrel):
+        return {"ok": False, "absrel": absrel, "reason": "no valid depth pixels on holdout"}
+    return {
+        "ok": bool(absrel <= thr.depth_absrel_max),
+        "absrel": float(absrel),
+        "n_holdout_eps": len(holdout_eps),
+        "protocol": "episode_holdout",
+    }
+
+
 def _predict_depth_over_windows(
     ckpt_path: Path,
     windows: List[Any],
     *,
     device: str = "cpu",
+    score_context: int = 0,
 ) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
     """Run the trained ``_DepthHead`` on each frame of each window (lazy torch).
 
-    Returns ``(perception_arrays, pred_depth[B, L, H, W])``. Predicting per frame
-    (sliding the head's n_frames window to end at ``t``) gives a full-window depth
-    stack so ③ can measure the *depth change* across the window from D̂, not GT.
+    Returns ``(perception_arrays, pred_depth[B, L_score, H, W])``. When
+    ``score_context > 0``, ``windows`` are assumed to carry a leading context
+    prefix of that length; only the trailing scored frames are returned in both
+    ``arr`` and ``pred`` (so ③'s first frame has full ``n_frames`` history).
     """
     import torch  # lazy: H100 only
 
@@ -251,10 +373,13 @@ def _predict_depth_over_windows(
     model.load_state_dict(payload["model"], strict=True)
     model.eval().to(device)
 
-    arr = windows_to_perception_arrays(windows)
-    rgb = torch.from_numpy(np.ascontiguousarray(arr["rgb"]))  # [B, L, H, W, 3]
+    arr_full = windows_to_perception_arrays(windows)
+    rgb = torch.from_numpy(np.ascontiguousarray(arr_full["rgb"]))  # [B, L, H, W, 3]
     B, L = int(rgb.shape[0]), int(rgb.shape[1])
     n = model.n_frames
+    ctx = max(0, int(score_context))
+    if ctx >= L:
+        raise ValueError(f"score_context={ctx} must be < window length {L}")
     preds = np.empty((B, L, model.image_size, model.image_size), dtype=np.float32)
     with torch.no_grad():
         for t in range(L):
@@ -262,7 +387,15 @@ def _predict_depth_over_windows(
             sub = rgb[:, lo : t + 1]  # pack_rgb_nhwc left-pads if shorter than n
             d, _ = model.predict_from_window(sub.to(device))
             preds[:, t] = d.cpu().numpy()
-    return arr, preds
+    if ctx == 0:
+        return arr_full, preds
+    arr: Dict[str, np.ndarray] = {}
+    for k, v in arr_full.items():
+        if isinstance(v, np.ndarray) and v.ndim >= 2 and v.shape[0] == B and v.shape[1] == L:
+            arr[k] = v[:, ctx:]
+        else:
+            arr[k] = v
+    return arr, preds[:, ctx:]
 
 
 # --------------------------------------------------------------------------- #
@@ -398,6 +531,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--window", type=int, default=8)
     p.add_argument("--max-windows", type=int, default=16)
+    p.add_argument("--holdout-frac", type=float, default=0.2,
+                   help="①d episode holdout fraction (must match train_depth_head)")
+    p.add_argument("--split-seed", type=int, default=0,
+                   help="①d holdout split seed (must match train_depth_head)")
     p.add_argument("--allow-incomplete", action="store_true")
     p.add_argument("--self-check", action="store_true")
     args = p.parse_args(argv)
@@ -423,24 +560,58 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         thr_eff = replace(thr, n_eval_episodes=int(args.n_eval_episodes))
 
-    # --- depth-head predictions over dataset windows (①d + ③; H100/4090 GPU) --- #
+    # --- depth-head predictions / holdout AbsRel (①d + ③; H100/4090 GPU) --- #
     pred_depth: Optional[np.ndarray] = None
     gt_depth: Optional[np.ndarray] = None
     vel: Optional[np.ndarray] = None
     timestamps: Optional[np.ndarray] = None
+    s1d_holdout: Optional[Dict[str, Any]] = None
     if need_dataset_depth:
         if not args.dataset:
             print("[v0-gate] FAIL: --dataset required for signals ①/③", file=sys.stderr)
             return 2
         root = Path(args.dataset)
         _refuse_rgb_only_desync(root, args.allow_incomplete)
-        if args.depth_ckpt:
-            windows = _sample_windows(root, window=int(args.window), max_windows=int(args.max_windows))
+        if args.depth_ckpt and "1" in req:
+            # ①d: trainer-identical episode-holdout median AbsRel (frozen §4.1).
+            s1d_holdout = _score_1d_holdout(
+                root, Path(args.depth_ckpt),
+                device=args.device, window=int(args.window), thr=thr,
+                config_path=Path(args.config),
+                holdout_frac=float(args.holdout_frac),
+                split_seed=int(args.split_seed),
+            )
+        if args.depth_ckpt and "3" in req:
+            # Peek n_frames from ckpt so scored frames have full temporal context.
+            import torch  # lazy
+
+            payload = torch.load(str(args.depth_ckpt), map_location="cpu")
+            n_frames = int(payload.get("n_frames", 4))
+            n_context = max(0, n_frames - 1)
+            windows = _sample_scale_windows(
+                root,
+                window=int(args.window),
+                max_windows=int(args.max_windows),
+                n_context=n_context,
+                min_forward_frac=0.5,
+                min_motion_m=thr.min_motion_m,
+            )
             if not windows:
-                print(f"[v0-gate] FAIL: no episode >= {args.window} steps for depth eval", file=sys.stderr)
+                print(
+                    "[v0-gate] WARN: no forward-motion windows for ③; "
+                    "falling back to prefix sampler (proxy may be invalid).",
+                    file=sys.stderr,
+                )
+                windows = _sample_windows(
+                    root, window=int(args.window), max_windows=int(args.max_windows)
+                )
+                n_context = 0
+            if not windows:
+                print(f"[v0-gate] FAIL: no episode >= {args.window} steps for depth eval",
+                      file=sys.stderr)
                 return 1
             arr, pred_full = _predict_depth_over_windows(
-                Path(args.depth_ckpt), windows, device=args.device
+                Path(args.depth_ckpt), windows, device=args.device, score_context=n_context,
             )
             pred_depth = pred_full
             gt_depth = arr.get("depth")
@@ -453,12 +624,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         s1abc = _signal1abc_from_log(
             Path(args.learning_log) if args.learning_log else None, thr
         )
-        # ①d scores the head's prediction at the last frame of each window vs GT.
-        s1d = _signal1d(
-            None if pred_depth is None else pred_depth[:, -1],
-            None if gt_depth is None else gt_depth[:, -1],
-            thr,
-        )
+        if s1d_holdout is not None:
+            s1d = s1d_holdout
+        else:
+            # No depth ckpt → explicit FAIL (depth pillar enforced).
+            s1d = _signal1d(None, None, thr)
         signals["1"] = {"ok": bool(s1abc.get("ok") and s1d.get("ok")), "abc": s1abc, "d": s1d}
     if "3" in req:
         signals["3"] = _signal3(pred_depth, vel, timestamps, thr)

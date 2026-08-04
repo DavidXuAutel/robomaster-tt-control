@@ -52,7 +52,11 @@ def window_motion_m(pos: np.ndarray) -> np.ndarray:
     return np.linalg.norm(delta, axis=-1).astype(np.float32)
 
 
-def depth_median(depth: np.ndarray) -> np.ndarray:
+def depth_median(
+    depth: np.ndarray,
+    *,
+    max_depth_m: Optional[float] = 200.0,
+) -> np.ndarray:
     """Per-frame median depth over spatial dims, preserving the frame axis.
 
     Contract (frozen §4.1 ③ inputs): ``depth`` is either a spatial stack
@@ -61,16 +65,28 @@ def depth_median(depth: np.ndarray) -> np.ndarray:
     axis L survives, since ``scale_from_depth_change`` differences ``[..., -1]``
     against ``[..., 0]`` along it. Non-finite / ≤0 pixels are ignored; an
     all-invalid frame yields NaN.
+
+    ``max_depth_m`` matches ``v0_metrics.depth_absrel`` / DepthHead train: outdoor
+    AirSim DepthPlanar sky/far-plane fill (often >1 km) must not dominate the
+    median, or ``ŝ_D = |d_last − d_first|`` measures sky flicker instead of
+    navigational scale (GT unmasked median-Δ routinely hundreds of metres).
+    Pass ``None`` to keep every finite positive pixel.
     """
     d = np.asarray(depth, dtype=np.float64)
     if d.ndim >= 3:
         # Flatten the trailing H,W grid into one axis, then median over it.
         flat = d.reshape(*d.shape[:-2], -1)
-        masked = np.where(np.isfinite(flat) & (flat > 0), flat, np.nan)
+        valid = np.isfinite(flat) & (flat > 0)
+        if max_depth_m is not None:
+            valid &= flat <= float(max_depth_m)
+        masked = np.where(valid, flat, np.nan)
         with np.errstate(all="ignore"):
             return np.nanmedian(masked, axis=-1).astype(np.float32)
     # Already per-frame: no spatial grid to reduce; just sanitise ≤0 / non-finite.
-    return np.where(np.isfinite(d) & (d > 0), d, np.nan).astype(np.float32)
+    valid = np.isfinite(d) & (d > 0)
+    if max_depth_m is not None:
+        valid &= d <= float(max_depth_m)
+    return np.where(valid, d, np.nan).astype(np.float32)
 
 
 def scale_from_motion(motion_m: np.ndarray) -> np.ndarray:
@@ -142,12 +158,13 @@ def window_scale_report(
     fallback_hz: float = 8.0,
     min_motion_m: float = 0.5,
     eps: float = 1e-3,
+    max_depth_m: Optional[float] = 200.0,
 ) -> Dict[str, np.ndarray]:
     """End-to-end §4.1 ③ helper on perception-shaped arrays."""
     pos, _dt = integrate_velocity(vel, timestamps, fallback_hz=fallback_hz)
     motion = window_motion_m(pos)
     s_vio = scale_from_motion(motion)
-    d_med = depth_median(depth)
+    d_med = depth_median(depth, max_depth_m=max_depth_m)
     s_d = scale_from_depth_change(d_med)
     err = scale_relative_error(
         s_d, s_vio, eps=eps, min_motion_m=min_motion_m, motion_m=motion

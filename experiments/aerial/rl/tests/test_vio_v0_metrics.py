@@ -44,6 +44,48 @@ def test_window_scale_report_aligned_depth_motion():
     assert float(report["median_rel_err"]) <= 0.25
 
 
+def test_depth_median_masks_outdoor_far_plane():
+    """Sky/far-plane fill must not dominate ŝ_D (AbsRel uses the same 200 m cap)."""
+    H, W = 4, 4
+    # ≥50% sky pixels so an unmasked median is pulled to the far plane; masked
+    # keeps the navigational near field (same 200 m cap as AbsRel / DepthHead).
+    near = np.full((H, W), 10.0, dtype=np.float32)
+    near[:, W // 2 :] = 5000.0
+    near_next = np.full((H, W), 9.0, dtype=np.float32)
+    near_next[:, W // 2 :] = 4000.0
+    depth = np.stack([near, near_next], axis=0)[None, ...]  # [1, 2, H, W]
+    unmasked = vio.depth_median(depth, max_depth_m=None)
+    masked = vio.depth_median(depth, max_depth_m=200.0)
+    assert float(unmasked[0, 0]) > 100.0
+    assert abs(float(masked[0, 0]) - 10.0) < 1e-3
+    assert abs(float(masked[0, 1]) - 9.0) < 1e-3
+    s_d = vio.scale_from_depth_change(masked)
+    assert abs(float(s_d[0]) - 1.0) < 1e-3
+
+
+def test_sample_scale_windows_forward_filter():
+    from experiments.aerial.rl._v0_gate import _window_forward_frac
+    from experiments.aerial.rl.buffer import Transition
+    from experiments.aerial.rl.env.obs import Observation
+
+    def _tr(pos):
+        state = np.array([pos[0], pos[1], pos[2], 0, 0, 0, 0], dtype=np.float32)
+        obs = Observation(
+            rgb=np.zeros((4, 4, 3), np.uint8),
+            state=state,
+            collided=False,
+            depth=np.ones((4, 4), np.float32),
+            imu={},
+            t=0.0,
+        )
+        return Transition(obs=obs, action=np.zeros(4, np.float32), reward=0.0, done=False)
+
+    forward = [_tr([0, 0, 0]), _tr([1.0, 0.1, 0])]
+    sideways = [_tr([0, 0, 0]), _tr([0.1, 1.0, 0])]
+    assert _window_forward_frac(forward) > 0.5
+    assert _window_forward_frac(sideways) < 0.5
+
+
 def test_learning_curves_pass_and_fail():
     thr = m.DEFAULT_THRESHOLDS
     ok = m.check_learning_curves(
