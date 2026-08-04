@@ -214,6 +214,123 @@ class _RSSM(nn.Module):
 
 
 # ============================================================================
+# [1b] Multi-frame depth head (frozen §3 / §6 Step 3)
+# ============================================================================
+class _DepthHead(nn.Module):
+    """RGB multi-frame → dense metric ``D̂`` + per-pixel ``log σ`` (frozen [1b]).
+
+    Lives in ``dynamics_torch.py`` per frozen §9. Trained offline via
+    ``train_depth_head`` on ``perception_data`` windows (GT depth never enters
+    ``wm_data`` / the policy graph). ``enable`` in YAML stays false until
+    ``_v0_gate`` four-signal PASS; the module itself is always constructible.
+    """
+
+    def __init__(
+        self,
+        *,
+        image_size: int = 224,
+        n_frames: int = 4,
+        base: int = 32,
+    ) -> None:
+        super().__init__()
+        if int(n_frames) < 1:
+            raise ValueError(f"n_frames must be >= 1, got {n_frames}")
+        if int(image_size) < 16 or int(image_size) % 16 != 0:
+            raise ValueError(
+                f"image_size must be a multiple of 16 and >= 16 (got {image_size})"
+            )
+        self.image_size = int(image_size)
+        self.n_frames = int(n_frames)
+        in_ch = self.n_frames * 3
+        chs = [base, base * 2, base * 4, base * 8]
+        enc: list[nn.Module] = []
+        c_in = in_ch
+        for c in chs:
+            enc += [nn.Conv2d(c_in, c, 4, stride=2, padding=1), nn.SiLU()]
+            c_in = c
+        self.encoder = nn.Sequential(*enc)
+        # Mirror decoder: 4× upsample back to image_size.
+        dec: list[nn.Module] = []
+        for c in reversed(chs[:-1]):
+            dec += [nn.ConvTranspose2d(c_in, c, 4, stride=2, padding=1), nn.SiLU()]
+            c_in = c
+        dec += [nn.ConvTranspose2d(c_in, base, 4, stride=2, padding=1), nn.SiLU()]
+        dec += [nn.Conv2d(base, 2, kernel_size=3, padding=1)]  # depth + log_sigma
+        self.decoder = nn.Sequential(*dec)
+
+    @staticmethod
+    def pack_rgb_nhwc(rgb: torch.Tensor, n_frames: int) -> torch.Tensor:
+        """``rgb [B,L,H,W,3]`` uint8/float → ``[B, n_frames*3, H, W]`` in [0,1].
+
+        Uses the **last** ``n_frames`` of the window (left-pad by repeating frame 0
+        when ``L < n_frames``) so a short window still yields a fixed channel count.
+        """
+        if rgb.dim() != 5 or rgb.shape[-1] != 3:
+            raise ValueError(f"rgb must be [B,L,H,W,3], got {tuple(rgb.shape)}")
+        B, L, H, W, _ = rgb.shape
+        n = int(n_frames)
+        if L >= n:
+            sl = rgb[:, -n:]
+        else:
+            pad = rgb[:, :1].expand(B, n - L, H, W, 3)
+            sl = torch.cat([pad, rgb], dim=1)
+        if sl.dtype == torch.uint8:
+            sl = sl.float() / 255.0
+        # [B, n, H, W, 3] -> [B, n*3, H, W]
+        return sl.permute(0, 1, 4, 2, 3).reshape(B, n * 3, H, W)
+
+    def forward(self, rgb_stack: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """``rgb_stack [B, n_frames*3, H, W]`` → ``(D̂, log_σ)`` each ``[B, H, W]``."""
+        h = self.encoder(rgb_stack)
+        out = self.decoder(h)
+        if out.shape[-2:] != (self.image_size, self.image_size):
+            out = F.interpolate(
+                out, size=(self.image_size, self.image_size),
+                mode="bilinear", align_corners=False,
+            )
+        # Softplus keeps D̂ > 0; log_σ is unconstrained.
+        depth = F.softplus(out[:, 0]) + 1e-3
+        log_sigma = out[:, 1]
+        return depth, log_sigma
+
+    def predict_from_window(self, rgb_nhwc: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Convenience: window RGB → ``(D̂, log_σ)`` for the **last** frame."""
+        return self.forward(self.pack_rgb_nhwc(rgb_nhwc, self.n_frames))
+
+
+def depth_head_loss(
+    pred: torch.Tensor,
+    log_sigma: torch.Tensor,
+    gt: torch.Tensor,
+    *,
+    absrel_weight: float = 1.0,
+    nll_weight: float = 0.1,
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Supervised depth loss: AbsRel L1 + mild heteroscedastic NLL on valid GT.
+
+    AbsRel matches the V0 ①d gate metric (``v0_metrics.depth_absrel``); NLL
+    trains ``σ`` without dominating early AbsRel. Invalid / non-positive GT
+    pixels are masked out.
+    """
+    mask = torch.isfinite(gt) & (gt > 1e-6) & torch.isfinite(pred)
+    if not bool(mask.any()):
+        zero = pred.sum() * 0.0
+        return zero, {"loss": 0.0, "absrel": float("nan"), "nll": 0.0, "n_valid": 0}
+    p, g, ls = pred[mask], gt[mask], log_sigma[mask]
+    absrel = (torch.abs(p - g) / g).mean()
+    # Gaussian NLL in depth space: 0.5 * ((p-g)^2 / σ^2 + 2 log σ)
+    inv_var = torch.exp(-2.0 * ls)
+    nll = (0.5 * ((p - g) ** 2 * inv_var + 2.0 * ls)).mean()
+    loss = float(absrel_weight) * absrel + float(nll_weight) * nll
+    return loss, {
+        "loss": float(loss.detach().item()),
+        "absrel": float(absrel.detach().item()),
+        "nll": float(nll.detach().item()),
+        "n_valid": int(mask.sum().item()),
+    }
+
+
+# ============================================================================
 # The world model
 # ============================================================================
 class TorchRSSMDynamics(LatentDynamics, nn.Module):

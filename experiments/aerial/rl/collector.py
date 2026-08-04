@@ -93,6 +93,7 @@ class RolloutCollector:
         target_hz: float = 30.0,
         on_episode: Optional[Callable[[Episode, CollectStats], None]] = None,
         skip_reset_collision: bool = True,
+        depth_predictor: Optional[Any] = None,
     ) -> None:
         self.env = env
         self.policy = policy
@@ -108,6 +109,10 @@ class RolloutCollector:
         # Optional sink invoked with every completed episode (e.g. persist to
         # disk). None -> collector stays purely in-memory (offline tests / V0).
         self.on_episode = on_episode
+        # Frozen §4 ④: produce ``obs.info['depth_min_pred']`` BEFORE the shield
+        # runs. ``DepthMinPredictor`` (or any object with ``predict_min`` /
+        # optional ``reset``). None → leave info empty (default V0 posture).
+        self.depth_predictor = depth_predictor
 
     def collect_episode(self, episode: Optional[Dict[str, Any]] = None) -> tuple[Episode, CollectStats]:
         instruction = str((episode or {}).get("gpt_instruction", ""))
@@ -124,6 +129,9 @@ class RolloutCollector:
             return [], CollectStats(episodes=0, skipped=1)
         if hasattr(self.policy, "reset"):
             self.policy.reset()
+        reset_pred = getattr(self.depth_predictor, "reset", None)
+        if callable(reset_pred):
+            reset_pred()
 
         reward = NavigationReward(getattr(self.env, "goal", None), self.reward_cfg)
         reward.reset(getattr(self.env, "goal", None), obs.position)
@@ -142,12 +150,15 @@ class RolloutCollector:
             # Safety shield sits ABOVE the learned policy (spec §2#6). Stub
             # returns no-override today; when wired it swaps in a safe action.
             #
-            # V0: no online WM, so the shield sees obs only (D̂ / τ / p_coll all
-            # absent -> ThresholdSafetyShield safely never fires). V1 TODO: once
-            # the fast latent WM steps online, pass its DynamicsOutput here as
-            # should_override(obs, wm_out=...) so the p_coll trigger is live —
+            # Frozen §4 ④: depth head fills depth_min_pred *before* should_override.
+            # V1 TODO: once the fast latent WM steps online, pass its DynamicsOutput
+            # here as should_override(obs, wm_out=...) so the p_coll trigger is live —
             # that path is unit-tested (test_followups) but not yet exercised in
             # this collection loop.
+            if self.depth_predictor is not None:
+                d_min = self.depth_predictor.predict_min(obs)
+                if d_min is not None:
+                    obs.info["depth_min_pred"] = float(d_min)
             if self.safety is not None and self.safety.should_override(obs):
                 action = clip_body_delta(self.safety.override_action(obs), limits)
                 intervened = True

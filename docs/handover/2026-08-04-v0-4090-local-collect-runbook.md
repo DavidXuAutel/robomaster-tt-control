@@ -96,11 +96,41 @@ rsync -avP experiments/aerial/rl/artifacts/dataset_v0_local_depth/ \
 
 ## 5. 下游（采集完成后）
 
-1. 训练 DepthHead +（可选）VIO 头（H100）。
-2. 清洁 WM co-train（随机初始化，**不用** `wm_step_5000.pt`）。
-3. `python -m experiments.aerial.rl._v0_gate --dataset ... --learning-log ...`
+按冻结 §6：**先 Step 3 DepthHead，再 Step 4 清洁 WM + `_v0_gate`**。不要跳过 DepthHead。
+
+### 5.1 Step 3 — DepthHead [1b]（H100）
+
+```bash
+cd <repo>   # git checkout aerial-rl-skeleton（与 4090/Mac 同 commit）
+export PYTHONPATH="$PWD"
+export PYTHON_BIN=/home/a25689/aerial_wam_runtime/env/bin/python
+DATA=experiments/aerial/rl/artifacts/dataset_v0_local_depth
+
+$PYTHON_BIN -m experiments.aerial.rl.train_depth_head \
+  --dataset "$DATA" --config configs/aerial_rl.yaml \
+  --steps 2000 --wm-batch 8 --window 8 --device cuda --save-ckpt
+```
+
+产物：`experiments/aerial/rl/artifacts/depth_ckpt/depth_step_*.pt` + `depth_train.jsonl`。  
+`world_model.depth_head.enable` **保持 false** 直到 `_v0_gate` 四信号全过。  
+VIO [1c] 数学在 `vio.py`（③ 用 vel 积分）；学习 VIO 头可选，非本步硬门槛。
+
+### 5.2 Step 4 — 清洁 WM + `_v0_gate`
+
+1. 清洁 WM co-train（随机初始化，**不用** `wm_step_5000.pt`）：
+
+```bash
+$PYTHON_BIN -m experiments.aerial.rl._wm_train_validate \
+  --dataset "$DATA" --config configs/aerial_rl.yaml \
+  --steps 5000 --wm-batch 8 --window 8 --horizon 15 --device cuda --save-ckpt
+```
+
+2. `python -m experiments.aerial.rl._v0_gate --dataset ... --learning-log ...`
    — 四信号全过才允许改 yaml：`world_model.depth_head.enable` /
    `safety.kind: threshold`。
+
+Collector 已接线：挂上 `DepthMinPredictor.from_checkpoint(...)` 时，在
+`safety.should_override` **之前**写入 `obs.info["depth_min_pred"]`（④）。
 
 ## 回滚
 

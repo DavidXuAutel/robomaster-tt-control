@@ -84,6 +84,18 @@ world_model:
   grad_clip: 1000.0        # clip_grad_norm_ (FastWAM convention)
   device: cuda
   checkpoint_dir: experiments/aerial/rl/artifacts/wm_ckpt
+  # [1b] multi-frame depth head (frozen §3 / §6 Step 3). Train offline via
+  # ``python -m experiments.aerial.rl.train_depth_head``. ``enable`` flips to
+  # true ONLY after ``_v0_gate`` four-signal PASS (frozen §4) — keep false here.
+  depth_head:
+    enable: false
+    n_frames: 4
+    base: 32
+    lr: 1.0e-4
+    grad_clip: 1000.0
+    absrel_weight: 1.0
+    nll_weight: 0.1
+    checkpoint_dir: experiments/aerial/rl/artifacts/depth_ckpt
 
 imagination:
   batch: 64
