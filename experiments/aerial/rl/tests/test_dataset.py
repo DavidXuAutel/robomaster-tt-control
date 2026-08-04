@@ -95,6 +95,32 @@ def test_empty_episode_raises():
         ds.episode_arrays([])
 
 
+# --- load round-trip ---------------------------------------------------------
+
+def test_load_episode_round_trip(tmp_path):
+    ep = _moving_episode(n=4, with_depth=True)
+    path = ds.write_episode(tmp_path, 0, ep)
+    loaded = ds.load_episode(path)
+    assert len(loaded) == 4
+    ref = ds.episode_arrays(ep)
+    got = ds.episode_arrays(loaded)
+    np.testing.assert_array_equal(got["rgb"], ref["rgb"])
+    np.testing.assert_allclose(got["actions"], ref["actions"])
+    np.testing.assert_allclose(got["rewards"], ref["rewards"])
+    np.testing.assert_array_equal(got["collided"], ref["collided"])
+    assert "depth" in got
+
+
+def test_load_dataset_skips_quarantined(tmp_path):
+    ds.write_episode(tmp_path, 0, _moving_episode(n=5))
+    ds.write_episode(tmp_path, 1, _instant_crash_episode(n=1))
+    ds.write_episode(tmp_path, 2, _moving_episode(n=5))
+    kept = ds.load_dataset(tmp_path)                       # skip_quarantined=True
+    assert len(kept) == 2                                  # crash omitted
+    allofthem = ds.load_dataset(tmp_path, skip_quarantined=False)
+    assert len(allofthem) == 3
+
+
 # --- quality gate ------------------------------------------------------------
 
 def test_moving_episode_is_nontrivial():
@@ -185,3 +211,25 @@ def test_quality_summary_counts_quarantined(tmp_path):
     data = json.loads(summ.read_text())
     assert data["episodes"] == 2
     assert data["quarantined"] == 1 and data["usable"] == 1
+
+
+def test_load_episode_round_trip(tmp_path):
+    ep = _moving_episode(n=5, with_depth=True)
+    path = ds.write_episode(tmp_path, 3, ep)
+    loaded = ds.load_episode(path)
+    assert len(loaded) == 5
+    np.testing.assert_array_equal(loaded[0].obs.rgb, ep[0].obs.rgb)
+    np.testing.assert_allclose(loaded[2].obs.proprio4(), ep[2].obs.proprio4())
+    np.testing.assert_allclose(loaded[1].action, ep[1].action)
+    assert loaded[4].done == ep[4].done
+    assert loaded[0].obs.depth is not None
+
+
+def test_load_dataset_skips_quarantined(tmp_path):
+    ds.write_episode(tmp_path, 0, _moving_episode(n=6))
+    ds.write_episode(tmp_path, 1, _instant_crash_episode(n=1))
+    eps = ds.load_dataset(tmp_path, skip_quarantined=True)
+    assert len(eps) == 1
+    assert len(eps[0]) == 6
+    all_eps = ds.load_dataset(tmp_path, skip_quarantined=False)
+    assert len(all_eps) == 2

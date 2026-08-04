@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 
 from experiments.aerial.rl.buffer import Transition
-from experiments.aerial.rl.env.obs import depth_sanity_detail
+from experiments.aerial.rl.env.obs import Observation, depth_sanity_detail
 
 # A frozen renderer / dead API-control run is the failure we most need to catch.
 MIN_FRAME_VARIATION = 1e-3   # mean |Δ| between consecutive RGB frames (uint8 scale)
@@ -69,6 +69,78 @@ def write_episode(out_dir: Path, index: int, transitions: Sequence[Transition]) 
     path = out_dir / f"episode_{index:05d}.npz"
     np.savez_compressed(path, **episode_arrays(transitions))
     return path
+
+
+def load_episode(path: Path) -> List[Transition]:
+    """Rehydrate an episode written by ``write_episode``.
+
+    Velocity is not stored (proprio is 4-D); reconstructed ``state`` pads
+    ``vx,vy,vz = 0``. ``next_obs`` is the following frame's obs (last step
+    duplicates obs). Enough for buffer window sampling + stub WM bring-up;
+    not a bit-exact clone of the live ``Transition`` graph.
+    """
+    path = Path(path)
+    raw = np.load(path)
+    rgb = raw["rgb"]
+    proprio = raw["proprio"]
+    actions = raw["actions"]
+    rewards = raw["rewards"]
+    dones = raw["dones"]
+    collided = raw["collided"]
+    depth = raw["depth"] if "depth" in raw.files else None
+    n = int(rgb.shape[0])
+    if n == 0:
+        raise ValueError(f"empty episode file: {path}")
+
+    def _obs_at(i: int) -> Observation:
+        x, y, z, yaw = (float(v) for v in proprio[i])
+        state = np.array([x, y, z, 0.0, 0.0, 0.0, yaw], dtype=np.float32)
+        d = None if depth is None else np.asarray(depth[i], dtype=np.float32)
+        return Observation(
+            rgb=np.asarray(rgb[i], dtype=np.uint8),
+            state=state,
+            collided=bool(collided[i]),
+            depth=d,
+        )
+
+    transitions: List[Transition] = []
+    for i in range(n):
+        obs = _obs_at(i)
+        next_obs = _obs_at(i + 1) if i + 1 < n else obs
+        transitions.append(
+            Transition(
+                obs=obs,
+                action=np.asarray(actions[i], dtype=np.float32),
+                reward=float(rewards[i]),
+                done=bool(dones[i]),
+                next_obs=next_obs,
+            )
+        )
+    return transitions
+
+
+def load_dataset(
+    out_dir: Path,
+    *,
+    skip_quarantined: bool = True,
+) -> List[List[Transition]]:
+    """Load every ``episode_*.npz`` under ``out_dir`` (sorted by name).
+
+    When ``skip_quarantined`` is true, instant-crash episodes are omitted so a
+    V0 smoke corpus can still exercise the load→buffer→stub-WM path without
+    feeding spawn-collision junk into window sampling.
+    """
+    out_dir = Path(out_dir)
+    paths = sorted(out_dir.glob("episode_*.npz"))
+    if not paths:
+        raise FileNotFoundError(f"no episode_*.npz under {out_dir}")
+    episodes: List[List[Transition]] = []
+    for p in paths:
+        ep = load_episode(p)
+        if skip_quarantined and quarantine_reasons(quality_report(ep)):
+            continue
+        episodes.append(ep)
+    return episodes
 
 
 def quality_report(transitions: Sequence[Transition]) -> Dict[str, Any]:
