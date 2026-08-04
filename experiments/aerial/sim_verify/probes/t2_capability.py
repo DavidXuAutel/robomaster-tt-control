@@ -174,6 +174,26 @@ def _depth():
 _probe("depth", _depth, sanity.depth_ok)
 
 
+# Shared by L2d-rate and L2f — must be defined BEFORE either probe runs
+# (_probe calls its fn immediately; a late def of _maybe_nudge caused NameError
+# on depth_rate and falsely downgraded Fork A → A-).
+def _maybe_nudge():
+    """Introduce a tiny viewpoint change so consecutive frames can differ."""
+    try:
+        if res["client"] == "MultirotorClient":
+            c.enableApiControl(True)
+            c.armDisarm(True)
+            c.moveByVelocityAsync(0.5, 0.0, 0.0, 0.3).join()
+            return "velocity_nudge"
+        # CV / VehicleClient: small teleport if available
+        pose = c.simGetVehiclePose()
+        pose.position.x_val += 0.3
+        c.simSetVehiclePose(pose, True)
+        return "teleport_nudge"
+    except Exception as e:  # noqa: BLE001
+        return f"nudge_failed:{e!r}"
+
+
 # --- L2d-rate continuous DEPTH (fps + monotonic) ---
 # Mirrors the L2f RGB probe but for DepthPlanar: certifies depth is fast enough to
 # collect the V0 perception dataset (per-frame depth), closing the honesty gap where
@@ -253,23 +273,6 @@ def _decode_scene(r):
 def _grab_scene(cam: str):
     rq = [airsim.ImageRequest(cam, airsim.ImageType.Scene, False, True)]
     return c.simGetImages(rq)[0]
-
-
-def _maybe_nudge():
-    """Introduce a tiny viewpoint change so consecutive frames can differ."""
-    try:
-        if res["client"] == "MultirotorClient":
-            c.enableApiControl(True)
-            c.armDisarm(True)
-            c.moveByVelocityAsync(0.5, 0.0, 0.0, 0.3).join()
-            return "velocity_nudge"
-        # CV / VehicleClient: small teleport if available
-        pose = c.simGetVehiclePose()
-        pose.position.x_val += 0.3
-        c.simSetVehiclePose(pose, True)
-        return "teleport_nudge"
-    except Exception as e:  # noqa: BLE001
-        return f"nudge_failed:{e!r}"
 
 
 def _continuous():
