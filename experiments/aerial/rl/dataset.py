@@ -44,6 +44,20 @@ SPAWN_COLLISION_MAX_STEPS = 2
 MAX_QUARANTINE_FRACTION = 0.2
 
 
+def _imu_row(imu: Dict[str, Any], key: str) -> np.ndarray:
+    """One IMU triple (``ang_vel`` / ``lin_acc``) as [3] f32, or NaN if absent.
+
+    The real env's ``_grab_imu`` returns ``{}`` on an RPC miss; a NaN row keeps
+    the on-disk array dense and rectangular while the paired ``imu_present`` mask
+    records which frames actually carried inertial data (schema v2, spec §4.1c —
+    VIO supervision needs the raw IMU that the 4-D proprio dropped).
+    """
+    vec = imu.get(key) if isinstance(imu, dict) else None
+    if vec is None:
+        return np.full(3, np.nan, dtype=np.float32)
+    return np.asarray(vec, dtype=np.float32).reshape(3)
+
+
 def episode_arrays(transitions: Sequence[Transition]) -> Dict[str, np.ndarray]:
     """Stack an episode's transitions into per-field arrays for ``.npz`` storage."""
     if not transitions:
@@ -67,6 +81,16 @@ def episode_arrays(transitions: Sequence[Transition]) -> Dict[str, np.ndarray]:
             ],
             np.bool_,
         ),
+        # Schema v2 (spec §4.1c / §7 V0): the signals the 4-D policy proprio drops
+        # but the perception pillars need. Velocity (state[3:6]) + per-frame IMU
+        # feed the [1c] windowed VIO trainer; timestamps give the real dt for
+        # inertial integration + depth-rate provenance. Supervision-only — never
+        # fed to the policy/WM (the RGB+proprio4 boundary lives in obs.py).
+        "vel": np.stack([np.asarray(t.obs.velocity, np.float32) for t in transitions]),  # [N,3]
+        "imu_ang_vel": np.stack([_imu_row(t.obs.imu, "ang_vel") for t in transitions]),  # [N,3]
+        "imu_lin_acc": np.stack([_imu_row(t.obs.imu, "lin_acc") for t in transitions]),  # [N,3]
+        "imu_present": np.asarray([bool(t.obs.imu) for t in transitions], np.bool_),      # [N]
+        "timestamps": np.asarray([float(t.obs.t) for t in transitions], np.float32),      # [N]
     }
     # Depth is optional per-step (grab_depth); store it only if every frame has it.
     if all(t.obs.depth is not None for t in transitions):
@@ -86,10 +110,13 @@ def write_episode(out_dir: Path, index: int, transitions: Sequence[Transition]) 
 def load_episode(path: Path) -> List[Transition]:
     """Rehydrate an episode written by ``write_episode``.
 
-    Velocity is not stored (proprio is 4-D); reconstructed ``state`` pads
-    ``vx,vy,vz = 0``. ``next_obs`` is the following frame's obs (last step
-    duplicates obs). Enough for buffer window sampling + stub WM bring-up;
-    not a bit-exact clone of the live ``Transition`` graph.
+    Schema v2 restores what v1 dropped: when ``vel`` is present the full 7-D
+    ``state`` is reconstructed (v1 npz pad ``vx,vy,vz = 0``); when ``imu_*`` /
+    ``timestamps`` are present they repopulate ``obs.imu`` / ``obs.t``. Every new
+    key is guarded by ``in raw.files`` so legacy ``dataset_v0`` / ``dataset_v1_rgb``
+    npz still load with the old fallbacks. ``next_obs`` is the following frame's
+    obs (last step duplicates obs) — enough for buffer window sampling + the
+    perception/WM trainers; not a bit-exact clone of the live ``Transition`` graph.
     """
     path = Path(path)
     raw = np.load(path)
@@ -100,19 +127,45 @@ def load_episode(path: Path) -> List[Transition]:
     dones = raw["dones"]
     collided = raw["collided"]
     depth = raw["depth"] if "depth" in raw.files else None
+    vel = raw["vel"] if "vel" in raw.files else None
+    imu_ang_vel = raw["imu_ang_vel"] if "imu_ang_vel" in raw.files else None
+    imu_lin_acc = raw["imu_lin_acc"] if "imu_lin_acc" in raw.files else None
+    imu_present = raw["imu_present"] if "imu_present" in raw.files else None
+    timestamps = raw["timestamps"] if "timestamps" in raw.files else None
     n = int(rgb.shape[0])
     if n == 0:
         raise ValueError(f"empty episode file: {path}")
 
     def _obs_at(i: int) -> Observation:
         x, y, z, yaw = (float(v) for v in proprio[i])
-        state = np.array([x, y, z, 0.0, 0.0, 0.0, yaw], dtype=np.float32)
+        # v2: recover the velocity triple; v1: pad zeros (documented lossy path).
+        if vel is not None:
+            vx, vy, vz = (float(v) for v in vel[i])
+        else:
+            vx = vy = vz = 0.0
+        state = np.array([x, y, z, vx, vy, vz, yaw], dtype=np.float32)
         d = None if depth is None else np.asarray(depth[i], dtype=np.float32)
+        imu: Dict[str, Any] = {}
+        # Only repopulate IMU for frames the mask marks present (NaN rows are the
+        # RPC-miss sentinel — reconstructing them as [nan,nan,nan] would poison
+        # sanity.imu_ok / the VIO trainer).
+        if (
+            imu_ang_vel is not None
+            and imu_lin_acc is not None
+            and (imu_present is None or bool(imu_present[i]))
+        ):
+            imu = {
+                "ang_vel": np.asarray(imu_ang_vel[i], np.float32).tolist(),
+                "lin_acc": np.asarray(imu_lin_acc[i], np.float32).tolist(),
+            }
+        t = float(timestamps[i]) if timestamps is not None else 0.0
         return Observation(
             rgb=np.asarray(rgb[i], dtype=np.uint8),
             state=state,
             collided=bool(collided[i]),
             depth=d,
+            imu=imu,
+            t=t,
         )
 
     transitions: List[Transition] = []
@@ -188,6 +241,13 @@ def quality_report(transitions: Sequence[Transition]) -> Dict[str, Any]:
         "reward_nonzero_frac": float(np.mean(rewards != 0.0)),
         "collisions": int(arr["collided"].sum()),
         "has_depth": "depth" in arr,
+        # Schema v2: fraction of frames carrying IMU (0.0 on legacy npz that never
+        # stored it) — lets QUALITY_SUMMARY confirm the perception dataset is
+        # VIO-trainable, not just collision-safe.
+        "has_imu": "imu_present" in arr,
+        "imu_present_frac": (
+            float(np.mean(arr["imu_present"])) if "imu_present" in arr else 0.0
+        ),
     }
     if "depth" in arr:
         # Reuse the validated depth gate on the mean frame.
@@ -286,6 +346,8 @@ def write_quality_summary(out_dir: Path, per_episode: List[Dict[str, Any]]) -> P
         "path_length_m": _agg("path_length_m"),
         "reward_sum": _agg("reward_sum"),
         "any_depth": any(r["has_depth"] for r in per_episode),
+        "any_imu": any(r.get("has_imu", False) for r in per_episode),
+        "all_imu": all(r.get("has_imu", False) for r in per_episode),
     } if per_episode else {"episodes": 0}
     path.write_text(json.dumps(summary, indent=2))
     return path

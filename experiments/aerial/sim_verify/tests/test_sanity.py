@@ -85,5 +85,35 @@ class TestContinuous(unittest.TestCase):
         self.assertTrue(ok)
 
 
+class TestDepthRate(unittest.TestCase):
+    def test_rejects_cross_net_slow(self):
+        # ~0.7 Hz cross-net DepthPlanar path — readable but too slow for V0 collection.
+        ok, note = sanity.depth_rate_ok(
+            {"monotonic": True, "fps": 0.7, "min_fps_required": 5.0}
+        )
+        self.assertFalse(ok)
+        self.assertIn("127.0.0.1", note)
+
+    def test_rejects_non_monotonic(self):
+        ok, note = sanity.depth_rate_ok(
+            {"monotonic": False, "fps": 30.0, "min_fps_required": 5.0}
+        )
+        self.assertFalse(ok)
+        self.assertIn("monotonic", note)
+
+    def test_accepts_loopback_fast(self):
+        # 4090 loopback clears tens of Hz.
+        ok, note = sanity.depth_rate_ok(
+            {"monotonic": True, "fps": 24.0, "min_fps_required": 8.0}
+        )
+        self.assertTrue(ok)
+        self.assertIn("24", note)
+
+    def test_default_floor_when_missing(self):
+        # min_fps_required absent -> default floor 5.0 applies.
+        ok, _ = sanity.depth_rate_ok({"monotonic": True, "fps": 3.0})
+        self.assertFalse(ok)
+
+
 if __name__ == "__main__":
     unittest.main()

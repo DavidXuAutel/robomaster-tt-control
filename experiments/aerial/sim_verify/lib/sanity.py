@@ -88,3 +88,26 @@ def continuous_ok(detail: dict) -> Tuple[bool, str]:
     if not detail.get("frames_differ"):
         return False, "consecutive frames identical even after motion cue — no temporal signal"
     return True, f"fps={fps:.2f} mean_abs_diff={detail.get('mean_abs_diff')}"
+
+
+def depth_rate_ok(detail: dict) -> Tuple[bool, str]:
+    """L2d-rate: dense-depth CAPTURE is fast enough + monotonic for V0 collection.
+
+    Distinct from ``depth_ok`` (which gates one frame's density / dynamic range):
+    this gates the *capture rate*. The cross-net DepthPlanar path runs ~0.7 Hz —
+    plenty for a one-shot sanity grab, far too slow for the per-frame depth the V0
+    [1b] depth head / [1c] VIO need. Running the probe on the 4090 loopback should
+    clear tens of Hz. Without this gate a "Fork A" verdict certifies only that
+    depth *exists*, not that it is fast enough to collect a V0 perception dataset.
+    """
+    if not detail.get("monotonic"):
+        return False, "depth timestamps not monotonic"
+    fps = float(detail.get("fps") or 0.0)
+    min_fps = float(detail.get("min_fps_required") or 5.0)
+    if fps < min_fps:
+        return (
+            False,
+            f"depth fps={fps:.2f} < required {min_fps:.1f} — cross-net link? "
+            "collect on the renderer host (127.0.0.1)",
+        )
+    return True, f"depth fps={fps:.2f}"

@@ -11,15 +11,21 @@ p_coll / done heads clear their baselines (``wm_eval.fidelity_verdict``) AND the
 train-only decoder's multi-step recon does not blow up with the horizon.
 
     python -m experiments.aerial.rl._wm_fidelity_eval \
-        --dataset /home/<user>/rl_collect_run/.../artifacts/dataset_v1_rgb \
-        --ckpt    .../artifacts/wm_ckpt/wm_step_5000.pt \
+        --dataset /home/<user>/rl_collect_run/.../artifacts/dataset_v0_perception \
+        --ckpt    .../artifacts/wm_ckpt/<clean-retrain>.pt \
         --config  configs/aerial_rl.yaml --heldout-frac 0.25 --horizon 15
 
-HELD-OUT DISCIPLINE (read this): the 5000-step checkpoint from §3 was trained on
-ALL episodes, so ``--heldout-frac 0`` measures IN-SAMPLE fidelity — a lower
-bound only ("if it fails in-sample it definitely fails"). For an HONEST gate,
-retrain the WM with the same held-out split excluded, then eval here with
-``--heldout-frac`` matching. This script logs loudly which regime it ran in.
+NOTE (2026-08-04): the old ``wm_step_5000.pt`` this script once cited is
+INVALIDATED — a single-pillar RGB-only RSSM that skipped the V0 perception
+skeleton (see aerial_v1_wm_gate_invalidated). This is a **V1** harness; do NOT
+run it against that ckpt. It re-attaches only to a clean depth-co-trained WM
+that has already passed the V0 four-signal gate (``_v0_gate``).
+
+HELD-OUT DISCIPLINE (read this): a checkpoint trained on ALL episodes makes
+``--heldout-frac 0`` measure IN-SAMPLE fidelity — a lower bound only ("if it
+fails in-sample it definitely fails"). For an HONEST gate, retrain the WM with
+the held-out split excluded, then eval here with ``--heldout-frac`` matching.
+This script logs loudly which regime it ran in.
 
 Runs on the H100 only (imports torch at module top). Exits 0 on PASS, 1 on FAIL.
 """
@@ -137,8 +143,8 @@ def _print_report(agg: Dict[str, Any], verdict: Dict[str, Any], recon: Dict[str,
 
 def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--dataset", required=True, help="dir with episode_*.npz (dataset_v1_rgb)")
-    p.add_argument("--ckpt", required=True, help="trained WM checkpoint (wm_step_5000.pt)")
+    p.add_argument("--dataset", required=True, help="dir with episode_*.npz (dataset_v0_perception)")
+    p.add_argument("--ckpt", required=True, help="clean depth-co-trained WM ckpt (post-V0-gate; NOT wm_step_5000.pt)")
     p.add_argument("--config", default="configs/aerial_rl.yaml")
     p.add_argument("--heldout-frac", type=float, default=0.25,
                    help="tail fraction of episodes held out; 0 = in-sample (lower bound)")

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import sys
 import pathlib
+from typing import Tuple
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from lib import report  # noqa: E402
@@ -29,12 +30,12 @@ def _ok(node) -> bool:
     return isinstance(node, dict) and bool(node.get("pass"))
 
 
-def main() -> int:
-    data = report.load()
-    if not data:
-        print("[verdict] no report found at", report.report_path())
-        return 3
+def decide(data: dict) -> Tuple[str, int, str, dict]:
+    """Pure Fork decision from a loaded report. Returns (fork, exit_code, why, caps).
 
+    No file IO — kept side-effect-free so the matrix logic is unit-testable
+    offline (see tests/test_verdict.py). ``main`` handles load/print/merge.
+    """
     t0 = data.get("t0_connectivity", {})
     t1 = data.get("t1_render", {})
     t2 = data.get("t2_capability", {})
@@ -47,6 +48,7 @@ def main() -> int:
     height = baro or gps
     coll = _ok(t2.get("collision"))
     depth = _ok(t2.get("depth"))
+    depth_rate = _ok(t2.get("depth_rate"))
     phys = _ok(t2.get("physics"))
     continuous = _ok(t2.get("continuous_frames"))
 
@@ -57,20 +59,18 @@ def main() -> int:
         "height baro|gps (L2b)": height,
         "collision (L2c)": coll,
         "depth_sane (L2d)": depth,
+        "depth_rate (L2d-rate)": depth_rate,
         "physics (L2e)": phys,
         "continuous_frames (L2f)": continuous,
     }
-    print("[verdict] capability matrix:")
-    for k, v in caps.items():
-        print(f"    {'PASS' if v else 'FAIL'}  {k}")
 
     if not (connected and real_rgb):
         fork, code, why = "B", 3, "no real scene RGB (connect/render failed)"
-    elif imu and height and coll and depth and phys and continuous:
+    elif imu and height and coll and depth and depth_rate and phys and continuous:
         fork, code, why = (
             "A",
             0,
-            "full inertial+dense+physics+continuous RGB available (sanity-checked)",
+            "full inertial+dense+fast-depth+physics+continuous RGB available (sanity-checked)",
         )
     elif real_rgb and depth:
         missing = [k for k, v in caps.items() if not v and k not in ("connected", "real_rgb (L1)")]
@@ -83,6 +83,21 @@ def main() -> int:
         )
     else:
         fork, code, why = "A-", 2, "partial capability — inspect report, fix settings.json, re-verify"
+
+    return fork, code, why, caps
+
+
+def main() -> int:
+    data = report.load()
+    if not data:
+        print("[verdict] no report found at", report.report_path())
+        return 3
+
+    fork, code, why, caps = decide(data)
+
+    print("[verdict] capability matrix:")
+    for k, v in caps.items():
+        print(f"    {'PASS' if v else 'FAIL'}  {k}")
 
     print(f"\n[verdict] ==> Fork {fork}: {why}")
     print(f"[verdict] report: {report.report_path()}")

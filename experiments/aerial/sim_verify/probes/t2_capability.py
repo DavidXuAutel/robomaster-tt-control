@@ -35,6 +35,14 @@ CAMERAS = [os.environ.get("AIRSIM_CAMERA", "0"), "front_center"]
 L2F_N = int(os.environ.get("L2F_N", "10"))
 L2F_INTERVAL_S = float(os.environ.get("L2F_INTERVAL_S", "0.05"))  # target ~20 Hz
 L2F_MIN_FPS = float(os.environ.get("L2F_MIN_FPS", "5.0"))
+# Depth-rate probe (L2d-rate). Back-to-back grabs (interval 0.0) so fps reflects
+# the TRUE achievable depth capture rate, not a paced target — the gate threshold
+# may be as high as the collection step_hz. Default floor 5 Hz cleanly rejects the
+# ~0.7 Hz cross-net regime; RAISE L2F_DEPTH_MIN_FPS to the intended collection
+# step_hz on the 4090 to certify "fast enough for V0", not merely "faster than cross-net".
+L2F_DEPTH_N = int(os.environ.get("L2F_DEPTH_N", str(L2F_N)))
+L2F_DEPTH_INTERVAL_S = float(os.environ.get("L2F_DEPTH_INTERVAL_S", "0.0"))
+L2F_DEPTH_MIN_FPS = float(os.environ.get("L2F_DEPTH_MIN_FPS", "5.0"))
 
 res: dict = {
     "host": HOST,
@@ -42,6 +50,9 @@ res: dict = {
     "l2f_n": L2F_N,
     "l2f_interval_s": L2F_INTERVAL_S,
     "l2f_min_fps": L2F_MIN_FPS,
+    "l2f_depth_n": L2F_DEPTH_N,
+    "l2f_depth_interval_s": L2F_DEPTH_INTERVAL_S,
+    "l2f_depth_min_fps": L2F_DEPTH_MIN_FPS,
 }
 
 
@@ -161,6 +172,63 @@ def _depth():
 
 
 _probe("depth", _depth, sanity.depth_ok)
+
+
+# --- L2d-rate continuous DEPTH (fps + monotonic) ---
+# Mirrors the L2f RGB probe but for DepthPlanar: certifies depth is fast enough to
+# collect the V0 perception dataset (per-frame depth), closing the honesty gap where
+# "depth exists" (single grab) passed while ~0.7 Hz cross-net depth silently could not
+# feed the [1b]/[1c] pillars. Grabs back-to-back (no pacing) to measure the true rate.
+def _grab_depth_frame(cam: str):
+    rq = [airsim.ImageRequest(cam, airsim.ImageType.DepthPlanar, True, False)]
+    return c.simGetImages(rq)[0]
+
+
+def _depth_continuous():
+    last = None
+    for cam in CAMERAS:
+        try:
+            r0 = _grab_depth_frame(cam)  # warm-up + confirm this camera yields depth
+            if not (r0.width and r0.height and len(r0.image_data_float) > 0):
+                continue
+            nudge = _maybe_nudge()
+            timestamps: list[float] = []
+            t_start = time.perf_counter()
+            for i in range(L2F_DEPTH_N):
+                if L2F_DEPTH_INTERVAL_S > 0.0:
+                    t_target = t_start + i * L2F_DEPTH_INTERVAL_S
+                    now = time.perf_counter()
+                    if t_target > now:
+                        time.sleep(t_target - now)
+                t_cap = time.perf_counter()
+                r = _grab_depth_frame(cam)
+                if len(r.image_data_float) <= 0:
+                    raise RuntimeError("empty depth buffer mid-sequence")
+                timestamps.append(t_cap)
+
+            dts = [timestamps[i + 1] - timestamps[i] for i in range(len(timestamps) - 1)]
+            monotonic = all(dt > 0 for dt in dts)
+            elapsed = timestamps[-1] - timestamps[0]
+            fps = (len(timestamps) - 1) / elapsed if elapsed > 0 else 0.0
+            return {
+                "camera": cam,
+                "n_frames": L2F_DEPTH_N,
+                "interval_s_target": L2F_DEPTH_INTERVAL_S,
+                "min_fps_required": L2F_DEPTH_MIN_FPS,
+                "fps": fps,
+                "monotonic": monotonic,
+                "dt_mean": float(sum(dts) / len(dts)) if dts else None,
+                "dt_min": float(min(dts)) if dts else None,
+                "dt_max": float(max(dts)) if dts else None,
+                "nudge": nudge,
+                "fps_ok": fps >= L2F_DEPTH_MIN_FPS,
+            }
+        except Exception as e:  # noqa: BLE001
+            last = e
+    raise RuntimeError(f"continuous depth capture failed (tried {CAMERAS}): {last!r}")
+
+
+_probe("depth_rate", _depth_continuous, sanity.depth_rate_ok)
 
 
 # --- L2f continuous frames (fps + monotonic + inter-frame change) ---
