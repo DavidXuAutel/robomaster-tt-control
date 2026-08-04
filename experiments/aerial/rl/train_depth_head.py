@@ -41,6 +41,7 @@ def _load_depth_cfg(config_path: Path) -> Dict[str, Any]:
     dh.setdefault("grad_clip", 1000.0)
     dh.setdefault("absrel_weight", 1.0)
     dh.setdefault("nll_weight", 0.1)
+    dh.setdefault("max_depth_m", 200.0)
     dh.setdefault("image_size", int((cfg.get("env") or {}).get("width", 224)))
     dh.setdefault(
         "checkpoint_dir",
@@ -88,6 +89,7 @@ def _holdout_absrel(
     wm_batch: int,
     window: int,
     device: torch.device,
+    max_depth_m: float = 200.0,
 ) -> float:
     model.eval()
     windows = buf.sample_windows(wm_batch, window)
@@ -98,8 +100,13 @@ def _holdout_absrel(
     gt = torch.from_numpy(np.ascontiguousarray(arrays["depth"])).to(device)
     with torch.no_grad():
         pred, _ = model.predict_from_window(rgb)
-    # Score the last frame of each window (head predicts "now").
-    return float(depth_absrel(pred.cpu().numpy(), gt[:, -1].cpu().numpy()))
+    return float(
+        depth_absrel(
+            pred.cpu().numpy(),
+            gt[:, -1].cpu().numpy(),
+            max_depth_m=float(max_depth_m),
+        )
+    )
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -161,6 +168,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             pred, log_sigma, gt[:, -1],
             absrel_weight=float(dh_cfg["absrel_weight"]),
             nll_weight=float(dh_cfg["nll_weight"]),
+            max_depth_m=float(dh_cfg["max_depth_m"]),
         )
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -181,6 +189,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     holdout = _holdout_absrel(
         model, buf, wm_batch=int(args.wm_batch), window=int(args.window), device=device,
+        max_depth_m=float(dh_cfg["max_depth_m"]),
     )
     thr = DEFAULT_THRESHOLDS.depth_absrel_max
     print(f"[depth-train] holdout median AbsRel={holdout:.4f} (gate ①d ≤ {thr})")

@@ -95,6 +95,7 @@ world_model:
     grad_clip: 1000.0
     absrel_weight: 1.0
     nll_weight: 0.1
+    max_depth_m: 200.0       # outdoor AirSim: exclude sky/far-plane from AbsRel
     checkpoint_dir: experiments/aerial/rl/artifacts/depth_ckpt
 
 imagination:

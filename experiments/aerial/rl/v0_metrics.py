@@ -74,11 +74,23 @@ def check_learning_curves(
     }
 
 
-def depth_absrel(pred: np.ndarray, gt: np.ndarray) -> float:
-    """Median AbsRel = median(|pred-gt|/gt) over finite positive gt pixels."""
+def depth_absrel(
+    pred: np.ndarray,
+    gt: np.ndarray,
+    *,
+    max_depth_m: Optional[float] = 200.0,
+) -> float:
+    """Median AbsRel = median(|pred-gt|/gt) over finite positive gt pixels.
+
+    ``max_depth_m`` excludes outdoor AirSim far-plane / sky fill (often >1 km)
+    so the metric matches navigational near/mid field used by DepthHead train
+    and ``depth_min_pred`` safety. Pass ``None`` to score all finite pixels.
+    """
     p = np.asarray(pred, dtype=np.float64).reshape(-1)
     g = np.asarray(gt, dtype=np.float64).reshape(-1)
     m = np.isfinite(p) & np.isfinite(g) & (g > 1e-6)
+    if max_depth_m is not None:
+        m &= g <= float(max_depth_m)
     if not np.any(m):
         return float("nan")
     return float(np.median(np.abs(p[m] - g[m]) / g[m]))

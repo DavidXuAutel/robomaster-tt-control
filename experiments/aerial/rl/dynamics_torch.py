@@ -305,26 +305,37 @@ def depth_head_loss(
     *,
     absrel_weight: float = 1.0,
     nll_weight: float = 0.1,
+    max_depth_m: float = 200.0,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """Supervised depth loss: AbsRel L1 + mild heteroscedastic NLL on valid GT.
 
     AbsRel matches the V0 ①d gate metric (``v0_metrics.depth_absrel``); NLL
     trains ``σ`` without dominating early AbsRel. Invalid / non-positive GT
-    pixels are masked out.
+    pixels are masked out. Outdoor AirSim DepthPlanar is dominated by >1 km
+    sky/fill — those pixels are excluded via ``max_depth_m`` so AbsRel tracks
+    navigational near/mid field (safety ``depth_min_pred`` cares about the near
+    end). Holdout ①d must use the same mask.
     """
-    mask = torch.isfinite(gt) & (gt > 1e-6) & torch.isfinite(pred)
+    mask = (
+        torch.isfinite(gt) & (gt > 1e-6) & (gt <= float(max_depth_m))
+        & torch.isfinite(pred)
+    )
     if not bool(mask.any()):
         zero = pred.sum() * 0.0
         return zero, {"loss": 0.0, "absrel": float("nan"), "nll": 0.0, "n_valid": 0}
     p, g, ls = pred[mask], gt[mask], log_sigma[mask]
     absrel = (torch.abs(p - g) / g).mean()
-    # Gaussian NLL in depth space: 0.5 * ((p-g)^2 / σ^2 + 2 log σ)
-    inv_var = torch.exp(-2.0 * ls)
-    nll = (0.5 * ((p - g) ** 2 * inv_var + 2.0 * ls)).mean()
-    loss = float(absrel_weight) * absrel + float(nll_weight) * nll
+    # Scale-invariant log (Eigen et al.) — stabilises large outdoor depth range.
+    diff = torch.log(p.clamp_min(1e-3)) - torch.log(g.clamp_min(1e-3))
+    silog = torch.sqrt((diff ** 2).mean() - (diff.mean() ** 2).clamp_min(0.0) + 1e-8)
+    ls_c = ls.clamp(-8.0, 8.0)
+    inv_var = torch.exp(-2.0 * ls_c)
+    nll = (0.5 * ((p - g) ** 2 * inv_var + 2.0 * ls_c)).mean()
+    loss = float(absrel_weight) * absrel + 0.5 * silog + float(nll_weight) * nll
     return loss, {
         "loss": float(loss.detach().item()),
         "absrel": float(absrel.detach().item()),
+        "silog": float(silog.detach().item()),
         "nll": float(nll.detach().item()),
         "n_valid": int(mask.sum().item()),
     }
