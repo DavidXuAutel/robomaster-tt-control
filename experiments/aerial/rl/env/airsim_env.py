@@ -57,6 +57,11 @@ class AirSimEnvConfig:
     takeoff_z: float = -3.0            # NED start altitude (climb 3 m)
     health_check: bool = True          # sanity-gate IMU + depth on reset
     warmup_frames: int = 1
+    # Per-step DepthPlanar grab. Cross-net DepthPlanar@224 is ~250 ms (vs Scene
+    # JPEG ~30 ms), so enabling it drops the closed loop from ~14 Hz to ~3 Hz on
+    # the H100→4090 path. Health-check on reset still grabs depth once when
+    # health_check=True. Set False for Plan-A rate smokes / RGB-first collection.
+    grab_depth: bool = True
 
     @classmethod
     def from_env(cls, overrides: Optional[Dict[str, Any]] = None) -> "AirSimEnvConfig":
@@ -139,7 +144,9 @@ class AirSimDroneEnv:
             for _ in range(max(0, self.config.warmup_frames)):
                 self._grab_scene(client)
 
-            obs = self.observe()
+            # Force a depth frame on reset so health_check can run even when
+            # per-step grab_depth is False (rate-oriented collection).
+            obs = self.observe(force_depth=True)
             if self.config.health_check:
                 self._assert_healthy(obs)
             return obs
@@ -165,10 +172,13 @@ class AirSimDroneEnv:
         info = {"cmd": cmd.tolist(), "vx": vx, "vy": vy, "vz_ned": vz_ned}
         return obs, info
 
-    def observe(self) -> Observation:
+    def observe(self, *, force_depth: bool = False) -> Observation:
         client = self._connect()
         rgb = self._grab_scene(client)
-        depth = self._grab_depth(client)
+        # Depth is optional per-step (see ``grab_depth``); force it for the
+        # one-shot health check on reset even when per-step grabs are off.
+        want_depth = force_depth or self.config.grab_depth
+        depth = self._grab_depth(client) if want_depth else None
         imu = self._grab_imu(client)
         collided = self._grab_collision(client)
         state = self.observe_state()

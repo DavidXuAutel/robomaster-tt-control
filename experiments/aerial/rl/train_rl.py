@@ -96,6 +96,7 @@ def _build_env(env_cfg: Any) -> Any:
             height=int(_get(env_cfg, "height", 224)),
             step_hz=float(_get(env_cfg, "step_hz", 30.0)),
             health_check=bool(_get(env_cfg, "health_check", True)),
+            grab_depth=bool(_get(env_cfg, "grab_depth", True)),
         ))
     raise ValueError(f"unknown env backend {backend!r} (expected mock|airsim)")
 

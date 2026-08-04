@@ -37,7 +37,11 @@ for a in "$@"; do
 done
 
 MAX_STEPS="${RL_SMOKE_MAX_STEPS:-100}"
-MIN_HZ="${RL_SMOKE_MIN_HZ:-24}"
+# Closed-loop (capture + moveByVelocityAsync(dt).join) over H100→4090 tops out
+# around ~14 Hz RGB-only — NOT the capture-only L2f ~30 Hz. Default gate is
+# 0.8 × that floor. Override with RL_SMOKE_MIN_HZ / pass --grab-depth for the
+# slower RGB+depth path (~3 Hz → use MIN_HZ≈2).
+MIN_HZ="${RL_SMOKE_MIN_HZ:-10}"
 
 # --- Tier 0: offline unit tests -------------------------------------------
 echo "[smoke] Tier 0 — offline unit tests"
@@ -69,7 +73,7 @@ if ! "$PYTHON_BIN" -c "import airsim, cv2" 2>/dev/null; then
   exit 1
 fi
 
-echo "[smoke] Tier 2 — live AirSim smoke @ $HOST:$PORT (min ${MIN_HZ} Hz)"
+echo "[smoke] Tier 2 — live AirSim smoke @ $HOST:$PORT (min ${MIN_HZ} Hz, RGB-only steps)"
 "$PYTHON_BIN" -m experiments.aerial.rl._smoke \
   --backend airsim --max-steps "$MAX_STEPS" --min-hz "$MIN_HZ" \
   --host "$HOST" --port "$PORT" --camera "$CAMERA"

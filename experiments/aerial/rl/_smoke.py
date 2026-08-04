@@ -35,6 +35,10 @@ def _build_cfg(args: argparse.Namespace) -> dict:
             camera=args.camera,
             vehicle=args.vehicle,
             health_check=not args.no_health_check,
+            # Default OFF for rate smoke: per-step DepthPlanar over the WAN is
+            # ~250 ms and collapses the loop to ~3 Hz. Reset still force-grabs
+            # depth once when health_check is on.
+            grab_depth=bool(args.grab_depth),
         )
     return {
         "env": env,
@@ -57,6 +61,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--camera", default="front_custom")
     p.add_argument("--vehicle", default="drone_1")
     p.add_argument("--no-health-check", action="store_true")
+    p.add_argument(
+        "--grab-depth", action="store_true",
+        help="also grab DepthPlanar every step (cross-net ~3 Hz; off by default)",
+    )
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="[smoke] %(message)s")
