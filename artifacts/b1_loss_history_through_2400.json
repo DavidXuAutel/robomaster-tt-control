@@ -1,0 +1,301 @@
+{
+  "stamp": "20260727-072347-5k-2gpu-b0-to-joint-video",
+  "ft_status": "FAILED",
+  "fail_reason": "FT correction rate 0.1700 outside [0.2000, 0.3000] for steps 2201-2400",
+  "latest_logged_step": 2350,
+  "local_checkpoints": [
+    "step_000250.pt",
+    "step_000500.pt",
+    "step_000750.pt",
+    "step_001000.pt",
+    "step_001250.pt",
+    "step_001500.pt",
+    "step_001750.pt",
+    "step_002000.pt",
+    "step_002250.pt"
+  ],
+  "loss_history": [
+    {
+      "step": 50,
+      "max_steps": 1000,
+      "loss": 0.4034,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 100,
+      "max_steps": 1000,
+      "loss": 0.487,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 150,
+      "max_steps": 1000,
+      "loss": 0.5034,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 200,
+      "max_steps": 1000,
+      "loss": 0.5876,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 250,
+      "max_steps": 1000,
+      "loss": 0.8039,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 300,
+      "max_steps": 1000,
+      "loss": 0.0882,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 350,
+      "max_steps": 1000,
+      "loss": 0.1734,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 400,
+      "max_steps": 1000,
+      "loss": 0.189,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 450,
+      "max_steps": 1000,
+      "loss": 0.3605,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 500,
+      "max_steps": 1000,
+      "loss": 1.1334,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 550,
+      "max_steps": 1000,
+      "loss": 0.0538,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 600,
+      "max_steps": 1000,
+      "loss": 0.104,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 650,
+      "max_steps": 1000,
+      "loss": 1.1237,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 700,
+      "max_steps": 1000,
+      "loss": 0.1976,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 750,
+      "max_steps": 1000,
+      "loss": 0.6107,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 800,
+      "max_steps": 1000,
+      "loss": 0.1854,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 850,
+      "max_steps": 1000,
+      "loss": 0.1086,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 900,
+      "max_steps": 1000,
+      "loss": 0.1559,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 950,
+      "max_steps": 1000,
+      "loss": 0.1724,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 1000,
+      "max_steps": 1000,
+      "loss": 0.0413,
+      "log": "b1-1000-step.log"
+    },
+    {
+      "step": 1050,
+      "max_steps": 5000,
+      "loss": 0.5922,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1100,
+      "max_steps": 5000,
+      "loss": 0.4526,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1150,
+      "max_steps": 5000,
+      "loss": 0.5162,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1200,
+      "max_steps": 5000,
+      "loss": 0.4659,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1250,
+      "max_steps": 5000,
+      "loss": 0.8276,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1300,
+      "max_steps": 5000,
+      "loss": 0.2094,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1350,
+      "max_steps": 5000,
+      "loss": 0.1821,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1400,
+      "max_steps": 5000,
+      "loss": 0.3128,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1450,
+      "max_steps": 5000,
+      "loss": 0.4355,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1500,
+      "max_steps": 5000,
+      "loss": 1.2935,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1550,
+      "max_steps": 5000,
+      "loss": 0.0632,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1600,
+      "max_steps": 5000,
+      "loss": 0.245,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1650,
+      "max_steps": 5000,
+      "loss": 1.3855,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1700,
+      "max_steps": 5000,
+      "loss": 0.1816,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1750,
+      "max_steps": 5000,
+      "loss": 0.5375,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1800,
+      "max_steps": 5000,
+      "loss": 0.2553,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1850,
+      "max_steps": 5000,
+      "loss": 0.112,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1900,
+      "max_steps": 5000,
+      "loss": 0.1245,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 1950,
+      "max_steps": 5000,
+      "loss": 0.3479,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 2000,
+      "max_steps": 5000,
+      "loss": 0.069,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 2050,
+      "max_steps": 5000,
+      "loss": 0.2082,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 2100,
+      "max_steps": 5000,
+      "loss": 0.0502,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 2150,
+      "max_steps": 5000,
+      "loss": 0.1366,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 2200,
+      "max_steps": 5000,
+      "loss": 0.2498,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 2250,
+      "max_steps": 5000,
+      "loss": 0.0219,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 2300,
+      "max_steps": 5000,
+      "loss": 0.407,
+      "log": "b1-5000-step.log"
+    },
+    {
+      "step": 2350,
+      "max_steps": 5000,
+      "loss": 1.6027,
+      "log": "b1-5000-step.log"
+    }
+  ]
+}

@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TT 笼内采数早报 · 2026-07-28 · 大众 WAM 交接</title>
+  <style>
+    :root {
+      --ink: #1a1f24;
+      --muted: #5c6770;
+      --line: #d8dee4;
+      --paper: #f7f5f1;
+      --card: #ffffff;
+      --accent: #c45c26;
+      --accent-soft: #f4e6dc;
+      --ok: #1f7a4c;
+      --warn: #9a6b00;
+      --bad: #a32020;
+      --code: #243447;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse 80% 40% at 10% -10%, #efe6d8 0%, transparent 55%),
+        var(--paper);
+      font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Segoe UI", sans-serif;
+      line-height: 1.65;
+      font-size: 15.5px;
+    }
+    main {
+      width: min(980px, calc(100% - 36px));
+      margin: 0 auto;
+      padding: 48px 0 96px;
+    }
+    .eyebrow {
+      font-size: 0.78rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--accent);
+      font-weight: 700;
+      margin: 0 0 10px;
+    }
+    h1 {
+      font-family: "Songti SC", "Noto Serif SC", "Iowan Old Style", Georgia, serif;
+      font-size: clamp(1.9rem, 4.5vw, 2.7rem);
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin: 0 0 14px;
+    }
+    .lede {
+      font-size: 1.05rem;
+      color: var(--muted);
+      max-width: 46em;
+      margin: 0 0 28px;
+    }
+    .strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin: 0 0 36px;
+    }
+    .stat {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px 14px 12px;
+    }
+    .stat b {
+      display: block;
+      font-family: "Songti SC", Georgia, serif;
+      font-size: 1.55rem;
+      line-height: 1.1;
+      margin-bottom: 4px;
+    }
+    .stat span { color: var(--muted); font-size: 0.82rem; }
+    h2 {
+      font-family: "Songti SC", Georgia, serif;
+      font-size: 1.45rem;
+      margin: 44px 0 12px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+    }
+    h3 { font-size: 1.05rem; margin: 22px 0 8px; }
+    p { margin: 8px 0; }
+    ul, ol { margin: 8px 0 8px 1.2em; padding: 0; }
+    li { margin: 4px 0; }
+    a { color: var(--accent); }
+    code, .mono {
+      font-family: "SF Mono", "Menlo", "Consolas", monospace;
+      font-size: 0.88em;
+    }
+    code {
+      background: #efece6;
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+    }
+    .note {
+      background: var(--accent-soft);
+      border-left: 4px solid var(--accent);
+      border-radius: 0 10px 10px 0;
+      padding: 12px 16px;
+      color: #4a3424;
+      margin: 14px 0;
+    }
+    .warn {
+      background: #fff6df;
+      border-left: 4px solid var(--warn);
+      border-radius: 0 10px 10px 0;
+      padding: 12px 16px;
+      margin: 14px 0;
+    }
+    .ok { color: var(--ok); font-weight: 650; }
+    .bad { color: var(--bad); font-weight: 650; }
+    .muted { color: var(--muted); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      font-size: 0.92rem;
+      margin: 12px 0 18px;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th {
+      background: #f0ebe3;
+      font-weight: 650;
+      font-size: 0.82rem;
+      letter-spacing: 0.02em;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .tag-ok { background: #e4f4ea; color: var(--ok); }
+    .tag-warn { background: #fff1c9; color: var(--warn); }
+    .tag-bad { background: #f8e3e3; color: var(--bad); }
+    .tag-info { background: #e8eef5; color: #2a4a6b; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px 18px 14px;
+      margin: 14px 0;
+    }
+    .card h3 { margin-top: 0; }
+    .bars { display: grid; gap: 6px; margin: 10px 0 4px; }
+    .bar-row { display: grid; grid-template-columns: 110px 1fr 42px; gap: 8px; align-items: center; font-size: 0.85rem; }
+    .bar-track { height: 8px; background: #ece7df; border-radius: 99px; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--accent); border-radius: 99px; }
+    .bar-fill.alt { background: #2f5d8c; }
+    .timeline { list-style: none; margin: 0; padding: 0; }
+    .timeline li {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 14px;
+      padding: 10px 0;
+      border-bottom: 1px dashed var(--line);
+    }
+    .timeline time {
+      font-family: "SF Mono", Menlo, monospace;
+      font-size: 0.85rem;
+      color: var(--accent);
+      font-weight: 650;
+    }
+    pre {
+      background: var(--code);
+      color: #e8eef5;
+      padding: 14px 16px;
+      border-radius: 10px;
+      overflow-x: auto;
+      font-size: 0.82rem;
+      line-height: 1.5;
+    }
+    .checklist label {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 0.95rem;
+    }
+    .checklist input { margin-top: 4px; }
+    footer {
+      margin-top: 48px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    @media (max-width: 720px) {
+      .strip { grid-template-columns: 1fr 1fr; }
+      .timeline li { grid-template-columns: 1fr; gap: 2px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">RoboMaster TT · Wander / Orbit · 大众 WAM</p>
+  <h1>笼内采数早报与数据交接说明</h1>
+  <p class="lede">
+    北京时间 2026-07-28 上午，铁丝笼场地完成随机漫游（G1）首批录制与一把椅子 POI 环绕（A3）长飞。
+    管线对齐合格，但随机漫游尚未达到规格 §9.3 验收阈值——本包宜作为<strong>试点批次</strong>交接，不宜标称「验收达标」。
+  </p>
+
+  <div class="strip">
+    <div class="stat"><b>3</b><span>episode（2 漫游 + 1 环绕）</span></div>
+    <div class="stat"><b>~7.0</b><span>分钟有效视频（合计）</span></div>
+    <div class="stat"><b>3531</b><span>对齐帧（CSV = video）</span></div>
+    <div class="stat"><b>122 MB</b><span>已打包 zip（2 份）</span></div>
+  </div>
+
+  <div class="note">
+    <strong>一句话结论：</strong>可以给大众一份「格式已定、样例可用」的数据包；
+    其中 <code>ep_…204010</code>（漫游 ~2 分钟）与 <code>ep_…205833</code>（环绕 ~4.7 分钟）值得先交。
+    验收级漫游（≥5 分钟、遇障转向≥8）仍需下一场补采。
+  </div>
+
+  <h2>1. 今日时间线（北京时间）</h2>
+  <ul class="timeline">
+    <li>
+      <time>11:01</time>
+      <div>
+        启动 <code>wander-cage.json</code>，深度服务就绪，飞机连上。
+        首飞未录制：CRUISE→free TURN→VERIFY 流转正常，约 20s 后
+        <code>wander_danger</code> 脱开 AUTO，降落成功。
+      </div>
+    </li>
+    <li>
+      <time>11:40</time>
+      <div>
+        <strong>录制漫游主包</strong> <code>ep_20260727_204010</code>：121s / 1047 帧，
+        outcome=<span class="ok">completed</span>，电量 92%→67%。
+        已导出 zip。
+      </div>
+    </li>
+    <li>
+      <time>11:50</time>
+      <div>
+        短漫游 <code>ep_20260727_205009</code>：18s，遇障 TURN 一次后
+        <code>depth stale</code> 脱开。建议<strong>不作为训练主样本</strong>。
+      </div>
+    </li>
+    <li>
+      <time>11:58</time>
+      <div>
+        <strong>录制环绕主包</strong> <code>ep_20260727_205833</code>：283s / 2355 帧，
+        椅子 POI 环绕，无 danger/lost abort，人工降落；
+        结束因 session_cleanup / depth stale 标注 aborted。已导出 zip。
+      </div>
+    </li>
+  </ul>
+
+  <div class="warn">
+    机内日志时间戳为 PDT（UTC−7），比北京时间慢 15 小时；
+    episode 目录名 <code>ep_20260727_*</code> 对应北京时间 7/28 上午。
+    交接时请以本报告北京时间为准，或在 meta 中补注 <code>timezone_note</code>。
+  </div>
+
+  <h2>2. Episode 清单与 QA</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>场景</th>
+        <th>时长 / 帧</th>
+        <th>关键指标</th>
+        <th>§9.3 / 用途</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>ep_20260727_204010</code><br/><span class="tag tag-ok">推荐交接</span></td>
+        <td>wander_explore<br/>混合 AUTO+少量 MANUAL</td>
+        <td>121s<br/>1047 = 1047</td>
+        <td>
+          depth P95 381ms<br/>
+          free turn 7 / obstacle 1<br/>
+          方向 L5 R4<br/>
+          高度中位 70cm
+        </td>
+        <td><span class="bad">未达标</span><br/>遇障转向不足；pitch 多样性偏窄（pitch 压到 5–8）</td>
+      </tr>
+      <tr>
+        <td><code>ep_20260727_205009</code><br/><span class="tag tag-bad">暂缓</span></td>
+        <td>wander_explore</td>
+        <td>18s<br/>129 = 129</td>
+        <td>depth stale 脱开<br/>obstacle turn 1</td>
+        <td>过短；可留作边缘 case，不进主训练集</td>
+      </tr>
+      <tr>
+        <td><code>ep_20260727_205833</code><br/><span class="tag tag-ok">推荐交接</span></td>
+        <td>orbit（椅子 POI）<br/>99% 自动</td>
+        <td>283s<br/>2355 = 2355</td>
+        <td>
+          depth P95 339ms<br/>
+          ORBIT 2310 帧<br/>
+          roll+yaw 同时非零<br/>
+          高度中位 70cm
+        </td>
+        <td>非 wander 验收对象；作为 A3 互补样本很强</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>2.1 漫游主包动作分布（ep_…204010）</h3>
+  <div class="card">
+    <div class="bars">
+      <div class="bar-row"><span>CRUISE</span><div class="bar-track"><div class="bar-fill" style="width:56%"></div></div><span>587</span></div>
+      <div class="bar-row"><span>HOVER</span><div class="bar-track"><div class="bar-fill" style="width:18%"></div></div><span>187</span></div>
+      <div class="bar-row"><span>TURN</span><div class="bar-track"><div class="bar-fill" style="width:14%"></div></div><span>150</span></div>
+      <div class="bar-row"><span>VERIFY</span><div class="bar-track"><div class="bar-fill" style="width:7%"></div></div><span>69</span></div>
+      <div class="bar-row"><span>MANUAL</span><div class="bar-track"><div class="bar-fill alt" style="width:5%"></div></div><span>54</span></div>
+    </div>
+    <p class="muted">yaw 非零且前方开阔（mid&lt;clear）占比 89%——free turn 生效，动作标签不会退化成「转弯=有障碍」伪相关。</p>
+    <p class="muted"><code>act_roll ≡ 0</code>（漫游安全不变量）；pitch 主要落在 0–12 杆量（保守档）。</p>
+  </div>
+
+  <h3>2.2 环绕主包动作特点（ep_…205833）</h3>
+  <div class="card">
+    <p>与漫游形成互补：<strong>roll（切向）+ yaw（盯目标）同时输出</strong>，pitch 只做半径修正；throttle 恒 0。</p>
+    <p>2355 帧中约 99% 有非零动作。筛选环绕段：<code>ctrl_state</code> 以 <code>ORBIT</code> 开头。</p>
+  </div>
+
+  <h2>3. 数据格式说明（给大众训练侧）</h2>
+  <p>每个 episode 目录自描述，解压即可用。推荐直接交 zip：</p>
+  <pre>logs/exports/
+├── ep_20260727_204010.zip   # 42 MB · 随机漫游
+└── ep_20260727_205833.zip   # 80 MB · 椅子环绕</pre>
+
+  <h3>3.1 目录结构</h3>
+  <pre>ep_XXXXXXXX_XXXXXX/
+├── meta.json      # 回合元数据、参数、结局、wander notes
+├── video.mp4      # H.264 / CRF18 / 960×720 / 标称 10 fps
+├── frames.csv     # 逐帧表，行号 = 视频帧号（严格 1:1）
+├── depth/         # 96×128 nearness .npy（可选；视觉→动作可先忽略）
+└── README.md      # 中文可读说明（已随包）</pre>
+
+  <h3>3.2 对齐契约（硬保证）</h3>
+  <ul>
+    <li><code>video.mp4</code> 第 N 帧 ↔ <code>frames.csv</code> 第 N 行（本批已校验 match=True）</li>
+    <li>真实时刻用 <code>t_mono_ms</code>，不要假设严格等间隔 100ms</li>
+    <li><code>depth_age_ms</code> 诚实记录深度滞后；本批 P95 &lt; 410ms</li>
+  </ul>
+
+  <h3>3.3 动作语义（训练标签）</h3>
+  <table>
+    <thead>
+      <tr><th>列</th><th>含义</th><th>范围</th><th>正方向</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>act_roll</code></td><td>横滚 / 左右平移</td><td>−100…100</td><td>右</td></tr>
+      <tr><td><code>act_pitch</code></td><td>俯仰 / 前后</td><td>−100…100</td><td>前</td></tr>
+      <tr><td><code>act_throttle</code></td><td>升降</td><td>−100…100</td><td>上</td></tr>
+      <tr><td><code>act_yaw</code></td><td>偏航</td><td>−100…100</td><td>顺时针</td></tr>
+    </tbody>
+  </table>
+  <p>建议归一化：<code>action = [roll,pitch,throttle,yaw] / 100.0</code>，与现有 WAM 对接方案中的 <code>vx/vy/vz/wyaw ∈ [-1,1]</code> 一致
+  （见 <code>docs/handover/2026-07-22-wam-brain-integration-plan.md</code>）。</p>
+
+  <h3>3.4 必须告知大众的限制</h3>
+  <ol>
+    <li><strong>深度是相对 nearness</strong>，逐帧归一化，不是米制深度；大平面/镂空网可能误报「开阔」。</li>
+    <li><strong>速度遥测 <code>vgx/vgy/vgz</code> 恒为 0</strong>（TT 硬件不报），勿当监督信号。</li>
+    <li><strong>位姿 <code>pos_*</code></strong> 仅在 Mission Pad 锁定时可信；笼内长飞多数时刻不可用。</li>
+    <li>漫游包含少量 <code>MANUAL</code> 帧：若只要策略动作，请排除 <code>MANUAL</code>/<code>HOVER</code>。</li>
+    <li>铁丝网场地：边缘可能「深度透明」，存在贴网后退/danger 片段——边缘数据可保留，但需在 meta 标注场地。</li>
+  </ol>
+
+  <h2>4. 如何跟大众交接（推荐路径）</h2>
+  <div class="card">
+    <h3>推荐：试点包 + 契约确认（先交、后补）</h3>
+    <p>一次把「数据长什么样」说清楚，比等验收满血再交更划算。对方可以先写 dataloader / 对齐校验。</p>
+    <ol>
+      <li><strong>交付物</strong>：上述 2 个 zip + 本 HTML + 各包内 README + meta.json</li>
+      <li><strong>同步文档</strong>：WAM 推理接口草案（已有）+ 本批场景标签（G1 / A3）</li>
+      <li><strong>明确口径</strong>：试点批次，非 §9.3 验收达标；下一场补 ≥5 分钟漫游</li>
+      <li><strong>请对方确认</strong>：要不要 depth npy；动作要杆量还是归一化；是否只要 AUTO 帧</li>
+    </ol>
+  </div>
+
+  <h3>4.1 建议交接邮件/纪要骨架</h3>
+  <pre>主题：TT 笼内试点数据 v0（漫游 + 椅子环绕）· 请确认 dataloader 契约
+
+附件：
+1) ep_20260727_204010.zip  — scenario=wander_explore，121s
+2) ep_20260727_205833.zip  — scenario=orbit(chair)，283s
+3) 本报告 HTML
+
+请确认：
+□ frames.csv ↔ video 1:1 是否满足你们管线
+□ 动作用杆量[-100,100] 还是归一化[-1,1]
+□ 是否需要 depth/*.npy（相对 nearness 96×128）
+□ 过滤规则：是否丢弃 MANUAL / HOVER / abort 段
+□ 下一场优先补：长漫游 / 多光照 / 固定路线？
+
+已知限制：相对深度、无速度遥测、铁丝网场地深度假阴性风险。
+接口对接另见 wam-brain-integration-plan（/act 观测→动作）。</pre>
+
+  <h3>4.2 交接检查清单</h3>
+  <div class="checklist card">
+    <label><input type="checkbox" checked disabled /> 两份 zip 可解压，含 meta / video / frames.csv / README</label>
+    <label><input type="checkbox" checked disabled /> episode_check：帧对齐 True，depth_age P95 &lt; 600ms</label>
+    <label><input type="checkbox" /> 与大众确认动作空间与过滤规则</label>
+    <label><input type="checkbox" /> 上传网盘/内网路径，附 SHA256</label>
+    <label><input type="checkbox" /> 预约 30min 对齐会：样例帧 walk-through + /act 契约</label>
+    <label><input type="checkbox" /> 排期下一场 ≥5 分钟漫游验收采数</label>
+  </div>
+
+  <h2>5. 未达标项与下场计划</h2>
+  <table>
+    <thead><tr><th>规格 §9.3 项</th><th>今日结果</th><th>下场动作</th></tr></thead>
+    <tbody>
+      <tr><td>单段漫游 ≥5 分钟</td><td>最长有效漫游 ~2 分钟</td><td>连续 AUTO，减少过早降落</td></tr>
+      <tr><td>遇障转向 ≥8</td><td>主包仅 1 次 obstacle</td><td>椅子间距加密；turn_thresh 维持，勿盲目下调</td></tr>
+      <tr><td>free turn ≥3</td><td>主包 7 次 ✅</td><td>保持</td></tr>
+      <tr><td>pitch/yaw 直方图 ≥4 bin</td><td>偏窄（pitch 5–8）</td><td>验收档逐步放开 cruise_pitch 至默认 12–25</td></tr>
+      <tr><td>撞击 0 / abort 可解释</td><td>早盘有 wander_danger；录制段可解释</td><td>P0 托举标定铁丝网 M 值；必要时挂布</td></tr>
+    </tbody>
+  </table>
+
+  <h2>6. 文件路径速查</h2>
+  <pre>源数据
+  logs/episodes/ep_20260727_204010/
+  logs/episodes/ep_20260727_205009/
+  logs/episodes/ep_20260727_205833/
+
+导出
+  logs/exports/ep_20260727_204010.zip
+  logs/exports/ep_20260727_205833.zip
+
+飞行日志
+  logs/wander-cage-p1.log
+  logs/wander-cage-p3-chair.log
+  logs/orbit-chair-p1.log
+
+本地 QA
+  .venv/bin/python episode_check.py logs/episodes/ep_20260727_204010
+
+相关设计
+  docs/design/2026-07-27-wander-explore-design.md
+  docs/handover/2026-07-22-wam-brain-integration-plan.md
+  docs/dev-notes/2026-07-28-wander-cage-flight-plan.md</pre>
+
+  <footer>
+    报告生成：2026-07-28 · 数据源为本机 <code>logs/episodes</code> + <code>episode_check.py</code>。<br/>
+    口径：试点交付，非 wander 模块 DoD 完成声明。验收基线仍待 Claude 在规格书补记。
+  </footer>
+</main>
+</body>
+</html>

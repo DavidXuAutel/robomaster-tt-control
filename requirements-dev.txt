@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# 完整回归测试（含离线仿真和轨迹出图）
+pytest>=8
+matplotlib>=3.7

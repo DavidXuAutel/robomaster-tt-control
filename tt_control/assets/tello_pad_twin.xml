@@ -1,0 +1,37 @@
+<mujoco model="tello_pad_twin">
+  <compiler angle="degree" coordinate="local"/>
+  <option gravity="0 0 -9.81" timestep="0.01"/>
+  <visual>
+    <headlight diffuse="0.8 0.8 0.8"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+  </visual>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.2 0.3 0.4" rgb2="0.1 0.15 0.2" width="512" height="512"/>
+    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.1"/>
+    <material name="pad" rgba="0.9 0.15 0.1 1"/>
+    <material name="drone" rgba="0.2 0.75 0.95 1"/>
+    <material name="rotor" rgba="0.1 0.1 0.1 0.7"/>
+  </asset>
+  <worldbody>
+    <light pos="0 0 3" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+    <geom name="floor" type="plane" size="2 2 0.05" material="grid"/>
+    <!-- Mission Pad at origin (local frame of SDK x/y/z) -->
+    <geom name="mission_pad" type="box" size="0.15 0.15 0.005" pos="0 0 0.005" material="pad"/>
+    <site name="pad_origin" pos="0 0 0.01" size="0.02" rgba="1 1 0 1"/>
+    <!-- Kinematic twin: pose set from SDK each frame -->
+    <body name="drone" pos="0 0 0.3">
+      <freejoint name="drone_free"/>
+      <geom name="body" type="box" size="0.09 0.09 0.02" material="drone" mass="0.087"/>
+      <geom name="arm_fl" type="capsule" fromto="0 0 0 0.08 0.08 0" size="0.008" material="drone"/>
+      <geom name="arm_fr" type="capsule" fromto="0 0 0 0.08 -0.08 0" size="0.008" material="drone"/>
+      <geom name="arm_rl" type="capsule" fromto="0 0 0 -0.08 0.08 0" size="0.008" material="drone"/>
+      <geom name="arm_rr" type="capsule" fromto="0 0 0 -0.08 -0.08 0" size="0.008" material="drone"/>
+      <geom name="rotor_fl" type="cylinder" size="0.04 0.002" pos="0.08 0.08 0.02" material="rotor"/>
+      <geom name="rotor_fr" type="cylinder" size="0.04 0.002" pos="0.08 -0.08 0.02" material="rotor"/>
+      <geom name="rotor_rl" type="cylinder" size="0.04 0.002" pos="-0.08 0.08 0.02" material="rotor"/>
+      <geom name="rotor_rr" type="cylinder" size="0.04 0.002" pos="-0.08 -0.08 0.02" material="rotor"/>
+      <camera name="track" pos="-0.6 0 0.4" xyaxes="0 -1 0 0.5 0 1" mode="trackcom"/>
+    </body>
+  </worldbody>
+</mujoco>

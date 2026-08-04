@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RoboMaster TT 视觉避障 — 仿真方案</title>
+<style>
+  :root{
+    --bg:#f4f7fb; --card:#ffffff; --ink:#1f2733; --muted:#5c6b7f;
+    --line:#e3eaf2; --blue:#2f6fed; --blue-soft:#e8f0ff; --blue-ink:#1b4fc0;
+    --green:#1f9d63; --green-soft:#e6f6ee; --amber:#c07a12; --amber-soft:#fdf3e0;
+    --red:#d4483b; --red-soft:#fdecea; --shadow:0 1px 3px rgba(31,39,51,.06),0 8px 24px rgba(31,39,51,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:"Segoe UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+       line-height:1.7;font-size:15px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 24px 80px}
+  header{margin-bottom:8px}
+  .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--blue-ink);font-weight:700}
+  h1{font-size:30px;line-height:1.25;margin:.35em 0 .5em;font-weight:750;letter-spacing:-.01em}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted);font-size:13px;margin-bottom:6px}
+  .meta b{color:var(--ink);font-weight:600}
+  .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:700}
+  .badge.wait{background:var(--amber-soft);color:var(--amber)}
+  h2{font-size:20px;margin:44px 0 14px;font-weight:700;display:flex;align-items:center;gap:10px}
+  h2 .n{display:inline-flex;width:26px;height:26px;border-radius:8px;background:var(--blue);color:#fff;
+        font-size:14px;align-items:center;justify-content:center;font-weight:700;flex:0 0 auto}
+  h3{font-size:15px;margin:20px 0 8px;font-weight:700}
+  p{margin:.5em 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;box-shadow:var(--shadow)}
+  .tldr{background:linear-gradient(180deg,#fbfdff,#f2f7ff);border:1px solid #d6e4ff}
+  .tldr .lead{font-size:17px;font-weight:600}
+  .tldr .lead b{color:var(--blue-ink)}
+  ul.clean{list-style:none;padding:0;margin:10px 0}
+  ul.clean li{padding:6px 0 6px 28px;position:relative}
+  ul.clean li::before{content:"";position:absolute;left:2px;top:12px;width:14px;height:14px;border-radius:50%;
+       background:var(--green-soft);border:2px solid var(--green)}
+  ul.clean li.ok::before{content:"✓";background:var(--green);color:#fff;font-size:10px;font-weight:900;
+       display:flex;align-items:center;justify-content:center;border:none;top:9px}
+  .muted{color:var(--muted)}
+  code{background:#eef2f7;border:1px solid #e0e7ef;border-radius:5px;padding:1px 6px;font-size:13px;
+       font-family:"Cascadia Code",Consolas,monospace}
+
+  /* data-flow diagrams */
+  .flows{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:16px 0}
+  @media(max-width:720px){.flows{grid-template-columns:1fr}.wrap{padding:28px 16px 60px}}
+  .flowcard{border-radius:14px;padding:20px;border:1px solid var(--line);background:var(--card)}
+  .flowcard.now{border-color:#f0d9ad;background:#fffdf7}
+  .flowcard.goal{border-color:#bcd6ff;background:#f7fbff}
+  .flowcard h4{margin:0 0 4px;font-size:15px}
+  .tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px}
+  .tag.now{background:var(--amber-soft);color:var(--amber)}
+  .tag.goal{background:var(--blue-soft);color:var(--blue-ink)}
+  .flow{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+  .node{border-radius:9px;padding:9px 12px;font-size:13px;font-weight:600;text-align:center;border:1px solid}
+  .node.real{background:#fbe9e7;border-color:#f2c7c1;color:#a3392e}
+  .node.sim{background:#e9f0ff;border-color:#cadcff;color:#1b4fc0}
+  .node.algo{background:#e7f6ee;border-color:#c2e6d1;color:#157a4b}
+  .node.dim{background:#f2f5f9;border-color:#e2e8f0;color:#556}
+  .arrow{text-align:center;color:var(--muted);font-size:14px;line-height:1}
+  .loopnote{font-size:12px;color:var(--muted);text-align:center;margin-top:8px;font-style:italic}
+
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;background:var(--card);
+        border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
+  th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f0f4fa;font-weight:700;font-size:13px}
+  tr:last-child td{border-bottom:none}
+  .rec td{background:var(--green-soft)}
+  .rec .name{font-weight:750;color:var(--green)}
+  .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap}
+  .pill.g{background:var(--green-soft);color:var(--green)}
+  .pill.r{background:var(--red-soft);color:var(--red)}
+
+  .callout{border-radius:12px;padding:14px 18px;margin:12px 0;border:1px solid;display:flex;gap:12px}
+  .callout .ic{font-size:18px;line-height:1.5}
+  .callout.q{background:var(--amber-soft);border-color:#f0d9ad}
+  .callout.q b{color:var(--amber)}
+  .callout.info{background:var(--blue-soft);border-color:#cadcff}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:12px 0}
+  .steps li{counter-increment:s;position:relative;padding:10px 0 10px 44px;border-bottom:1px dashed var(--line)}
+  .steps li:last-child{border-bottom:none}
+  .steps li::before{content:counter(s);position:absolute;left:0;top:9px;width:28px;height:28px;border-radius:8px;
+       background:var(--blue-soft);color:var(--blue-ink);font-weight:800;display:flex;align-items:center;justify-content:center}
+  footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  .aside{font-size:13px;color:var(--muted);background:#f0f4fa;border-radius:10px;padding:12px 16px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">RoboMaster TT · 项目仿真方案</div>
+  <h1>视觉避障 —— 仿真如何与项目串起来</h1>
+  <div class="meta">
+    <span><b>日期</b> 2026-07-17</span>
+    <span><b>状态</b> <span class="badge wait">待确认</span></span>
+    <span><b>范围</b> 仿真构建路线与分工</span>
+    <span><b>关联</b> docs/superpowers/specs/2026-07-16-tt-control-design.md</span>
+  </div>
+</header>
+
+<div class="card tldr">
+  <p class="lead">结论:采用 <b>混合方案 ③ ——「先在仿真里开发避障,再上真机验证」</b>,并<b>从纯仿真(方案 ①)起步</b>。</p>
+  <p class="muted" style="margin:8px 0 0">当前服务器上跑的 <code>mujoco_twin.py</code> 是<b>数字孪生(镜子)</b>,只能映射/记录真机飞行,<b>无法用于开发避障</b>。要做视觉避障,需要把它扩展成<b>闭环仿真环境</b>——虚拟机自己飞、自己看、自己躲。所需的关键前提(GPU 渲染)已在本机验证可用。</p>
+</div>
+
+<h2><span class="n">1</span>现状:数字孪生已验证可跑</h2>
+<div class="card">
+  <p>已登录内网仿真服务器(Ubuntu 22.04 · RTX 4090)并完成验证:</p>
+  <ul class="clean">
+    <li class="ok">MuJoCo <b>3.8.0</b> + OpenCV + PyAV 环境完好,模型 <code>tello_pad_twin.xml</code> 正常加载</li>
+    <li class="ok"><b>逻辑验证</b>:喂 200 个模拟 Mission Pad 位姿,走完「位姿→仿真机体→轨迹记录→CSV/JSON 导出」全管线,无报错</li>
+    <li class="ok"><b>画面验证</b>:用 EGL 无头离屏渲染出实际动画(见桌面 <code>tt_twin.mp4</code> / <code>tt_twin_preview.png</code>)——蓝色四旋翼绕红色 Mission Pad 飞、绿色轨迹实时铺开</li>
+    <li class="ok"><b>GUI 验证</b>:交互式 3D 窗口已弹到服务器物理显示器上</li>
+  </ul>
+  <div class="aside">📌 关键副产品:这台 4090 的 <b>EGL 无头渲染可用</b>——这正是"给虚拟无人机装模拟相机、让算法能看见画面"的核心前提,决定了闭环视觉仿真成本很低。</div>
+</div>
+
+<h2><span class="n">2</span>关键概念:数字孪生 ≠ 仿真环境</h2>
+<p class="muted">这是理解"仿真怎么串起来"的核心。两者数据流方向相反:</p>
+<div class="flows">
+  <div class="flowcard now">
+    <h4>当前:数字孪生 <span class="tag now">已有</span></h4>
+    <p class="muted" style="font-size:13px;margin:2px 0 0">真机是真身,MuJoCo 是镜子。用于可视化与轨迹记录。</p>
+    <div class="flow">
+      <div class="node real">真无人机飞行</div>
+      <div class="arrow">↓ Tello SDK 上报位姿</div>
+      <div class="node dim">Mission Pad 相对坐标 x/y/z/yaw</div>
+      <div class="arrow">↓ 照抄</div>
+      <div class="node sim">MuJoCo 虚拟机同步 + 画轨迹</div>
+    </div>
+    <p class="loopnote">必须有真机在飞才有画面 · 无法开发避障</p>
+  </div>
+  <div class="flowcard goal">
+    <h4>目标:闭环仿真 <span class="tag goal">要建</span></h4>
+    <p class="muted" style="font-size:13px;margin:2px 0 0">仿真是真身,虚拟机自己飞。用于安全开发与测试避障。</p>
+    <div class="flow">
+      <div class="node sim">虚拟无人机(在含障碍的虚拟世界)</div>
+      <div class="arrow">↓ 机载相机(EGL 渲染图像)</div>
+      <div class="node algo">视觉避障算法 → 速度指令</div>
+      <div class="arrow">↑ 驱动虚拟机移动、遇障躲避</div>
+      <div class="node sim">回到虚拟世界(闭环)</div>
+    </div>
+    <p class="loopnote">不用真机 · 可反复跑上千次 · 安全迭代</p>
+  </div>
+</div>
+
+<h2><span class="n">3</span>三种仿真构建路线对比</h2>
+<table>
+  <thead><tr><th style="width:15%">方案</th><th style="width:28%">怎么做</th><th>优点</th><th>缺点</th><th style="width:14%">适用</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>① 纯仿真</b><br><span class="muted">sim-first</span></td>
+      <td>MuJoCo 里加障碍物 + 给虚拟机装前视相机,渲染图像喂算法,算法输出指令驱动虚拟机闭环</td>
+      <td><span class="pill g">安全</span> 不用真机、可反复跑上千次、迭代快;4090+EGL 现成</td>
+      <td><span class="pill r">sim-to-real</span> 真 Tello 相机畸变/延迟/控制响应有差距</td>
+      <td>开发+调试避障</td>
+    </tr>
+    <tr>
+      <td><b>② 真机+孪生</b><br><span class="muted">现状</span></td>
+      <td>真 Tello 飞,MuJoCo 做镜子记录轨迹</td>
+      <td>真实数据、无 sim-to-real 差距</td>
+      <td><span class="pill r">受限</span> 必须有真机和场地、会炸机、无法离线开发、Tello 传感有限</td>
+      <td>最终真机验证</td>
+    </tr>
+    <tr class="rec">
+      <td class="name">③ 混合<br><span class="muted" style="font-weight:600">推荐</span></td>
+      <td>先在 ① 里把避障做出来调好,再用 ② 上真机验证落地</td>
+      <td><span class="pill g">兼顾</span> 安全快速迭代 + 真实验证;现有孪生正好当"真机验证器",不浪费</td>
+      <td>两边都要建、需处理 sim-to-real 对齐</td>
+      <td>完整开发闭环</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2><span class="n">4</span>推荐:混合 ③,从 ① 起步</h2>
+<div class="card">
+  <ul class="clean">
+    <li>避障算法炸机代价高 —— <b>必须先在仿真里练熟</b>,不能拿真机试错。</li>
+    <li>本机 <b>4090 + EGL 已验证</b>,做视觉闭环成本低,渲染快。</li>
+    <li>现有孪生天然就是 ③ 里"真机验证"那一环 —— <b>不浪费已有工作</b>。</li>
+    <li>与大众用 <code>wam</code> 做自动导航的思路一致:<b>导航大脑先在仿真里养熟,再上真机</b>。</li>
+  </ul>
+</div>
+
+<h2><span class="n">5</span>定案前需确认的三件事</h2>
+<div class="callout q"><div class="ic">❓</div><div><b>① 7-17《半自动视觉避障设计说明》怎么定的?</b><br>它应已写明预期方案,是锚点。该文档目前只在飞书聊天里、不在服务器上 —— 需要拿到并通读,才能把方案对齐到位。</div></div>
+<div class="callout q"><div class="ic">❓</div><div><b>② <code>wam</code> 是什么、输入输出是什么?</b><br>若避障"大脑"是 wam(服务器上有 <code>~/wam</code>、<code>~/FastWAM</code>),仿真环境需按它的接口来喂图像 / 收指令。</div></div>
+<div class="callout q"><div class="ic">❓</div><div><b>③ Tello TT 有哪些传感器?</b><br>TT 只有前视单目相机 + 下视定位 + Mission Pad 识别,无深度/避障雷达 —— 这决定避障只能走<b>单目视觉</b>,也更说明必须先在仿真里做。</div></div>
+
+<h2><span class="n">6</span>下一步</h2>
+<ol class="steps">
+  <li><b>拿到 7-17 设计文档</b> → 通读并与本方案对齐(阻塞项)。</li>
+  <li><b>确认 wam 接口 + TT 传感器清单</b> → 与大众对齐分工边界。</li>
+  <li><b>确认代码基线</b>:GitHub <code>origin/main</code>(含 auto_fly 等)与服务器 7-16 拷贝已分叉,需定哪份为准再接 git 工作流。</li>
+  <li>以上确认后,产出<b>闭环仿真环境的具体搭建方案</b>(在现有孪生上加:障碍物、机载相机、闭环驱动)。</li>
+</ol>
+
+<div class="callout info"><div class="ic">💡</div><div>本报告为方案讨论稿,<b>尚未开始改代码</b>。确认路线后再进入实现。截图/视频见桌面 <code>tt_twin_preview.png</code>、<code>tt_twin.mp4</code>。</div></div>
+
+<footer>
+  RoboMaster TT 视觉避障 · 仿真方案(讨论稿) · 2026-07-17 ·
+  仓库路径 <code>docs/2026-07-17-simulation-plan.html</code>
+</footer>
+
+</div>
+</body>
+</html>

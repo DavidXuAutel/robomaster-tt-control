@@ -1,0 +1,336 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "默认模块",
+    "description": "包含部门,用户,角色,菜单,角色-用户,角色-菜单,数据字典,操作日志</br>NOTE:返回值统一为ResultMap,200代表成功,其他均为失败,具体接口中不在做介绍",
+    "version": "3.3.8",
+    "termsOfService": "http://192.168.0.85:8001/service/api/robot/",
+    "contact": {
+      "name": "topsee",
+      "url": "http://www.gdtopsee.com/"
+    }
+  },
+  "tags": [
+    {
+      "name": "登录模块-API文档-改版"
+    }
+  ],
+  "paths": {
+    "/service/api/permission/free/app/login": {
+      "post": {
+        "summary": "APP登录接口",
+        "deprecated": false,
+        "description": "",
+        "operationId": "loginAppUsingPOST",
+        "tags": [],
+        "parameters": [
+          {
+            "name": "account",
+            "in": "query",
+            "description": "用户名",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "currentLanguage",
+            "in": "query",
+            "description": "国际化语言",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "password",
+            "in": "query",
+            "description": "密码",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "securityKey",
+            "in": "query",
+            "description": "redis_key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "登录成功",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            },
+            "headers": {}
+          },
+          "201": {
+            "description": "Created",
+            "headers": {}
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {}
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {}
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {}
+          }
+        },
+        "security": []
+      }
+    },
+    "/service/api/permission/free/login/pwd": {
+      "put": {
+        "summary": "修改密码",
+        "deprecated": false,
+        "description": "参数param类为:com.link.cn.permission.param.UserParam",
+        "operationId": "updatePwdUsingPUT",
+        "tags": [
+          "登录模块-API文档-改版"
+        ],
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              },
+              "examples": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "修改成功",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            },
+            "headers": {}
+          },
+          "201": {
+            "description": "Created",
+            "headers": {}
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {}
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {}
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {}
+          },
+          "415": {
+            "description": "参数错误",
+            "headers": {}
+          },
+          "500": {
+            "description": "修改失败",
+            "headers": {}
+          }
+        },
+        "security": []
+      }
+    },
+    "/service/api/permission/free/pc/login": {
+      "post": {
+        "summary": "PC登录接口",
+        "deprecated": false,
+        "description": "",
+        "operationId": "loginUsingPOST",
+        "tags": [
+          "登录模块-API文档-改版"
+        ],
+        "parameters": [
+          {
+            "name": "account",
+            "in": "query",
+            "description": "用户名",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "currentLanguage",
+            "in": "query",
+            "description": "国际化语言",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "password",
+            "in": "query",
+            "description": "密码",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "securityKey",
+            "in": "query",
+            "description": "redis_key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "登录成功",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            },
+            "headers": {}
+          },
+          "201": {
+            "description": "Created",
+            "headers": {}
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {}
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {}
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {}
+          }
+        },
+        "security": []
+      }
+    },
+    "/service/api/permission/free/security/rsa": {
+      "get": {
+        "summary": "获取公钥接口",
+        "deprecated": false,
+        "description": "",
+        "operationId": "getPublicRsaUsingGET",
+        "tags": [
+          "登录模块-API文档-改版"
+        ],
+        "parameters": [
+          {
+            "name": "securityKey",
+            "in": "query",
+            "description": "唯一key(随机生成不重复的key值,类似UUID)",
+            "required": true,
+            "example": "f7a3e8d1-9c4b-4a2e-8d6f-1b3c5e7a9d0f",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "获取成功",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            },
+            "headers": {}
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {}
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {}
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {}
+          }
+        },
+        "security": []
+      }
+    },
+    "/service/api/permission/vueLogout": {
+      "get": {
+        "summary": "退出登录",
+        "deprecated": false,
+        "description": "",
+        "operationId": "logoutUsingGET",
+        "tags": [
+          "登录模块-API文档-改版"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "退出成功",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            },
+            "headers": {}
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {}
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {}
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {}
+          }
+        },
+        "security": []
+      }
+    }
+  },
+  "components": {
+    "schemas": {},
+    "responses": {},
+    "securitySchemes": {}
+  },
+  "servers": [],
+  "security": []
+}

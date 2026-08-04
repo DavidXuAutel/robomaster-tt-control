@@ -1,0 +1,33 @@
+{
+  "//_meta": "铁丝笼场地 · 随机漫游档。用法: main.py --config configs/wander-cage.json ... 未列字段回退 default.json / dataclass 默认值。",
+
+  "//_scope": "本档只服务随机漫游，与椅子绕飞档 configs/orbit-chair.json 完全独立：两档不会同时加载，本档任何调参都不影响绕飞。禁止在本档写 orbit 节；漫游调参也不要回灌 default.json 的 orbit/fsm 节（那是 2026-07-27 绕飞已验证基线）。唯一残留耦合是 avoid 节的 band_top/band_bottom——WanderPolicy 借用 AvoidanceController.zone_nearness 取三区近度，改它会同时波及绕飞，见 docs/dev-notes/2026-07-28-orbit-wander-decoupling.md",
+
+  "fsm": {
+    "//_comment": "与 orbit 互斥；笼内高度硬顶按笼高设（默认 200，笼低于 2.5m 请下调）",
+    "orbit_mode": false,
+    "wander_mode": true,
+    "max_auto_engaged_s": 86400.0,
+    "min_battery_pct": 15,
+    "max_height_cm": 200,
+    "//_stale_comment": "3.0 太久：2026-07-28 撞铁丝网后视频流中断，飞机仍执行了 3s 转向指令才被看门狗断开",
+    "depth_stale_s": 1.5
+  },
+
+  "wander": {
+    "//_comment": "巡航带 60~130cm（主人 2026-07-28 裁定）：0.5~0.8m 椅子须落在深度带 [0.30,0.80] 内才可检出，实飞高度应压在 70~90cm。偏离规格 §2.3（80~200），见 docs/dev-notes/2026-07-28-wander-cage-flight-plan.md",
+    "seed": 0,
+
+    "//_pitch_comment": "10~14 约 1m/s，笼半宽仅 2.25m，人工接管只有 ~2s 反应窗口（2026-07-28 撞铁丝网）。铁丝网对单目深度是反向信号（越近 mid 越低），只能靠降速给人留时间",
+    "cruise_pitch_min": 5,
+    "cruise_pitch_max": 8,
+
+    "h_min_cm": 60.0,
+    "h_max_cm": 130.0,
+    "alt_throttle": 15,
+
+    "//_turn_comment": "二飞实测：撞前连续三帧 M0.41/0.43/0.45，0.45 门槛差一点没触发 → 降到 0.40。clear_thresh 同步降到 0.30 保住 0.10 迟滞。\n三飞曾试 0.30/0.22：起飞 2s 即触发 obstacle 转向但现场无障碍（M0.37 来自远墙与地面的整体近度），属误触发，已回退。低于 0.40 不可用——三区近度取中带中位数，两米外椅子占不到 mid 区一半像素，降门槛只会先捞到背景噪声，见 docs/dev-notes/2026-07-28-orbit-wander-decoupling.md §4",
+    "turn_thresh": 0.40,
+    "clear_thresh": 0.30
+  }
+}

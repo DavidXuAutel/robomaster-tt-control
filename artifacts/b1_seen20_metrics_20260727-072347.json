@@ -1,0 +1,84 @@
+{
+  "stamp": "20260727-072347-5k-2gpu-b0-to-joint-video",
+  "baseline_b0_step4000": {
+    "SR": 0.0,
+    "NE": 133.99130329337714,
+    "SPL": 0.0,
+    "n": 20.0
+  },
+  "s1_ne_threshold": 107.19304263470173,
+  "b1_seen20": [
+    {
+      "dir": "step_000250_seen20",
+      "NE": 327.41277290843607,
+      "SR": 0.0,
+      "SPL": 0.0,
+      "n": 20.0,
+      "path": "/home/a25689/aerial_cache_shared/orchestration/results/b1_20260727-072347-5k-2gpu-b0-to-joint-video/step_000250_seen20/metrics.json"
+    },
+    {
+      "dir": "step_000500_seen20",
+      "NE": 214.11950177756634,
+      "SR": 0.0,
+      "SPL": 0.0,
+      "n": 20.0,
+      "path": "/home/a25689/aerial_cache_shared/orchestration/results/b1_20260727-072347-5k-2gpu-b0-to-joint-video/step_000500_seen20/metrics.json"
+    },
+    {
+      "dir": "step_000750_seen20",
+      "NE": 199.05765621487134,
+      "SR": 0.0,
+      "SPL": 0.0,
+      "n": 20.0,
+      "path": "/home/a25689/aerial_cache_shared/orchestration/results/b1_20260727-072347-5k-2gpu-b0-to-joint-video/step_000750_seen20/metrics.json"
+    },
+    {
+      "dir": "step_001000_seen20",
+      "NE": 156.08283627632773,
+      "SR": 0.05,
+      "SPL": 0.05,
+      "n": 20.0,
+      "path": "/home/a25689/aerial_cache_shared/orchestration/results/b1_20260727-072347-5k-2gpu-b0-to-joint-video/step_001000_seen20/metrics.json"
+    },
+    {
+      "dir": "step_001250_seen20",
+      "NE": 327.41277290843607,
+      "SR": 0.0,
+      "SPL": 0.0,
+      "n": 20.0,
+      "path": "/home/a25689/aerial_cache_shared/orchestration/results/b1_20260727-072347-5k-2gpu-b0-to-joint-video/step_001250_seen20/metrics.json"
+    },
+    {
+      "dir": "step_001500_seen20",
+      "NE": 207.8192915041478,
+      "SR": 0.0,
+      "SPL": 0.0,
+      "n": 20.0,
+      "path": "/home/a25689/aerial_cache_shared/orchestration/results/b1_20260727-072347-5k-2gpu-b0-to-joint-video/step_001500_seen20/metrics.json"
+    },
+    {
+      "dir": "step_001750_seen20",
+      "NE": 239.7073865049294,
+      "SR": 0.0,
+      "SPL": 0.0,
+      "n": 20.0,
+      "path": "/home/a25689/aerial_cache_shared/orchestration/results/b1_20260727-072347-5k-2gpu-b0-to-joint-video/step_001750_seen20/metrics.json"
+    },
+    {
+      "dir": "step_002000_seen20",
+      "NE": 228.5019683905253,
+      "SR": 0.0,
+      "SPL": 0.0,
+      "n": 20.0,
+      "path": "/home/a25689/aerial_cache_shared/orchestration/results/b1_20260727-072347-5k-2gpu-b0-to-joint-video/step_002000_seen20/metrics.json"
+    },
+    {
+      "dir": "step_002250_seen20",
+      "NE": 321.6436981421766,
+      "SR": 0.0,
+      "SPL": 0.0,
+      "n": 20.0,
+      "path": "/home/a25689/aerial_cache_shared/orchestration/results/b1_20260727-072347-5k-2gpu-b0-to-joint-video/step_002250_seen20/metrics.json"
+    }
+  ]
+}

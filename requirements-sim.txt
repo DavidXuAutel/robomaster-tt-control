@@ -1,0 +1,16 @@
+# 离线仿真台依赖 —— MuJoCo 数字孪生轨迹记录/绘图。
+#
+# 主 requirements(numpy/opencv/av)已够跑 SimDrone 运动学闭环;下列两项仅
+# 「MuJoCo 数字孪生 + 轨迹出图」需要:
+#   - mujoco      : tt_control/mujoco_twin.py 位姿镜像 + 轨迹记录(headless 无需显示器)
+#   - matplotlib  : tt_control/trajectory_plot.py 把轨迹 CSV 画成实线 PNG(Agg 无头后端)
+#
+# 安装(进主 .venv 即可,numpy>=2 兼容,不与主环境冲突):
+#   .venv/Scripts/python.exe -m pip install -r requirements-sim.txt
+#
+# 用法:
+#   .venv/Scripts/python.exe sim_mission.py            # 起飞→50cm→前进1m→后退1m→降落
+#   .venv/Scripts/python.exe -m tt_control.sim_runner  # 策略驱动的通用闭环
+
+mujoco
+matplotlib

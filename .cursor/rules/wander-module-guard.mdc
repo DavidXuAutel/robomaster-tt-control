@@ -1,0 +1,24 @@
+---
+description: 随机漫游（Wander）模块实现规格与文档保护
+alwaysApply: true
+---
+
+# Wander 模块守则（DeepSeek/Grok/Cursor 等非 Claude Agent 必读）
+
+实现或修改随机漫游模块（`tt_control/wander.py`、`avoidance_fsm.py` 的
+wander 分支、`configs/default.json` 的 wander 节、`tests/test_wander.py`、
+`episode_check.py`）前，先完整阅读实现规格书：
+`docs/design/2026-07-27-wander-explore-design.md`。
+
+硬性规则：
+
+1. **规格书只允许 Claude 修改**，非 Claude Agent 一律只读，禁止编辑、
+   禁止 chmod（当前 444 是有意的）。对规格有异议 → 在 `docs/dev-notes/`
+   新建笔记提出，等主人/Claude 裁决，禁止自行偏离规格实现。
+2. 遵守规格书 §8 的分工与交叉评审流程；共同红线：不改 orbit 控制代码、
+   降落路径、EpisodeRecorder 同步核心；不新增硬编码安全阈值；
+   不引入新第三方依赖。
+3. 安全不变量：除 WANDER_RETREAT 外 pitch ≥ 0 且 roll ≡ 0；所有帧计数
+   按深度帧（ts 变化）计，不按控制循环计。
+4. 任何改动后必须 `.venv/bin/python -m pytest tests/ -q` 全绿
+   （已知无关预存失败见规格书 §7.8）才允许提交。

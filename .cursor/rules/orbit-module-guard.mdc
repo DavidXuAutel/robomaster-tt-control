@@ -1,0 +1,25 @@
+---
+description: 环绕（Orbit）模块修改守则与设计原则文件保护
+alwaysApply: true
+---
+
+# Orbit 模块守则（Cursor/Codex 等非 Claude Agent 必读）
+
+涉及以下文件的任何修改，先完整阅读
+`docs/design/2026-07-27-orbit-control-principles.md`：
+
+- `tt_control/avoidance.py`（OrbitController / OrbitParams）
+- `tt_control/avoidance_fsm.py`（orbit 相关路径与 FsmParams）
+- `configs/default.json`（orbit / fsm 节）
+
+硬性规则：
+
+1. **`docs/design/2026-07-27-orbit-control-principles.md` 只允许 Claude 修改**。
+   非 Claude Agent 一律只读，禁止编辑、禁止 chmod 该文件（当前 444 是有意的）。
+2. 修改 orbit 代码/参数前，逐条对照原则文件中的「安全不变量」与「历史坑」，
+   参数只能在文档标注的安全范围内调整。
+3. 禁止把控制律改回开关式（bang-bang）、禁止移除 EMA 平滑/跳变拒绝/
+   DANGER 去抖、禁止提高 yaw 增益超出文档范围——这些都是真机炸过的坑。
+4. 任何改动后必须跑：
+   `.venv/bin/python -m pytest tests/test_orbit.py tests/test_avoidance.py -q`
+   全绿才允许提交。真机暴露的 bug 修复必须附带回归测试。
