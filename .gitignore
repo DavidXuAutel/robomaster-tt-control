@@ -181,6 +181,11 @@ ENV/
 env.bak/
 venv.bak/
 
+# The aerial RL package has an `env/` subdir (AirSim env code, NOT a virtualenv).
+# Re-include it — the `env/` rule above would otherwise silently drop it.
+!experiments/aerial/rl/env/
+!experiments/aerial/rl/env/**
+
 # Spyder project settings
 .spyderproject
 .spyproject

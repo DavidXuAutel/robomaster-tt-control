@@ -27,7 +27,7 @@ import numpy as np
 
 from experiments.aerial.openfly_actions import primitive_to_delta
 from experiments.aerial.rl.buffer import Episode, ReplayBuffer, Transition
-from experiments.aerial.rl.env.action import clip_body_delta
+from experiments.aerial.rl.env.action import DEFAULT_STEP_HZ, body_delta_limits, clip_body_delta
 from experiments.aerial.rl.env.obs import Observation
 from experiments.aerial.rl.reward import NavigationReward, RewardConfig
 from experiments.aerial.rl.safety import SafetyShield
@@ -35,8 +35,20 @@ from experiments.aerial.rl.safety import SafetyShield
 logger = logging.getLogger(__name__)
 
 
-def act_delta(policy: Any, obs: Observation, instruction: str) -> np.ndarray:
-    """Resolve any supported policy to a finite, clipped 4-D body delta."""
+def act_delta(
+    policy: Any,
+    obs: Observation,
+    instruction: str,
+    limits: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Resolve any supported policy to a finite, clipped 4-D body delta.
+
+    ``limits`` is the per-step displacement cap for the env's control rate
+    (``body_delta_limits(dt)``); defaults to the 30 Hz continuous cap. NOTE: a
+    discrete-primitive policy returns a macro-sized delta (e.g. fwd 9 m) which
+    this clips to a single per-step increment — driving macro primitives
+    faithfully needs a multi-step executor, out of scope for the V0 skeleton.
+    """
     act = getattr(policy, "act", None)
     if callable(act):
         raw = act(obs)
@@ -47,7 +59,7 @@ def act_delta(policy: Any, obs: Observation, instruction: str) -> np.ndarray:
         else:
             primitive = int(policy.predict_primitive(obs.rgb, obs.proprio4(), instruction))
             raw = primitive_to_delta(primitive)
-    return clip_body_delta(np.asarray(raw, dtype=np.float64))
+    return clip_body_delta(np.asarray(raw, dtype=np.float64), limits)
 
 
 @dataclass
@@ -94,15 +106,19 @@ class RolloutCollector:
 
         transitions: List[Transition] = []
         stats = CollectStats(episodes=1)
+        # Per-step displacement cap for this env's control rate (keeps the clip
+        # consistent with what env.step will apply).
+        step_hz = float(getattr(getattr(self.env, "config", None), "step_hz", DEFAULT_STEP_HZ))
+        limits = body_delta_limits(1.0 / step_hz)
         t_start = time.perf_counter()
 
         for _ in range(self.max_steps):
-            action = act_delta(self.policy, obs, instruction)
+            action = act_delta(self.policy, obs, instruction, limits)
             intervened = False
             # Safety shield sits ABOVE the learned policy (spec §2#6). Stub
             # returns no-override today; when wired it swaps in a safe action.
             if self.safety is not None and self.safety.should_override(obs):
-                action = clip_body_delta(self.safety.override_action(obs))
+                action = clip_body_delta(self.safety.override_action(obs), limits)
                 intervened = True
 
             next_obs, info = self.env.step(action)

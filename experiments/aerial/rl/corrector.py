@@ -75,22 +75,29 @@ class SerialCorrectorLoop:
         self.episodes = episodes
 
     def run(self) -> List[IterationReport]:
-        if self.config.smoke:
-            stats = self.collector.collect(1, episodes=self.episodes)
-            logger.info("smoke collect: %d steps @ %.1f Hz", stats.steps, stats.achieved_hz)
-            return [IterationReport(collect=stats, wm={"skipped": True}, rl={"skipped": True})]
+        # Own the env lifecycle: whatever happens, release the single-consumer
+        # renderer so a crash mid-run never leaves it armed/occupied.
+        try:
+            if self.config.smoke:
+                stats = self.collector.collect(1, episodes=self.episodes)
+                logger.info("smoke collect: %d steps @ %.1f Hz", stats.steps, stats.achieved_hz)
+                return [IterationReport(collect=stats, wm={"skipped": True}, rl={"skipped": True})]
 
-        reports: List[IterationReport] = []
-        for it in range(self.config.iterations):
-            stats = self.collector.collect(self.config.episodes_per_iter, episodes=self.episodes)
-            wm = self._update_world_model()
-            rl = self._update_policy()
-            logger.info(
-                "iter %d: %d steps @ %.1f Hz | wm=%s | rl=%s",
-                it, stats.steps, stats.achieved_hz, wm.get("status", "?"), rl.get("status", "?"),
-            )
-            reports.append(IterationReport(collect=stats, wm=wm, rl=rl))
-        return reports
+            reports: List[IterationReport] = []
+            for it in range(self.config.iterations):
+                stats = self.collector.collect(self.config.episodes_per_iter, episodes=self.episodes)
+                wm = self._update_world_model()
+                rl = self._update_policy()
+                logger.info(
+                    "iter %d: %d steps @ %.1f Hz | wm=%s | rl=%s",
+                    it, stats.steps, stats.achieved_hz, wm.get("status", "?"), rl.get("status", "?"),
+                )
+                reports.append(IterationReport(collect=stats, wm=wm, rl=rl))
+            return reports
+        finally:
+            close = getattr(getattr(self.collector, "env", None), "close", None)
+            if callable(close):
+                close()
 
     # -- GATE V1: world-model training -----------------------------------
     def _update_world_model(self) -> Dict[str, Any]:

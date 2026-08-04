@@ -42,17 +42,19 @@ def test_mock_obs_passes_sanity_gates():
 def test_step_moves_forward_and_updates_velocity():
     env = MockAirSimDroneEnv(MockEnvConfig(step_hz=30.0))
     env.reset(EPISODE)
-    obs, info = env.step(np.array([3.0, 0.0, 0.0, 0.0]))
-    assert np.allclose(obs.position, [3.0, 0.0, 0.0], atol=1e-6)
+    # 0.1 m is within the per-step forward cap (5 m/s / 30 Hz = 0.167 m).
+    obs, info = env.step(np.array([0.1, 0.0, 0.0, 0.0]))
+    assert np.allclose(obs.position, [0.1, 0.0, 0.0], atol=1e-6)
     # velocity = displacement / dt
-    assert obs.velocity[0] == pytest.approx(3.0 * 30.0, rel=1e-6)
+    assert obs.velocity[0] == pytest.approx(0.1 * 30.0, rel=1e-6)
     assert not obs.collided
 
 
 def test_collision_flag_when_out_of_bounds():
-    env = MockAirSimDroneEnv(MockEnvConfig(bounds_m=5.0))
+    env = MockAirSimDroneEnv(MockEnvConfig(bounds_m=0.1))
     env.reset(EPISODE)
-    obs, _ = env.step(np.array([9.0, 0.0, 0.0, 0.0]))  # clips to 9 but >5 bound
+    # A max forward command clips to ~0.167 m > 0.1 m bound -> collision.
+    obs, _ = env.step(np.array([9.0, 0.0, 0.0, 0.0]))
     assert obs.collided
 
 

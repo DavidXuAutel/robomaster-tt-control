@@ -7,6 +7,10 @@ from experiments.aerial.eval.run_closed_loop import apply_body_delta
 from experiments.aerial.rl.env.action import (
     ACTION_DIM,
     DEFAULT_BODY_DELTA_LIMITS,
+    DEFAULT_STEP_HZ,
+    MACRO_PRIMITIVE_SPAN,
+    MAX_BODY_VELOCITY,
+    body_delta_limits,
     body_delta_to_velocity_ned,
     clip_body_delta,
     delta_to_nearest_primitive,
@@ -24,6 +28,24 @@ def test_clip_bounds_per_axis():
     clipped = clip_body_delta(huge)
     assert np.allclose(clipped, DEFAULT_BODY_DELTA_LIMITS)
     assert clipped.shape == (ACTION_DIM,)
+
+
+def test_per_step_cap_is_velocity_times_dt_not_macro():
+    # The continuous cap is a 33 ms increment, NOT the 9 m macro-primitive span.
+    dt = 1.0 / DEFAULT_STEP_HZ
+    assert np.allclose(DEFAULT_BODY_DELTA_LIMITS, MAX_BODY_VELOCITY * dt)
+    # Forward cap * control rate recovers the physical velocity (5 m/s).
+    assert DEFAULT_BODY_DELTA_LIMITS[0] * DEFAULT_STEP_HZ == pytest.approx(MAX_BODY_VELOCITY[0])
+    # And it is nowhere near the sparse macro span (which would be ~270 m/s).
+    assert DEFAULT_BODY_DELTA_LIMITS[0] < 0.2
+    assert MACRO_PRIMITIVE_SPAN[0] > 40 * DEFAULT_BODY_DELTA_LIMITS[0]
+
+
+def test_body_delta_limits_scale_with_dt():
+    assert np.allclose(body_delta_limits(0.2), MAX_BODY_VELOCITY * 0.2)
+    assert np.allclose(body_delta_limits(0.02), MAX_BODY_VELOCITY * 0.02)
+    with pytest.raises(ValueError):
+        body_delta_limits(0.0)
 
 
 def test_velocity_matches_displacement_over_dt():
