@@ -134,10 +134,13 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     print("[wm-bringup] OK: disk→buffer→window→stub-V1-gate path verified")
-    print(
-        "[wm-bringup] NOTE: dataset_v0 remains a smoke corpus — re-collect at "
-        "step_hz=8 before any real WM training."
-    )
+    if manifest_path.exists():
+        step_hz = float((manifest.get("meta") or {}).get("step_hz", 0) or 0)
+        if step_hz > 8.5:
+            print(
+                "[wm-bringup] NOTE: this looks like the V0 smoke corpus "
+                "(step_hz>8.5) — do not train a real WM on it."
+            )
     return 0
 
 

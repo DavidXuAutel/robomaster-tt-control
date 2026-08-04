@@ -1,24 +1,22 @@
 #!/usr/bin/env bash
 # Two-tier V1 dataset collection for the aerial WAM RL skeleton.
 #
-# The V0 run (dataset_v0) commanded 12 Hz but achieved 7.1-8.3 (mean 7.9), so
-# every action label encoded a step the loop couldn't hit — a ~17% per-step
-# dt-desync across all 3138 steps. It's a smoke set, not a training set. This
-# script collects a clean V1 set in two tiers, each run at a rate it can hit so
-# commanded dt matches actual loop time:
+# The V0 run (dataset_v0) commanded 12 Hz but achieved 7.1-8.3 (mean 7.9) because
+# ``moveByVelocityAsync(..., duration=dt).join()`` makes wall ≥ dt + RPC — so
+# achieved_hz can never equal step_hz. airsim_env.step now rate-locks with
+# async+sleep (no blocking join), so commanded dt == wall dt. This script
+# collects a clean V1 set in two tiers:
 #
 #   Tier RGB    RGB-only @ 8 Hz  (grab_depth off)   -> dataset_v1_rgb
-#     The bulk V1 training set. 8 Hz sits under the measured RGB-only closed-loop
-#     floor (7.1-8.3), so labels stay consistent. This is what WM/dynamics and
-#     policy train on.
+#     The bulk V1 training set. With the rate-lock fix, achieved ≈ 7–8 Hz when
+#     commanding 8. This is what WM/dynamics and policy train on.
 #
-#   Tier DEPTH  RGB+depth @ 3 Hz (grab_depth on)    -> dataset_v1_depth
-#     A SMALL sample. Per-step DepthPlanar drops the closed loop to ~3 Hz, so it
-#     runs at 3 Hz (again: commanded == achievable). This tier is supervision for
-#     the v2 perception heads ([1b]/[1c]/[1d]) — RGB<->depth pairs over the scene
-#     distribution. It is NOT dynamics/policy data: at a different dt the per-step
-#     action cap differs, so its trajectories diverge from the RGB tier's. Exact
-#     state correspondence with Tier RGB is neither expected nor needed.
+#   Tier DEPTH  RGB+depth @ 1 Hz (grab_depth on)    -> dataset_v1_depth
+#     A SMALL sample. Per-step DepthPlanar on the H100→4090 link costs ~1.3–1.4 s
+#     wall, so the rate-locked loop tops out near 0.7 Hz; commanding 1 Hz is the
+#     practical label (3 Hz was a pre-rate-lock estimate and cannot be hit). This
+#     tier is supervision for the v2 perception heads ([1b]/[1c]/[1d]) — RGB<->
+#     depth pairs over the scene distribution. It is NOT dynamics/policy data.
 #
 # Both tiers share one annotation (start/goal poses) and route through
 # collect_dataset.py, so both get the instant-crash quarantine + reset-collision
@@ -39,7 +37,7 @@
 #   DEPTH_EPISODES   Tier DEPTH episode count (small!)     (default 4)
 #   MAX_STEPS        steps per episode                     (default 200)
 #   STEP_HZ_RGB      Tier RGB rate                         (default 8)
-#   STEP_HZ_DEPTH    Tier DEPTH rate                       (default 3)
+#   STEP_HZ_DEPTH    Tier DEPTH rate                       (default 1)
 #   PYTHON_BIN       python interpreter                    (default python3)
 # AirSim host/port/camera/vehicle are read from sim_verify/config.env if present,
 # else fall back to the known 4090 defaults (10.229.20.125:41451).
@@ -70,7 +68,7 @@ RGB_EPISODES="${RGB_EPISODES:-20}"
 DEPTH_EPISODES="${DEPTH_EPISODES:-4}"
 MAX_STEPS="${MAX_STEPS:-200}"
 STEP_HZ_RGB="${STEP_HZ_RGB:-8}"
-STEP_HZ_DEPTH="${STEP_HZ_DEPTH:-3}"
+STEP_HZ_DEPTH="${STEP_HZ_DEPTH:-1}"
 
 # Common args shared by both tiers. Real collection needs a renderer + annotation.
 COMMON=(--backend "$BACKEND" --max-steps "$MAX_STEPS")

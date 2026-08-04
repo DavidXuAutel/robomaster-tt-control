@@ -155,20 +155,41 @@ class AirSimDroneEnv:
             raise
 
     def step(self, action: np.ndarray) -> tuple[Observation, Dict[str, Any]]:
-        """Execute a 4-D body delta as a velocity command over ``1/step_hz``."""
+        """Execute a 4-D body delta as a velocity command over ``1/step_hz``.
+
+        Wall-clock rate lock: ``moveByVelocityAsync(..., duration=dt).join()``
+        makes wall time ≥ dt + RPC, so ``achieved_hz`` can never match
+        ``step_hz`` (V0 commanded 12 → got 7.9; command-8 probes got ~6).
+        Fire the velocity command without joining, sleep to the labeled
+        deadline, then observe — commanded dt == wall dt. The next step's
+        velocity command replaces this one on the renderer.
+        """
         client = self._connect()
         airsim = self._airsim
         dt = 1.0 / float(self.config.step_hz)
         cmd = clip_body_delta(action, body_delta_limits(dt))
 
+        # Rate-lock the whole step (yaw read + async move + observe) to `dt`.
+        # Putting t0 after observe_state left a naked RPC outside the pad and
+        # capped achieved Hz at ~7 when commanding 8.
+        t0 = time.perf_counter()
         yaw = self.observe_state()[6]
         vx, vy, vz_ned, yaw_rate_deg = body_delta_to_velocity_ned(cmd, yaw, dt)
         yaw_mode = airsim.YawMode(is_rate=True, yaw_or_rate=yaw_rate_deg)
         client.moveByVelocityAsync(
             vx, vy, vz_ned, dt, yaw_mode=yaw_mode, **self._vk
-        ).join()
-
+        )
+        # Leave headroom for observe() RPCs (Scene ~15-20 ms cross-net; keep
+        # 40 ms) so the labeled deadline is hit after the frame returns.
+        observe_budget = 0.04
+        remaining = dt - (time.perf_counter() - t0)
+        if remaining > observe_budget:
+            time.sleep(remaining - observe_budget)
         obs = self.observe()
+        remaining = dt - (time.perf_counter() - t0)
+        if remaining > 0:
+            time.sleep(remaining)
+
         info = {"cmd": cmd.tolist(), "vx": vx, "vy": vy, "vz_ned": vz_ned}
         return obs, info
 
