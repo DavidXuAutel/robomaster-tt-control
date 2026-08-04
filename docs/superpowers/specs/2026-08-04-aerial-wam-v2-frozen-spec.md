@@ -1,11 +1,20 @@
 # Aerial WAM v2 — 冻结版建造契约（goal-first V-1 → V0，并定义 V1）
 
-> **状态：FROZEN（2026-08-04）。** 本文是当前这一轮工作的**唯一权威建造契约**。它合并并**钉死**以下三份来源，之后不再发散：
+> **状态：FROZEN（2026-08-04；§4.1 数值门禁补丁同日）。** 本文是当前这一轮工作的**唯一权威建造契约**。它合并并**钉死**以下三份来源，之后不再发散：
 > - 设计母本：[`docs/superpowers/specs/2026-08-03-aerial-wam-pure-vision-design-v2.md`](../specs/2026-08-03-aerial-wam-pure-vision-design-v2.md)（§1.2 纯视觉边界、§3 骨架、§4 模块、§7 分期、§8 接口、§11 非目标）
 > - 配方补充：[`docs/design/2026-08-04-dreamerv3-alignment-optim.md`](../../design/2026-08-04-dreamerv3-alignment-optim.md)（§1.5 迁移边界）
 > - 能力核查：[`docs/superpowers/specs/2026-08-03-aerial-sim-capability-verification-spec-v1.md`](../specs/2026-08-03-aerial-sim-capability-verification-spec-v1.md)（Fork A/A-/B）
 >
 > **本文不引入任何新设计。** 它只做一件事：把已确认的决策、门禁、接口、非目标固定成一份不可再议的清单，并与现有代码骨架一一对应。**凡本文未列入本期范围者，一律不做**（见 §8）。母本 §2–§6 的架构描述仍然有效，本文不复制、只索引。
+
+### Glossary（命名债务，钉死）
+
+| 用语 | 含义 | 不是 |
+|---|---|---|
+| **旧 H100「V1 validate」**（`_wm_train_validate` on `dataset_v1_rgb` / `wm_step_5000.pt`） | **非发散地板**：学习↓ + 开环 H≤15 有界 | 不是母本 §7 的 V1 档，也不是本期 V0 四信号 |
+| **本期 V0** | RGB 编码 + 多帧深度头 + VIO；四信号全过 | 不是单柱 RGB RSSM |
+| **本期 V1**（只定义） | τ + 短程想象规划 + τ/D̂ 双通道罩 | 不是「翻 `dynamics.kind=torch`」本身 |
+| **`aerial_v1_wm_gate_invalidated`** | 作废上述地板 ckpt 的治理凭据 | 不否定配方代码可复用（须随机重训） |
 
 ---
 
@@ -47,7 +56,7 @@
 |---|---|---|---|
 | `z_t` | `[1]` → `[2][4][5]` | 当前视觉状态 | `dynamics_torch.py`（RSSM `[h‖z]` 特征） |
 | `D̂_t, σ_t` | `[1b]` → `[5]`/安全 | 局部深度 + 不确定度 | **待建** `_DepthHead`（Step 3） |
-| `vio` | `[1c]` → `[2][3][5]` | 局部度量位移/速度/尺度/高度 | **待建** `vio.py`（Step 3） |
+| `vio` | `[1c]` → `[2][3][5]` | 局部度量位移/速度/尺度/高度 | **`vio.py` 数学已落**（Step 3 Mac）；学习头仍待 4090 语料 |
 | `τ` | `[1d]` → 安全罩 | 碰撞时间（独立于 `D̂`） | **V1 组件，本期只定义** |
 | `mem` | `[2]` → 高层 | 局部占据 + 拓扑 | **V2，本期不做** |
 | `goal_hyp` | `[3]` → 高层 | 命中假设 + 置信度 + 相对方位 | **V3，本期不做** |
@@ -80,18 +89,39 @@ connected ∧ real_rgb ∧ imu ∧ (baro∨gps) ∧ collision ∧ depth ∧ dept
 
 ### V0（本期主目标）— 四个**同权**信号，缺一不可
 
-`_v0_gate.py`（**待建**，H100 入口；numpy 度量函数拆出供 Mac 单测，镜像 `wm_eval`↔`_wm_fidelity_eval`）跑下表，**四者全过**才退出 0；否则非零。
+`_v0_gate.py`（H100 入口；numpy 度量在 `v0_metrics.py` / `vio.py`，Mac 单测）跑下表，**四者全过**才退出 0；否则非零。定性意图仍见母本 §7；**可执行数值钉死于 §4.1**（评估补丁 2026-08-04）。
 
-| 信号 | 度量 | 复用 | 过关条件 |
+| 信号 | 度量 | 复用 | 过关条件（摘要；细则 §4.1） |
 |---|---|---|---|
-| ① 非塌缩 | 训练曲线 + 深度重建见证 | `_wm_train_validate._check_learning`、`post_entropy_frac`、`loss_recon` | loss↓≥2%；recon 不劣化；min entropy-frac ≥ `collapse_entropy_frac`；深度重建有界 |
-| ② 接近量上升 | sim rollout 上 progress-vs-baseline 聚合 | `NavigationReward.progress`、`manifest.json` returns | 平均 progress + 终点 Δdist 优于随机动作对照（相对基线） |
-| ③ D̂ 尺度与 VIO 一致 | 尺度一致性度量（numpy，Mac 可测） | 深度头 `mu`、VIO `scale` | 留出窗口上相对尺度误差低于容差 |
-| ④ 简单近障生效 | shield-on vs shield-off 近障评测 | `ThresholdSafetyShield`、`CollectStats.interventions` | 干预先于接触；近碰撞率相对 shield-off 下降 |
+| ① 非塌缩 | 训练曲线 + 深度重建见证 | `_wm_train_validate._check_learning`、`post_entropy_frac`、`loss_recon` | loss↓≥2%；recon 不劣化；min entropy-frac ≥ `collapse_entropy_frac`（默认 0.10）；深度 AbsRel 有界 |
+| ② 接近量上升 | sim rollout progress-vs-random | `NavigationReward.progress`、同起点对照 | N=16；mean progress_sum 优于随机 +5.0 **或** mean 终点距优于随机 ≥3.0 m |
+| ③ D̂ 尺度与 VIO 一致 | 相对尺度误差 | `vio.scale_relative_error` | 运动窗上 median 相对误差 ≤ 0.25 |
+| ④ 简单近障生效 | shield-on vs shield-off | `ThresholdSafetyShield`、`CollectStats.interventions` | 干预先于接触 ≥50%；近碰撞率 ≤ shield-off 的 80% |
 
-**④ 的接线**：`collector.py` 须在调 `safety.should_override` **之前**由深度头产出 `depth_min_pred`（今天两者皆空），并置 `safety.kind: threshold`。
+**④ 的接线**：`collector.py` 须在调 `safety.should_override` **之前**由深度头产出 `depth_min_pred`（今天两者皆空）。**评测期**用 CLI/`_v0_gate` 临时 `safety.kind=threshold` 跑 shield-on/off 对照，**不**改默认 `configs/aerial_rl.yaml` 直到四信号全过。
 
 **仅在四信号全过后翻转的旗标**：`world_model.depth_head.enable: true`、`safety.kind: threshold`。`dynamics.kind` / `enable_wm_update` 在 V0 bring-up 期间保持 V0 姿态（清洁 co-train 走离线 `_wm_train_validate`/`_v0_gate`，不走 live corrector）；只在进入 V1 时才翻到 `torch`/`true`。**严禁**顺带打开 `enable_policy_update`（那是 V4）。
+
+### 4.1 V0 数值门禁表（钉死；实现以本表为准）
+
+常量落点：`experiments/aerial/rl/v0_metrics.py::V0GateThresholds`（与下表同步；改阈值 = 修订本节）。
+
+| ID | 参数 | 钉死值 | 协议 |
+|---|---|---|---|
+| ①a | `loss_drop_ratio` | last10% mean < first10% mean × **0.98** | 同 `_wm_train_validate._check_learning`；全 finite |
+| ①b | `recon_non_worse` | last10% recon ≤ first10% recon | RGB recon；深度头接入后另计 ①d |
+| ①c | `min_post_entropy_frac` | ≥ **`collapse_entropy_frac`**（默认 **0.10**） | 训练全程 min |
+| ①d | `depth_absrel_max` | holdout median AbsRel ≤ **0.30** | 仅当 depth 头与 GT depth 语料存在；否则 ①d=SKIP（整门 FAIL——V0 需要深度柱） |
+| ②a | `n_eval_episodes` | **16** | 与 annotation 起点对齐；seed=0 |
+| ②b | `progress_margin` | mean(progress_sum_policy) ≥ mean(progress_sum_random) + **5.0** | 同起点；随机动作为 `U(-1,1)` clip 到 body_delta_limits |
+| ②c | `dist_margin_m` | mean(final_dist_policy) ≤ mean(final_dist_random) − **3.0** | ②b ∨ ②c 任一即可过 ② |
+| ③a | `min_motion_m` | 窗内 ‖Δp‖ ≥ **0.5** m 才计入 | 静止窗不参与尺度比 |
+| ③b | `scale_rel_err_max` | median |ŝ_D − s_VIO| / max(s_VIO, ε) ≤ **0.25** | `vio.scale_relative_error`；ε=1e-3 |
+| ④a | `near_collision_depth_m` | GT `depth_min` < **1.5** m | 与 `ThresholdSafetyShield.min_depth_m` 对齐 |
+| ④b | `intervention_before_contact_min` | **≥ 0.50** | 在最终 `collided` 的 episode 中，首次 intervention 步号 < 首次 contact 步号 的比例 |
+| ④c | `near_coll_rate_ratio_max` | shield-on / shield-off ≤ **0.80** | near_coll 帧占比；同 N、同起点；**仅评测 CLI 开罩** |
+
+Shield 对照协议：默认 yaml 保持 `safety.kind: null`；`_v0_gate --shield-eval` 在进程内构造 on/off 两套 collector，不写回配置文件。
 
 ### V1（本期只定义，不实现）
 
@@ -135,12 +165,13 @@ connected ∧ real_rgb ∧ imu ∧ (baro∨gps) ∧ collision ∧ depth ∧ dept
 
 ---
 
-## 7. 当前实现状态（截至 2026-08-04，commit `59781a4`）
+## 7. 当前实现状态（截至 2026-08-04，含评估落地补丁）
 
 - **已完成并 checkpoint**：Step 0（config 复原 V0 姿态、`wm_step_5000.pt` 作废、清理陈旧 docstring）；Step 2（schema v2 + `perception_data.py` + `dt_from_timestamps`）；Step 1 Mac 部分（`depth_rate_ok`、`_depth_continuous` probe、Fork A 合取加 `depth_rate`、`verdict.decide` 抽为纯函数）。
-- **测试**：rl `131 passed / 1 skipped` + sim_verify `18 passed`，均 numpy-only。
+- **评估落地（本补丁）**：§4.1 数值门禁表；glossary；`vio.py`（积分/尺度误差，Mac 可测）；`v0_metrics.py` + `_v0_gate.py`（阈值与判定骨架，完整 sim 评测仍待 4090 语料 + 深度头）；4090 本机采数手册。
+- **测试**：rl numpy 套件 + sim_verify；见 CI/本地 pytest。
 - **阻塞在 4090（本沙箱不可为）**：Step 1 剩余的 4090 本地采集、`step_hz` 重测、`_refuse_v0` 阈值更新。
-- **下一步**：Step 3 的 Mac 可测件（VIO 积分数学、深度-尺度一致性度量）可先行；训练件待 4090 采集落地。
+- **下一步**：4090 loopback Fork A + depth 采数；其后 DepthHead 训练接入 ①d/③/④。
 
 ---
 
@@ -164,8 +195,9 @@ connected ∧ real_rgb ∧ imu ∧ (baro∨gps) ∧ collision ∧ depth ∧ dept
 ## 9. 文件清单
 
 **改**：`configs/aerial_rl.yaml`（复原 gate；加 `world_model.depth_head`；`safety.kind: threshold`；重导 `step_hz`）· `dataset.py`（schema v2 + loader）· `dynamics_torch.py`（深度头；清洁重训）· `collector.py`（产 `depth_min_pred`，把 `wm_out` 传给罩）· `sim_verify/{probes/t2_capability.py, lib/sanity.py, verdict.py}`（depth-rate gate）· `_wm_train_validate.py`（`_refuse_v0` 阈值）。
-**新**：`perception_data.py`（✅）· `vio.py`（待）· `_v0_gate.py`（待）。
+**新**：`perception_data.py`（✅）· `vio.py`（✅ 数学）· `v0_metrics.py`（✅）· `_v0_gate.py`（✅ 骨架；完整评测待语料）· `docs/handover/2026-08-04-v0-4090-local-collect-runbook.md`（✅）。
 
 ---
 
 *本文冻结。修改须显式修订本节以上任一「钉死」条目并注明日期，否则以本文为准。*
+*修订 2026-08-04（评估落地）：§ glossary、§4.1 数值门禁、`vio`/`v0_metrics`/`_v0_gate` 落点。*
