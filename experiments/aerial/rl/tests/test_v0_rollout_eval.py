@@ -9,6 +9,7 @@ pass happens on airsim with a trained depth head.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -174,3 +175,49 @@ def test_assemble_verdict_requires_depth_pillar():
     )
     assert not no_d["ok"], no_d
     assert no_d["passed"]["1"] is False
+
+
+# --------------------------------------------------------------------------- #
+# split evaluation (plan B): --signals subsets → --emit partials → --merge     #
+# --------------------------------------------------------------------------- #
+def test_merge_partials_reproduces_single_host_verdict(tmp_path):
+    from experiments.aerial.rl import _v0_gate as gate
+
+    sig1 = {"ok": True, "abc": _ok(), "d": _ok()}
+    part_13 = {"partial": True, "signals": {"1": sig1, "3": _ok()}}
+    part_24 = {"partial": True, "signals": {"2": _ok(), "4": _ok()}}
+    p13 = tmp_path / "part_13.json"
+    p24 = tmp_path / "part_24.json"
+    p13.write_text(json.dumps(part_13))
+    p24.write_text(json.dumps(part_24))
+
+    merged = gate._merge_partials([p13, p24])
+    assert set(merged) == {"1", "2", "3", "4"}
+    verdict = metrics.aggregate_v0_verdict(merged)
+    assert verdict["ok"], verdict
+
+
+def test_merge_missing_signal_is_not_a_pass(tmp_path):
+    from experiments.aerial.rl import _v0_gate as gate
+
+    p13 = tmp_path / "part_13.json"
+    p13.write_text(json.dumps({"signals": {"1": {"ok": True}, "3": {"ok": True}}}))
+    merged = gate._merge_partials([p13])
+    verdict = metrics.aggregate_v0_verdict(merged)
+    assert not verdict["ok"], verdict  # ②/④ absent → cannot pass
+
+
+def test_parse_signals_subset_and_default():
+    from experiments.aerial.rl import _v0_gate as gate
+
+    assert gate._parse_signals(None) == {"1", "2", "3", "4"}
+    assert gate._parse_signals("1,3") == {"1", "3"}
+    assert gate._parse_signals(" 2 , 4 ") == {"2", "4"}
+
+
+def test_merge_cli_exits_nonzero_when_incomplete(tmp_path):
+    from experiments.aerial.rl import _v0_gate as gate
+
+    p = tmp_path / "part.json"
+    p.write_text(json.dumps({"signals": {"1": {"ok": True}, "3": {"ok": True}}}))
+    assert gate.main(["--merge", str(p)]) == 1

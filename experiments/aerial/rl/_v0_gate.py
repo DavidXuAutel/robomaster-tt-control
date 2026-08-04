@@ -19,8 +19,32 @@ both ①d and ③ FAIL, so the whole gate FAILs. GT depth alone can never pass V
         --depth-ckpt .../depth_ckpt/depth_step_2000.pt \\
         --rollout-eval --device cuda
 
-Does **not** flip ``configs/aerial_rl.yaml`` gates — that happens only after this
-process exits 0 (human / follow-up commit).
+**Split evaluation (§6 Step 6 plan B — the renderer lives on the 4090, not the
+H100).** ②/④ need a live obstacle env, so score the offline signals where the
+data + weights are and the online signals where the renderer is, then merge:
+
+    # H100 — offline ①(a–d) + ③ (no renderer needed):
+    python -m experiments.aerial.rl._v0_gate --signals 1,3 \\
+        --dataset .../dataset_v0_local_depth \\
+        --learning-log .../wm_ckpt/wm_train.jsonl \\
+        --depth-ckpt .../depth_ckpt/depth_step_2000.pt \\
+        --device cuda --emit part_13.json
+
+    # 4090 — online ②/④ against the airsim renderer (env.backend=airsim):
+    python -m experiments.aerial.rl._v0_gate --signals 2,4 \\
+        --config configs/aerial_rl.yaml \\
+        --depth-ckpt .../depth_ckpt/depth_step_2000.pt \\
+        --device cuda --emit part_24.json
+
+    # anywhere — authoritative four-signal verdict:
+    python -m experiments.aerial.rl._v0_gate --merge part_13.json part_24.json
+
+A subset run emits a ``partial`` verdict and exits 0 iff every *requested* signal
+passed — it is NOT the gate. Only ``--merge`` of all four (or a full single-host
+run) produces the authoritative pass that a human may act on.
+
+Does **not** flip ``configs/aerial_rl.yaml`` gates — that happens only after the
+authoritative verdict exits 0 (human / follow-up commit).
 """
 from __future__ import annotations
 
@@ -89,6 +113,51 @@ def assemble_verdict(
         "d": s1d,
     }
     return metrics.aggregate_v0_verdict({"1": sig1, "2": s2, "3": s3, "4": s4})
+
+
+_ALL_SIGNALS = ("1", "2", "3", "4")
+
+
+def _parse_signals(spec: Optional[str]) -> set:
+    """Parse ``--signals 1,3`` → {"1","3"}; default (None) = all four."""
+    if not spec:
+        return set(_ALL_SIGNALS)
+    req = {s.strip() for s in spec.split(",") if s.strip()}
+    bad = req - set(_ALL_SIGNALS)
+    if bad:
+        raise SystemExit(f"[v0-gate] --signals: unknown {sorted(bad)}; pick from 1,2,3,4")
+    if not req:
+        raise SystemExit("[v0-gate] --signals: empty selection")
+    return req
+
+
+def _merge_partials(paths: List[Path]) -> Dict[str, Any]:
+    """Union the per-signal dicts from partial (or full) verdict JSON files.
+
+    Accepts either a partial ``{"signals": {...}}`` or a full verdict
+    ``{"details": {...}}`` blob. Later files win on a duplicate signal id (with a
+    warning) — normally the two hosts cover disjoint ids (1,3 vs 2,4).
+    """
+    signals: Dict[str, Any] = {}
+    for pth in paths:
+        blob = json.loads(pth.read_text())
+        part = blob.get("signals") or blob.get("details") or {}
+        if not part:
+            print(f"[v0-gate] WARN: {pth} has no signals/details block", file=sys.stderr)
+        for k, v in part.items():
+            if k in signals:
+                print(f"[v0-gate] WARN: signal {k} in multiple partials; {pth} wins",
+                      file=sys.stderr)
+            signals[k] = v
+    return signals
+
+
+def _emit(obj: Dict[str, Any], path: Optional[str]) -> None:
+    text = json.dumps(obj, indent=2, default=str)
+    print(text)
+    if path:
+        Path(path).write_text(text + "\n")
+        print(f"[v0-gate] wrote {path}", file=sys.stderr)
 
 
 def _signal1abc_from_log(
@@ -295,7 +364,17 @@ def _self_check(thr: metrics.V0GateThresholds) -> int:
         s1abc=s1abc, s1d=_signal1d(None, None, thr), s2=s2, s3=s3, s4=s4
     )
     assert not no_depth["ok"], no_depth
-    print("[v0-gate] self-check PASS (incl. depth-pillar enforcement)")
+
+    # Split-eval (plan B): merging disjoint partials {1,3}+{2,4} must reproduce
+    # the single-host verdict, and a lone partial must NOT read as a pass.
+    sig1 = {"ok": bool(s1abc.get("ok") and s1d.get("ok")), "abc": s1abc, "d": s1d}
+    part_13 = {"1": sig1, "3": s3}
+    part_24 = {"2": s2, "4": s4}
+    merged = metrics.aggregate_v0_verdict({**part_13, **part_24})
+    assert merged["ok"] == verdict["ok"], (merged, verdict)
+    lone = metrics.aggregate_v0_verdict(part_13)  # missing 2,4
+    assert not lone["ok"], lone
+    print("[v0-gate] self-check PASS (incl. depth-pillar enforcement + split merge)")
     print(json.dumps({"thresholds": asdict(thr), "verdict": verdict["passed"]}, indent=2))
     return 0
 
@@ -307,6 +386,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--depth-ckpt", default=None, help="trained _DepthHead .pt (①d/③/④ depth pillar)")
     p.add_argument("--config", default="configs/aerial_rl.yaml", help="for ②/④ rollout env")
     p.add_argument("--rollout-eval", action="store_true", help="run ②/④ paired rollouts")
+    p.add_argument("--signals", default=None,
+                   help="subset to score, e.g. '1,3' (H100 offline) or '2,4' (4090 renderer); "
+                        "default = all four. A subset emits a PARTIAL verdict, not the gate.")
+    p.add_argument("--emit", default=None, help="write the (partial or full) verdict JSON here")
+    p.add_argument("--merge", nargs="+", default=None,
+                   help="combine partial verdict JSONs into the authoritative four-signal gate")
     p.add_argument("--device", default="cpu")
     p.add_argument("--n-eval-episodes", type=int, default=None, help="override N (default §4.1 = 16)")
     p.add_argument("--max-steps", type=int, default=200)
@@ -321,30 +406,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.self_check:
         return _self_check(thr)
 
-    if not args.dataset:
-        print("[v0-gate] FAIL: --dataset required (or --self-check)", file=sys.stderr)
-        return 2
+    if args.merge:
+        signals = _merge_partials([Path(m) for m in args.merge])
+        verdict = metrics.aggregate_v0_verdict(signals)
+        _emit(verdict, args.emit)
+        print(f"[v0-gate] MERGED {'PASS' if verdict['ok'] else 'FAIL'}")
+        return 0 if verdict["ok"] else 1
 
-    root = Path(args.dataset)
-    _refuse_rgb_only_desync(root, args.allow_incomplete)
-
-    # Depth-head predictions (①d + ③). Absent → depth pillar FAILs both.
-    pred_depth: Optional[np.ndarray] = None
-    gt_depth: Optional[np.ndarray] = None
-    vel: Optional[np.ndarray] = None
-    timestamps: Optional[np.ndarray] = None
-    if args.depth_ckpt:
-        windows = _sample_windows(root, window=int(args.window), max_windows=int(args.max_windows))
-        if not windows:
-            print(f"[v0-gate] FAIL: no episode >= {args.window} steps for depth eval", file=sys.stderr)
-            return 1
-        arr, pred_full = _predict_depth_over_windows(
-            Path(args.depth_ckpt), windows, device=args.device
-        )
-        pred_depth = pred_full
-        gt_depth = arr.get("depth")
-        vel = arr.get("vel")
-        timestamps = arr.get("timestamps")
+    req = _parse_signals(args.signals)
+    need_dataset_depth = bool({"1", "3"} & req)   # ①d + ③ read depth over the corpus
+    need_rollout = bool({"2", "4"} & req) or args.rollout_eval
 
     thr_eff = thr
     if args.n_eval_episodes is not None:
@@ -352,19 +423,47 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         thr_eff = replace(thr, n_eval_episodes=int(args.n_eval_episodes))
 
-    results: Dict[str, Dict[str, Any]] = {}
-    s1abc = _signal1abc_from_log(
-        Path(args.learning_log) if args.learning_log else None, thr
-    )
-    # ①d scores the head's prediction at the last frame of each window vs GT.
-    s1d = _signal1d(
-        None if pred_depth is None else pred_depth[:, -1],
-        None if gt_depth is None else gt_depth[:, -1],
-        thr,
-    )
-    s3 = _signal3(pred_depth, vel, timestamps, thr)
+    # --- depth-head predictions over dataset windows (①d + ③; H100/4090 GPU) --- #
+    pred_depth: Optional[np.ndarray] = None
+    gt_depth: Optional[np.ndarray] = None
+    vel: Optional[np.ndarray] = None
+    timestamps: Optional[np.ndarray] = None
+    if need_dataset_depth:
+        if not args.dataset:
+            print("[v0-gate] FAIL: --dataset required for signals ①/③", file=sys.stderr)
+            return 2
+        root = Path(args.dataset)
+        _refuse_rgb_only_desync(root, args.allow_incomplete)
+        if args.depth_ckpt:
+            windows = _sample_windows(root, window=int(args.window), max_windows=int(args.max_windows))
+            if not windows:
+                print(f"[v0-gate] FAIL: no episode >= {args.window} steps for depth eval", file=sys.stderr)
+                return 1
+            arr, pred_full = _predict_depth_over_windows(
+                Path(args.depth_ckpt), windows, device=args.device
+            )
+            pred_depth = pred_full
+            gt_depth = arr.get("depth")
+            vel = arr.get("vel")
+            timestamps = arr.get("timestamps")
 
-    if args.rollout_eval:
+    # --- score only the requested signals ------------------------------------ #
+    signals: Dict[str, Dict[str, Any]] = {}
+    if "1" in req:
+        s1abc = _signal1abc_from_log(
+            Path(args.learning_log) if args.learning_log else None, thr
+        )
+        # ①d scores the head's prediction at the last frame of each window vs GT.
+        s1d = _signal1d(
+            None if pred_depth is None else pred_depth[:, -1],
+            None if gt_depth is None else gt_depth[:, -1],
+            thr,
+        )
+        signals["1"] = {"ok": bool(s1abc.get("ok") and s1d.get("ok")), "abc": s1abc, "d": s1d}
+    if "3" in req:
+        signals["3"] = _signal3(pred_depth, vel, timestamps, thr)
+
+    if need_rollout and ({"2", "4"} & req):
         s2, s4 = _signals_2_4_from_rollouts(
             Path(args.config), thr_eff,
             depth_ckpt=Path(args.depth_ckpt) if args.depth_ckpt else None,
@@ -373,15 +472,30 @@ def main(argv: Optional[List[str]] = None) -> int:
             max_steps=int(args.max_steps),
             seed=int(args.seed),
         )
-    else:
-        s2 = {"ok": False, "reason": "pass --rollout-eval to run ② progress-vs-random"}
-        s4 = {"ok": False, "reason": "pass --rollout-eval (+ --depth-ckpt) to run ④ shield on/off"}
+        if "2" in req:
+            signals["2"] = s2
+        if "4" in req:
+            signals["4"] = s4
 
-    verdict = assemble_verdict(s1abc=s1abc, s1d=s1d, s2=s2, s3=s3, s4=s4)
-    results = verdict["details"]  # for the printed dump
-    print(json.dumps(verdict, indent=2, default=str))
-    print(f"[v0-gate] {'PASS' if verdict['ok'] else 'FAIL'}")
-    return 0 if verdict["ok"] else 1
+    # --- assemble: full run = authoritative gate; subset = partial ----------- #
+    if req == set(_ALL_SIGNALS):
+        verdict = metrics.aggregate_v0_verdict(signals)
+        _emit(verdict, args.emit)
+        print(f"[v0-gate] {'PASS' if verdict['ok'] else 'FAIL'}")
+        return 0 if verdict["ok"] else 1
+
+    all_ok = bool(signals) and all(bool(v.get("ok")) for v in signals.values())
+    partial = {
+        "partial": True,
+        "requested": sorted(req),
+        "all_requested_ok": all_ok,
+        "signals": signals,
+        "thresholds": asdict(thr),
+    }
+    _emit(partial, args.emit)
+    print(f"[v0-gate] PARTIAL {sorted(req)}: {'PASS' if all_ok else 'FAIL'} "
+          "(NOT the gate — merge all four with --merge for the authoritative verdict)")
+    return 0 if all_ok else 1
 
 
 if __name__ == "__main__":  # pragma: no cover
