@@ -121,6 +121,8 @@ connected ∧ real_rgb ∧ imu ∧ (baro∨gps) ∧ collision ∧ depth ∧ dept
 | ④b | `intervention_before_contact_min` | **≥ 0.50** | 在最终 `collided` 的 episode 中，首次 intervention 步号 < 首次 contact 步号 的比例 |
 | ④c | `near_coll_rate_ratio_max` | shield-on / shield-off ≤ **0.80** | near_coll 帧占比；同 N、同起点；**仅评测 CLI 开罩** |
 
+**③ 适用性注记（不改钉死值 0.25）**：③ 用的深度侧长度 `ŝ_D = |median D̂_last − median D̂_first|`（`vio.scale_from_depth_change`）是一个**代理**，只在**窗内含前向运动分量**（相机大致沿运动方向、正对场景使视深随位移单调变化）时才与度量位移 `s_VIO=‖Δp‖` 同尺度。纯侧移/纯偏航/纯升降窗上该代理失真——`③a min_motion_m≥0.5 m` 只滤静止窗，**不**保证前向性。因此 ③ 应在**含前向分量的运动窗**上评；`window_scale_report` 的运动窗集合若以侧移/旋转为主，median 相对误差不具物理意义，需在采数/切窗阶段偏向前向轨迹（V1 τ 通道用 FOE 散度独立复核，缓解此代理的共因失真）。
+
 Shield 对照协议：默认 yaml 保持 `safety.kind: null`；`_v0_gate --shield-eval` 在进程内构造 on/off 两套 collector，不写回配置文件。
 
 ### V1（本期只定义，不实现）
