@@ -6,6 +6,7 @@ from experiments.aerial.rl.reward import (
     EVAL_SUCCESS_DIST_M,
     NavigationReward,
     RewardConfig,
+    maneuver_weight_at,
     reward_terms,
 )
 from experiments.aerial.rl.env.obs import Observation
@@ -86,3 +87,55 @@ def test_no_goal_yields_zero_progress():
     r.reset(goal=None, start_pos=np.zeros(3))
     _, _, terms = r.step(_obs([9.0, 9.0, 9.0]), np.zeros(4))
     assert terms["progress"] == 0.0
+
+
+# --- maneuver-penalty curriculum --------------------------------------------
+
+def test_curriculum_is_noop_when_final_equals_start():
+    # default config: final == start -> flat regardless of the metric
+    cfg = RewardConfig(w_maneuver=0.01)
+    for m in (-100.0, 0.0, 5.0, 1000.0):
+        assert maneuver_weight_at(m, cfg) == pytest.approx(0.01)
+
+
+def test_curriculum_flat_below_threshold_then_ramps():
+    cfg = RewardConfig(
+        w_maneuver=0.01, w_maneuver_final=0.05,
+        maneuver_curriculum_threshold=10.0, maneuver_curriculum_ramp=10.0,
+    )
+    assert maneuver_weight_at(0.0, cfg) == pytest.approx(0.01)   # below threshold
+    assert maneuver_weight_at(10.0, cfg) == pytest.approx(0.01)  # at threshold
+    assert maneuver_weight_at(15.0, cfg) == pytest.approx(0.03)  # halfway up the ramp
+    assert maneuver_weight_at(20.0, cfg) == pytest.approx(0.05)  # top of the ramp
+    assert maneuver_weight_at(999.0, cfg) == pytest.approx(0.05)  # never exceeds final
+
+
+def test_curriculum_monotone_nondecreasing():
+    cfg = RewardConfig(
+        w_maneuver=0.01, w_maneuver_final=0.05,
+        maneuver_curriculum_threshold=0.0, maneuver_curriculum_ramp=20.0,
+    )
+    ws = [maneuver_weight_at(m, cfg) for m in range(0, 30)]
+    assert all(b >= a for a, b in zip(ws, ws[1:]))
+    assert all(0.01 <= w <= 0.05 for w in ws)
+
+
+def test_curriculum_zero_ramp_is_a_step():
+    cfg = RewardConfig(
+        w_maneuver=0.01, w_maneuver_final=0.05,
+        maneuver_curriculum_threshold=10.0, maneuver_curriculum_ramp=0.0,
+    )
+    assert maneuver_weight_at(9.9, cfg) == pytest.approx(0.01)
+    assert maneuver_weight_at(10.0, cfg) == pytest.approx(0.05)  # jumps at threshold
+
+
+def test_curriculum_w_start_override_prevents_feedback():
+    # simulate the corrector mutating cfg.w_maneuver: passing the snapshot as
+    # w_start keeps the schedule anchored to the base, not the last output.
+    cfg = RewardConfig(
+        w_maneuver=0.03,  # already ramped up in a prior iter
+        w_maneuver_final=0.05,
+        maneuver_curriculum_threshold=0.0, maneuver_curriculum_ramp=10.0,
+    )
+    # metric=5 -> halfway; anchored to the true start 0.01, not the mutated 0.03
+    assert maneuver_weight_at(5.0, cfg, w_start=0.01) == pytest.approx(0.03)

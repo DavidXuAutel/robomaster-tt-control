@@ -28,6 +28,7 @@ from experiments.aerial.rl.buffer import ReplayBuffer
 from experiments.aerial.rl.collector import CollectStats, RolloutCollector
 from experiments.aerial.rl.dynamics import LatentDynamics
 from experiments.aerial.rl.imagination import imagine
+from experiments.aerial.rl.reward import maneuver_weight_at
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,10 @@ class SerialCorrectorLoop:
         self.imagination_policy = imagination_policy
         self.config = config or CorrectorConfig()
         self.episodes = episodes
+        # Snapshot the base maneuver weight ONCE: the curriculum rewrites
+        # ``collector.reward_cfg.w_maneuver`` each iteration, so the schedule must
+        # ramp from this immutable start, never from its own last output.
+        self._w_maneuver_start = float(getattr(self.collector.reward_cfg, "w_maneuver", 0.0))
 
     def run(self) -> List[IterationReport]:
         # Own the env lifecycle: whatever happens, release the single-consumer
@@ -86,11 +91,13 @@ class SerialCorrectorLoop:
             reports: List[IterationReport] = []
             for it in range(self.config.iterations):
                 stats = self.collector.collect(self.config.episodes_per_iter, episodes=self.episodes)
+                self._apply_maneuver_curriculum(stats)
                 wm = self._update_world_model()
                 rl = self._update_policy()
                 logger.info(
-                    "iter %d: %d steps @ %.1f Hz | wm=%s | rl=%s",
+                    "iter %d: %d steps @ %.1f Hz | wm=%s | rl=%s | w_man=%.4g",
                     it, stats.steps, stats.achieved_hz, wm.get("status", "?"), rl.get("status", "?"),
+                    self.collector.reward_cfg.w_maneuver,
                 )
                 reports.append(IterationReport(collect=stats, wm=wm, rl=rl))
             return reports
@@ -98,6 +105,23 @@ class SerialCorrectorLoop:
             close = getattr(getattr(self.collector, "env", None), "close", None)
             if callable(close):
                 close()
+
+    # -- maneuver-penalty curriculum (design doc §2.4) -------------------
+    def _apply_maneuver_curriculum(self, stats: CollectStats) -> None:
+        """Ramp ``reward_cfg.w_maneuver`` by competence (mean episode return).
+
+        Applied AFTER each iteration's collect, so the ramped weight takes effect
+        on the next iteration's episodes (``NavigationReward`` is rebuilt from
+        ``collector.reward_cfg`` per episode). No-op when the curriculum is
+        unconfigured (``w_maneuver_final == w_maneuver``) or a fully-skipped
+        iteration yields no returns to score.
+        """
+        if not stats.returns:
+            return
+        metric = float(np.mean(stats.returns))
+        self.collector.reward_cfg.w_maneuver = maneuver_weight_at(
+            metric, self.collector.reward_cfg, w_start=self._w_maneuver_start,
+        )
 
     # -- GATE V1: world-model training -----------------------------------
     def _update_world_model(self) -> Dict[str, Any]:

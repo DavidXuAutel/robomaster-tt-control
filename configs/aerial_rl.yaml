@@ -33,17 +33,55 @@ buffer:
 reward:
   w_progress: 1.0
   w_collision: 10.0
-  w_maneuver: 0.01
+  w_maneuver: 0.01         # maneuver-penalty curriculum START weight
   success_bonus: 10.0
   # Online arrival/termination radius (m). Deliberately TIGHTER than the eval
   # success metric (metrics.OPENFLY_SUCCESS_DIST_M = 20 m): the eval radius is a
   # loose "did it get to the region" score, not a per-step termination gate.
   success_dist_m: 3.0
+  # Maneuver-penalty curriculum (design doc §2.4): keep the aggressive-maneuver
+  # penalty low early, ramp it up as competence (mean episode return) rises. The
+  # corrector rewrites the live w_maneuver each iter, ramping from the START
+  # weight above toward w_maneuver_final over [threshold, threshold+ramp].
+  # Defaults below make it a NO-OP (final == start). The threshold is a project
+  # placeholder for OUR SEARCH regime — NOT DreamerV3's reward-50.0 (§1.5).
+  w_maneuver_final: 0.01
+  maneuver_curriculum_threshold: 0.0
+  maneuver_curriculum_ramp: 1.0
 
 dynamics:
-  kind: stub               # stub | wan  (wan = offline distillation source only)
+  kind: stub               # stub | wan | torch
+                           #   stub  = analytic latent (V0, offline-testable)
+                           #   wan   = offline distillation source ONLY (§4.4/§11)
+                           #   torch = DreamerV3 RSSM WM (V1) — needs torch (H100);
+                           #           reads the world_model block below.
   latent_dim: 8
   collide_radius_m: 2.0
+
+# DreamerV3-aligned latent world model (design doc §2.1/§2.2). Consumed by
+# dynamics.kind=torch (Phase 2b, dynamics_torch.py) — the recipe transfers, the
+# tuning does not (§1.5). Inert unless kind=torch is selected.
+world_model:
+  recurrent_dim: 512       # RSSM deterministic h (GRU)
+  stoch_dim: 32            # discrete latent groups
+  stoch_classes: 32        # classes per group (32x32 categorical z, DreamerV3)
+  pred_transform: symlog   # reward/progress head regresses symlog(target)
+  reward_head: two_hot
+  num_bins: 255            # two-hot grid over symlog space
+  bin_lo: -20.0
+  bin_hi: 20.0
+  free_bits: 1.0           # per-term KL floor (nats)
+  loss_scales:             # §1.5 governing boundary
+    pred: 1.0
+    dyn: 1.0
+    rep: 0.1
+  decoder:
+    train_only: true       # RGB reconstruction supervises training; not stepped online
+  lr: 1.0e-4
+  train_steps_per_update: 1
+  grad_clip: 1000.0        # clip_grad_norm_ (FastWAM convention)
+  device: cuda
+  checkpoint_dir: experiments/aerial/rl/artifacts/wm_ckpt
 
 imagination:
   batch: 64
@@ -63,6 +101,10 @@ corrector:
   enable_wm_update: false     # GATE V1: world-model training
   enable_policy_update: false # GATE V4: imagination actor-critic update
   strict_gates: false
+  # WM-training window sampling (used once enable_wm_update flips on): draw
+  # wm_batch windows of wm_window contiguous steps from the replay buffer.
+  wm_batch: 32
+  wm_window: 8
   smoke: false
 
 # Optional OpenFly annotation of episodes (start/goal poses). null -> single

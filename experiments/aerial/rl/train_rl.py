@@ -155,14 +155,19 @@ def build_from_config(cfg: Any) -> SerialCorrectorLoop:
     )
 
     rc = _get(cfg, "reward", {})
+    w_maneuver = float(_get(rc, "w_maneuver", 0.01))
     reward_cfg = RewardConfig(
         w_progress=float(_get(rc, "w_progress", 1.0)),
         w_collision=float(_get(rc, "w_collision", 10.0)),
-        w_maneuver=float(_get(rc, "w_maneuver", 0.01)),
+        w_maneuver=w_maneuver,
         # Online arrival/termination radius — tighter than the eval SR metric
         # (EVAL_SUCCESS_DIST_M=20 m); falls back to the tight online default.
         success_dist_m=float(_get(rc, "success_dist_m", DEFAULT_ONLINE_SUCCESS_DIST_M)),
         success_bonus=float(_get(rc, "success_bonus", 10.0)),
+        # Maneuver-penalty curriculum (§2.4); defaults leave it a no-op.
+        w_maneuver_final=float(_get(rc, "w_maneuver_final", w_maneuver)),
+        maneuver_curriculum_threshold=float(_get(rc, "maneuver_curriculum_threshold", 0.0)),
+        maneuver_curriculum_ramp=float(_get(rc, "maneuver_curriculum_ramp", 1.0)),
     )
 
     # Imagined dynamics shares the reward's arrival radius so imagined and real
@@ -177,6 +182,8 @@ def build_from_config(cfg: Any) -> SerialCorrectorLoop:
         enable_wm_update=bool(_get(cc, "enable_wm_update", False)),
         enable_policy_update=bool(_get(cc, "enable_policy_update", False)),
         strict_gates=bool(_get(cc, "strict_gates", False)),
+        wm_batch=int(_get(cc, "wm_batch", 32)),
+        wm_window=int(_get(cc, "wm_window", 8)),
         imagine_batch=int(_get(ic, "batch", 64)),
         imagine_horizon=int(_get(ic, "horizon", 10)),
         smoke=bool(_get(cc, "smoke", False)),

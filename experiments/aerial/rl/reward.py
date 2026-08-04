@@ -46,9 +46,42 @@ EVAL_SUCCESS_DIST_M = float(OPENFLY_SUCCESS_DIST_M)
 class RewardConfig:
     w_progress: float = 1.0
     w_collision: float = 10.0
-    w_maneuver: float = 0.01
+    w_maneuver: float = 0.01               # curriculum START weight
     success_dist_m: float = DEFAULT_ONLINE_SUCCESS_DIST_M
     success_bonus: float = 10.0
+    # Maneuver-penalty curriculum (design doc §2.4): keep the aggressive-maneuver
+    # penalty small early (exploration matters more than smoothness), then ramp it
+    # up as competence rises. ``w_maneuver`` is the start; the effective weight
+    # ramps linearly toward ``w_maneuver_final`` over the competence band
+    # ``[threshold, threshold + ramp]``. Defaults make the curriculum a NO-OP
+    # (final == start), so unconfigured runs behave exactly as before.
+    # NOTE (§1.5): the threshold is a project-tuned placeholder for OUR 4-D
+    # kinematic SEARCH regime — it is deliberately NOT DreamerV3's reward-50.0.
+    w_maneuver_final: float = 0.01
+    maneuver_curriculum_threshold: float = 0.0
+    maneuver_curriculum_ramp: float = 1.0
+
+
+def maneuver_weight_at(metric: float, cfg: RewardConfig, w_start: Optional[float] = None) -> float:
+    """Effective ``w_maneuver`` for a competence ``metric`` (e.g. mean episode return).
+
+    Linearly ramps from the START weight (``w_start`` if given, else
+    ``cfg.w_maneuver``) toward ``cfg.w_maneuver_final`` across the band
+    ``[threshold, threshold + ramp]``; flat before the threshold. Pass ``w_start``
+    explicitly (a snapshot of the base weight) when the caller mutates
+    ``cfg.w_maneuver`` between iterations, so the schedule never feeds its own
+    output back in as the start. Pure function of scalars — no side effects.
+    """
+    start = float(cfg.w_maneuver if w_start is None else w_start)
+    final = float(cfg.w_maneuver_final)
+    threshold = float(cfg.maneuver_curriculum_threshold)
+    ramp = float(cfg.maneuver_curriculum_ramp)
+    if final == start or metric < threshold:
+        return start
+    if ramp <= 0.0:
+        return final                       # step at the threshold
+    frac = min(1.0, max(0.0, (float(metric) - threshold) / ramp))
+    return start + frac * (final - start)
 
 
 def reward_terms(
