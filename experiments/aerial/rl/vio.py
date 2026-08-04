@@ -53,24 +53,24 @@ def window_motion_m(pos: np.ndarray) -> np.ndarray:
 
 
 def depth_median(depth: np.ndarray) -> np.ndarray:
-    """Per-frame median depth over spatial dims → ``[..., L]``.
+    """Per-frame median depth over spatial dims, preserving the frame axis.
 
-    ``depth`` is ``[..., L, H, W]`` (or already ``[..., L]``). Non-finite / ≤0
-    pixels are ignored; an all-invalid frame yields NaN.
+    Contract (frozen §4.1 ③ inputs): ``depth`` is either a spatial stack
+    ``[..., L, H, W]`` (ndim ≥ 3 → the last two axes are H,W) or already
+    per-frame ``[..., L]`` (ndim ≤ 2 → returned unchanged). Either way the frame
+    axis L survives, since ``scale_from_depth_change`` differences ``[..., -1]``
+    against ``[..., 0]`` along it. Non-finite / ≤0 pixels are ignored; an
+    all-invalid frame yields NaN.
     """
     d = np.asarray(depth, dtype=np.float64)
     if d.ndim >= 3:
-        spatial = tuple(range(d.ndim - 2, d.ndim))  # last two = H,W if present
-        # If shape is [..., L, H, W], median over H,W.
-        if d.ndim >= 4 or (d.ndim == 3 and d.shape[-1] != 3):
-            flat = d.reshape(*d.shape[:-2], -1)
-        else:
-            flat = d.reshape(*d.shape[:-1], -1)
-    else:
-        flat = d
-    masked = np.where(np.isfinite(flat) & (flat > 0), flat, np.nan)
-    with np.errstate(all="ignore"):
-        return np.nanmedian(masked, axis=-1).astype(np.float32)
+        # Flatten the trailing H,W grid into one axis, then median over it.
+        flat = d.reshape(*d.shape[:-2], -1)
+        masked = np.where(np.isfinite(flat) & (flat > 0), flat, np.nan)
+        with np.errstate(all="ignore"):
+            return np.nanmedian(masked, axis=-1).astype(np.float32)
+    # Already per-frame: no spatial grid to reduce; just sanitise ≤0 / non-finite.
+    return np.where(np.isfinite(d) & (d > 0), d, np.nan).astype(np.float32)
 
 
 def scale_from_motion(motion_m: np.ndarray) -> np.ndarray:
@@ -78,28 +78,20 @@ def scale_from_motion(motion_m: np.ndarray) -> np.ndarray:
     return np.asarray(motion_m, dtype=np.float32)
 
 
-def scale_from_depth_change(
-    depth_med: np.ndarray,
-    motion_m: np.ndarray,
-    *,
-    eps: float = 1e-3,
-) -> np.ndarray:
-    """Depth-implied scale: |Δ median_depth| aligned with motion magnitude.
+def scale_from_depth_change(depth_med: np.ndarray) -> np.ndarray:
+    """Depth-implied length scale: ``s_D = |d_last - d_first|`` over the frame axis.
 
     For a translating camera looking roughly along the motion, apparent depth
-    change correlates with metric motion. We use
-    ``s_D = |d_last - d_first|`` as the depth-side length scale to compare
-    against ``s_VIO = motion_m`` (both in metres when depth is metric GT).
+    change correlates with metric motion, so ``s_D`` is compared against
+    ``s_VIO = motion_m`` (both in metres when depth is metric GT). The
+    motion/eps handling lives in ``scale_relative_error``; this is purely the
+    depth-side length. NOTE: only physically meaningful on windows with a
+    forward motion component (frozen §4.1 ③ applicability note).
     """
     d = np.asarray(depth_med, dtype=np.float64)
     if d.shape[-1] < 2:
         return np.full(d.shape[:-1], np.nan, dtype=np.float32)
-    s_d = np.abs(d[..., -1] - d[..., 0])
-    # If depth is relative, ratio still comparable window-to-window; gate uses
-    # relative error between s_d and motion, so both must be finite & > eps.
-    _ = eps
-    _ = motion_m
-    return s_d.astype(np.float32)
+    return np.abs(d[..., -1] - d[..., 0]).astype(np.float32)
 
 
 def scale_relative_error(
@@ -156,7 +148,7 @@ def window_scale_report(
     motion = window_motion_m(pos)
     s_vio = scale_from_motion(motion)
     d_med = depth_median(depth)
-    s_d = scale_from_depth_change(d_med, motion, eps=eps)
+    s_d = scale_from_depth_change(d_med)
     err = scale_relative_error(
         s_d, s_vio, eps=eps, min_motion_m=min_motion_m, motion_m=motion
     )

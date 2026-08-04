@@ -58,52 +58,97 @@ def _refuse_bad_corpus(root: Path, allow: bool) -> None:
     _refuse_v0(root, allow)
 
 
-def _load_buffer(root: Path, window: int) -> ReplayBuffer:
+def _usable_episodes(root: Path, window: int) -> List[Any]:
+    """Episodes long enough for a window AND carrying per-frame GT depth."""
     episodes = ds.load_dataset(root, skip_quarantined=True)
     episodes = [ep for ep in episodes if len(ep) >= window]
     if not episodes:
         print(f"[depth-train] FAIL: no episode >= {window} steps", file=sys.stderr)
         raise SystemExit(1)
-    # Require depth on every frame of kept episodes.
-    with_depth = []
-    for ep in episodes:
-        if all(t.obs.depth is not None for t in ep):
-            with_depth.append(ep)
+    with_depth = [ep for ep in episodes if all(t.obs.depth is not None for t in ep)]
     if not with_depth:
         print("[depth-train] FAIL: no usable episode carries per-frame depth", file=sys.stderr)
         raise SystemExit(1)
-    buf = ReplayBuffer(capacity_episodes=len(with_depth) + 1, seed=0)
-    for ep in with_depth:
+    return with_depth
+
+
+def _split_train_holdout(
+    episodes: List[Any], *, holdout_frac: float, seed: int
+) -> tuple[List[Any], List[Any]]:
+    """Episode-level split so ①d AbsRel is scored on trajectories never trained on.
+
+    Deterministic (seeded permutation) and always leaves ≥1 episode for training.
+    With <2 usable episodes a real holdout is impossible — returns an empty
+    holdout and the caller warns that ①d would be in-sample.
+    """
+    n = len(episodes)
+    if n < 2:
+        return episodes, []
+    rng = np.random.default_rng(int(seed))
+    idx = rng.permutation(n)
+    n_hold = max(1, int(round(n * float(holdout_frac))))
+    n_hold = min(n_hold, n - 1)
+    hold = [episodes[int(i)] for i in idx[:n_hold]]
+    train = [episodes[int(i)] for i in idx[n_hold:]]
+    return train, hold
+
+
+def _buffer_from(episodes: List[Any], *, tag: str, window: int) -> ReplayBuffer:
+    buf = ReplayBuffer(capacity_episodes=len(episodes) + 1, seed=0)
+    for ep in episodes:
         buf.add_episode(ep)
     print(
-        f"[depth-train] buffer: {buf.num_episodes} eps / {buf.num_transitions} steps "
-        f"(window>={window}, depth present)"
+        f"[depth-train] {tag} buffer: {buf.num_episodes} eps / {buf.num_transitions} "
+        f"steps (window>={window}, depth present)"
     )
     return buf
 
 
+def _holdout_windows(episodes: List[Any], window: int) -> List[Any]:
+    """Deterministic non-overlapping (stride=window) windows from held-out eps."""
+    windows: List[Any] = []
+    for ep in episodes:
+        for start in range(0, len(ep) - window + 1, window):
+            windows.append(ep[start : start + window])
+    return windows
+
+
 def _holdout_absrel(
     model: _DepthHead,
-    buf: ReplayBuffer,
+    holdout_eps: List[Any],
     *,
     wm_batch: int,
     window: int,
     device: torch.device,
     max_depth_m: float = 200.0,
 ) -> float:
-    model.eval()
-    windows = buf.sample_windows(wm_batch, window)
-    arrays = windows_to_perception_arrays(windows)
-    if "depth" not in arrays:
+    """Median AbsRel over ALL held-out windows (not a random resample of train).
+
+    Enumerates fixed windows so the number is stable across runs, and predicts in
+    ``wm_batch`` chunks; pred/GT are pooled before a single ``depth_absrel`` so the
+    median-over-pixels semantics match the gate scorer.
+    """
+    windows = _holdout_windows(holdout_eps, window)
+    if not windows:
         return float("nan")
-    rgb = torch.from_numpy(np.ascontiguousarray(arrays["rgb"])).to(device)
-    gt = torch.from_numpy(np.ascontiguousarray(arrays["depth"])).to(device)
-    with torch.no_grad():
-        pred, _ = model.predict_from_window(rgb)
+    model.eval()
+    preds: List[np.ndarray] = []
+    gts: List[np.ndarray] = []
+    for i in range(0, len(windows), int(wm_batch)):
+        chunk = windows[i : i + int(wm_batch)]
+        arrays = windows_to_perception_arrays(chunk)
+        if "depth" not in arrays:
+            return float("nan")
+        rgb = torch.from_numpy(np.ascontiguousarray(arrays["rgb"])).to(device)
+        gt = torch.from_numpy(np.ascontiguousarray(arrays["depth"])).to(device)
+        with torch.no_grad():
+            pred, _ = model.predict_from_window(rgb)
+        preds.append(pred.cpu().numpy())
+        gts.append(gt[:, -1].cpu().numpy())
     return float(
         depth_absrel(
-            pred.cpu().numpy(),
-            gt[:, -1].cpu().numpy(),
+            np.concatenate(preds, axis=0),
+            np.concatenate(gts, axis=0),
             max_depth_m=float(max_depth_m),
         )
     )
@@ -120,6 +165,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--save-ckpt", action="store_true")
     p.add_argument("--allow-v0-desync", action="store_true")
     p.add_argument("--log-every", type=int, default=50)
+    p.add_argument("--holdout-frac", type=float, default=0.2, help="episode fraction reserved for ①d AbsRel")
+    p.add_argument("--split-seed", type=int, default=0)
     args = p.parse_args(argv)
 
     root = args.dataset
@@ -137,7 +184,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     if str(device) != args.device:
         print(f"[depth-train] falling back to {device} (requested {args.device})")
 
-    buf = _load_buffer(root, args.window)
+    all_eps = _usable_episodes(root, args.window)
+    train_eps, holdout_eps = _split_train_holdout(
+        all_eps, holdout_frac=float(args.holdout_frac), seed=int(args.split_seed)
+    )
+    if not holdout_eps:
+        print(
+            "[depth-train] WARN: <2 usable episodes — no held-out split; ①d AbsRel "
+            "will be IN-SAMPLE and is NOT a valid gate signal. Collect more episodes.",
+            file=sys.stderr,
+        )
+        holdout_eps = train_eps  # in-sample fallback, explicitly flagged above
+    buf = _buffer_from(train_eps, tag="train", window=args.window)
+    print(f"[depth-train] holdout: {len(holdout_eps)} eps reserved for ①d AbsRel")
     model = _DepthHead(
         image_size=int(dh_cfg["image_size"]),
         n_frames=int(dh_cfg["n_frames"]),
@@ -188,8 +247,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
 
     holdout = _holdout_absrel(
-        model, buf, wm_batch=int(args.wm_batch), window=int(args.window), device=device,
-        max_depth_m=float(dh_cfg["max_depth_m"]),
+        model, holdout_eps, wm_batch=int(args.wm_batch), window=int(args.window),
+        device=device, max_depth_m=float(dh_cfg["max_depth_m"]),
     )
     thr = DEFAULT_THRESHOLDS.depth_absrel_max
     print(f"[depth-train] holdout median AbsRel={holdout:.4f} (gate ①d ≤ {thr})")
