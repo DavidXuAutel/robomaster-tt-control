@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>机器狗对接方案 v2 · 宇树 B2 × 拓普视平台</title>
+<style>
+:root{
+  --bg:#0f1115; --bg2:#151922; --card:#1a1f2b; --line:#2a3240;
+  --txt:#e6e9ef; --dim:#9aa4b5; --faint:#6b7688;
+  --ok:#3ecf8e; --warn:#f0b429; --bad:#f2555a; --info:#4a9eff; --acc:#a78bfa;
+  --mono:"SF Mono",Consolas,"Liberation Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);
+  font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  line-height:1.75;font-size:15px;-webkit-font-smoothing:antialiased}
+.wrap{display:grid;grid-template-columns:250px 1fr;max-width:1500px;margin:0 auto;gap:0}
+nav{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+  padding:28px 18px;border-right:1px solid var(--line);background:var(--bg2)}
+nav h4{margin:0 0 14px;font-size:11px;letter-spacing:.14em;color:var(--faint);text-transform:uppercase}
+nav a{display:block;color:var(--dim);text-decoration:none;padding:5px 9px;border-radius:6px;
+  font-size:13.5px;border-left:2px solid transparent;transition:.15s}
+nav a:hover{color:var(--txt);background:#1e2430;border-left-color:var(--acc)}
+nav .sub{padding-left:22px;font-size:12.5px;color:var(--faint)}
+main{padding:44px 52px 120px;min-width:0}
+h1{font-size:31px;margin:0 0 8px;letter-spacing:-.02em;line-height:1.3}
+h2{font-size:23px;margin:56px 0 18px;padding-bottom:11px;border-bottom:1px solid var(--line)}
+h2:first-of-type{margin-top:34px}
+h3{font-size:17.5px;margin:34px 0 12px;color:#cfd6e2}
+h4{font-size:15px;margin:22px 0 8px;color:var(--dim)}
+p{margin:12px 0}
+code{font-family:var(--mono);font-size:.885em;background:#232a37;padding:2px 6px;
+  border-radius:4px;color:#9fd7ff;white-space:nowrap}
+pre{background:#11151d;border:1px solid var(--line);border-radius:10px;padding:17px 19px;
+  overflow-x:auto;font-family:var(--mono);font-size:12.8px;line-height:1.62;color:#c8d3e3}
+pre code{background:none;padding:0;color:inherit;white-space:pre}
+table{border-collapse:collapse;width:100%;margin:16px 0;font-size:13.8px}
+th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+th{background:#202734;font-weight:600;color:#dde3ec;font-size:13px}
+tr:nth-child(even) td{background:#171c26}
+td code{font-size:.86em}
+.lede{font-size:16.5px;color:var(--dim);margin:18px 0 26px;max-width:76ch}
+.meta{display:flex;flex-wrap:wrap;gap:9px;margin:18px 0 30px}
+.pill{font-size:12.5px;padding:4px 12px;border-radius:99px;border:1px solid var(--line);
+  background:var(--bg2);color:var(--dim)}
+.pill b{color:var(--txt);font-weight:600}
+.pill.ok{border-color:#1f5c42;background:#12241c;color:#8fe5bb}
+.pill.bad{border-color:#5c2226;background:#241315;color:#ffb3b6}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(330px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:16px 18px}
+.card h5{margin:0 0 8px;font-size:14.5px;display:flex;align-items:center;gap:9px}
+.card p{margin:0;font-size:13.6px;color:var(--dim);line-height:1.68}
+.num{display:inline-flex;align-items:center;justify-content:center;width:23px;height:23px;
+  border-radius:6px;background:#2b3444;color:#b9c5d6;font-size:12px;font-weight:700;
+  font-family:var(--mono);flex:0 0 auto}
+.card.use{border-left:3px solid var(--ok)}
+.card.wrap-c{border-left:3px solid var(--info)}
+.card.avoid{border-left:3px solid var(--warn)}
+.card.bypass{border-left:3px solid var(--acc)}
+.card.use .num{background:#1f5c42;color:#8fe5bb}
+.card.wrap-c .num{background:#1c3e5e;color:#a8d3ff}
+.card.avoid .num{background:#5c4a15;color:#f5d78a}
+.card.bypass .num{background:#3d2f66;color:#cdb8ff}
+.note{border-left:3px solid var(--info);background:#141d2b;padding:13px 17px;
+  border-radius:0 9px 9px 0;margin:18px 0;font-size:14px}
+.note.warn{border-left-color:var(--warn);background:#231d10}
+.note.bad{border-left-color:var(--bad);background:#241416}
+.note.ok{border-left-color:var(--ok);background:#122019}
+.note b{color:var(--txt)}
+.tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:5px;
+  font-family:var(--mono);vertical-align:middle;white-space:nowrap}
+.t-ok{background:#1f5c42;color:#8fe5bb}
+.t-gap{background:#5c4a15;color:#f5d78a}
+.t-bad{background:#5c2226;color:#ffb3b6}
+.t-dep{background:#3a3f4a;color:#a8b2c1;text-decoration:line-through}
+figure{margin:26px 0;background:#11151d;border:1px solid var(--line);border-radius:12px;padding:22px}
+figcaption{margin-top:14px;font-size:12.8px;color:var(--faint);text-align:center}
+svg{display:block;margin:0 auto;max-width:100%;height:auto}
+.stripe{background:var(--bg2);border:1px solid var(--line);border-radius:11px;
+  padding:4px 20px;margin:20px 0}
+.stripe .row{display:flex;gap:16px;padding:13px 0;border-bottom:1px solid #222936;align-items:flex-start}
+.stripe .row:last-child{border-bottom:none}
+.stripe .k{flex:0 0 118px;font-family:var(--mono);font-size:12.5px;color:var(--acc);padding-top:2px}
+.stripe .v{flex:1;font-size:13.8px;color:var(--dim);min-width:0}
+.stripe .v b{color:var(--txt)}
+del{color:var(--faint)}
+footer{margin-top:70px;padding-top:24px;border-top:1px solid var(--line);
+  font-size:12.8px;color:var(--faint)}
+@media(max-width:900px){.wrap{grid-template-columns:1fr}nav{display:none}main{padding:26px 20px 80px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <h4>目录</h4>
+  <a href="#sum">决策摘要</a>
+  <a href="#facts">事实基线</a>
+  <a href="#facts" class="sub">已核验 / 未覆盖</a>
+  <a href="#matrix">能力取舍矩阵</a>
+  <a href="#matrix" class="sub">必用 / 包装 / 规避 / 绕过</a>
+  <a href="#traps" class="sub">三个陷阱</a>
+  <a href="#arch">目标架构</a>
+  <a href="#arch" class="sub">分层与仲裁</a>
+  <a href="#fsm" class="sub">Arbiter 状态机</a>
+  <a href="#abort" class="sub">abort 三级</a>
+  <a href="#inv" class="sub">安全不变量</a>
+  <a href="#contract">契约变更</a>
+  <a href="#wam">WAM 采集规格</a>
+  <a href="#road">落地路线图</a>
+  <a href="#exp">开工前验证实验</a>
+  <a href="#errata">勘误</a>
+  <a href="#ask">待厂商确认</a>
+  <a href="#ref">接口速查</a>
+</nav>
+<main>
+
+<h1>机器狗对接方案 v2</h1>
+<p class="lede">宇树 Unitree B2 <code>B2000397</code>「遣通B2」× 广东拓普视 topsee 巡检管理平台。
+本方案把平台定位为<b>语义层与台账层</b>，把 WAM 所需的动作级控制交给宇树 DDS，两条通道分时互斥；
+并明确规避平台约 80% 的电力巡检业务能力。</p>
+
+<div class="meta">
+  <span class="pill">日期 <b>2026-08-03</b></span>
+  <span class="pill ok">状态 <b>可据此开工</b></span>
+  <span class="pill">平台 <b>:8001 云端 / :8888 离线</b></span>
+  <span class="pill">接口面 <b>275 路径 · 154 schema</b></span>
+  <span class="pill">评审 <b>4 模型交叉</b></span>
+  <span class="pill bad">取代 <b>初版 HTML（含事实错误）</b></span>
+</div>
+
+<div class="note">
+<b>本文与 MD 版的关系。</b>权威规格是 <code>docs/design/2026-08-03-dog-integration-plan.md</code>；
+本 HTML 是同一份内容的报告版，补了架构图与状态机图。两者内容一致，实现时以 MD 为准。
+</div>
+
+<div class="note warn">
+<b>方法说明。</b>本方案经三个独立模型从不同角度评审（能力取舍 / 接口设计 / 红队反驳），
+其指出的关键接口事实由脚本逐条核验后才写入。凡标注<span class="tag t-gap">未覆盖</span>者，
+一律不得在代码中假设其存在。
+</div>
+
+<h2 id="sum">决策摘要</h2>
+
+<div class="grid g2">
+  <div class="card use"><h5><span class="num">1</span>平台是语义层，不是控制底座</h5>
+    <p>它提供 LiDAR 地图、teach-and-repeat 点位、拓扑派单、证据图片；不提供实时位姿、连续速度、定位置信度、气体标定。</p></div>
+  <div class="card bypass"><h5><span class="num">2</span>WAM 必须走宇树 DDS 直控</h5>
+    <p>平台只有拓扑级接口，且手册专章讨论「控制延迟」。云端 HTTP 转发不可能支撑 10–50 Hz 闭环。</p></div>
+  <div class="card wrap-c"><h5><span class="num">3</span>两条通道分时互斥</h5>
+    <p>手册锁死「机器狗只能由一个用户控制」，且本体控制必须在「手动巡检」模式下。绝不并行。</p></div>
+  <div class="card avoid"><h5><span class="num">4</span>模式切换目前无法自动化</h5>
+    <p>275 个接口里<b>没有</b>手动/自动巡检切换接口。近期 WAM 段只能人工切模式，FSM 必须有显式「等待人工」态。</p></div>
+  <div class="card avoid"><h5><span class="num">5</span>到点判定是最大单点风险</h5>
+    <p><code>sendNavigate</code> 返回裸 <code>Result</code> 无 taskId，而查询接口整个结构围绕「自动巡检任务」设计。单点派单是否产生可查任务<b>未被证实</b>。</p></div>
+  <div class="card wrap-c"><h5><span class="num">6</span>状态字符串全部无枚举</h5>
+    <p>到点判定必须三态（含 <code>UNKNOWN</code>）+ 多证据源，不许裸字符串比较后静默当 False。</p></div>
+  <div class="card wrap-c"><h5><span class="num">7</span><code>dog_goal_id</code> ≠ <code>pointsId</code></h5>
+    <p>中间必须加一层稳定语义标签，平台 <code>pointsId</code> 只作可失效缓存，地图重建后能被 diff 检出。</p></div>
+  <div class="card avoid"><h5><span class="num">8</span>气体标定走人工台账</h5>
+    <p>平台全文 0 处「标定/校准」。不许伪造时间戳，也不许让气检永久瘫痪。</p></div>
+  <div class="card bypass"><h5><span class="num">9</span>abort 分三级</h5>
+    <p>任务级 <code>stopTask</code> / 运动级 DDS <code>StopMove</code>+<code>Damp</code> / 灾难级平台急停（≈断电，仅人工）。</p></div>
+  <div class="card avoid"><h5><span class="num">10</span>规避平台 80% 业务能力</h5>
+    <p>表计、红外测温、声纹、液位计、设备缺陷、巡检报表、告警确认工作流、充电房联动、机械臂、人脸识别、cron 调度——一律不接。</p></div>
+</div>
+
+<h2 id="facts">事实基线</h2>
+
+<h3>已核验为真（节选，完整 32 条见 MD 版 §2.1）</h3>
+
+<div class="stripe">
+  <div class="row"><div class="k">F1 / F2</div><div class="v">成功返回码是 <code>code:0</code> 而非 200；未登录返回 <b>HTTP 401 + 纯文本「未登录」</b>而非 JSON。二者均已实测。</div></div>
+  <div class="row"><div class="k">F6 / F7</div><div class="v"><code>getCurrentByRobotId</code> 返回 <code>ShowRobotTaskAllEntity</code>（<code>pointsId</code>、<code>currentState</code>、<code>totalState</code>、<code>taskId</code>…）。<b><code>currentPointsId</code> 与 <code>inspectionRate</code> 属于 <code>RobotTask</code>，仅 <code>getPagingRobotTask</code> 返回。</b></div></div>
+  <div class="row"><div class="k">F8</div><div class="v"><code>sendNavigate</code> 响应是裸 <code>Result</code>，<code>data</code> 为空对象，<b>不返回任何任务标识</b>。</div></div>
+  <div class="row"><div class="k">F9</div><div class="v">全库 <b>7 个接口已 deprecated</b>：<code>robotTaskItem/testPoints</code>、<code>state/selectControllerUser</code>、<code>archivesMan/getRtspUrl</code>、<code>getChannelData</code>、<code>getTopseeData</code>、<code>getWeather</code>、<code>analysis/getDevRunLine</code>。</div></div>
+  <div class="row"><div class="k">F11</div><div class="v"><code>updateControllerUser</code> 的三个参数 <code>robotId</code>/<code>state</code>/<code>force</code> 描述都是含糊的「机器人状态」，<b>无枚举</b>，返回裸 <code>Result</code>。</div></div>
+  <div class="row"><div class="k">F12 / F13</div><div class="v">OpenAPI 全文检索「置信度 / confidence / 延迟 / latency」<b>命中 0 次</b>；「标定 / 校准 / calibr」<b>命中 0 次</b>。</div></div>
+  <div class="row"><div class="k">F14</div><div class="v"><b>没有</b>手动/自动巡检模式切换接口（按 <code>mode</code>/<code>manual</code>/<code>patrol</code>/手动 检索路径与 summary）。</div></div>
+  <div class="row"><div class="k">F15 <span class="tag t-ok">新发现</span></div><div class="v"><code>mapUpdate</code> 的 <code>MapUpdateDomain</code> 支持 <code>action</code> <b>0 初始化 / 1 重定位 / 2 增量建图 / 3 结束 / 4 取消 / 5 切割 / 6 加载地图</b>，另有 <code>mapType</code>（0 室内 / 1 室外）、<code>destKeyname</code>、<code>srcKeyname</code>、<code>xyth</code>（<code>{'x':0,'y':0,'th':0}</code>）。<b>建图与重定位是可程序化的。</b></div></div>
+  <div class="row"><div class="k">F16</div><div class="v">平台<b>没有</b>对外 WebSocket / MQTT；<code>taskAlarm/alarmCallback</code> 是平台侧接收 <code>Alarm</code> 的 POST 端点，无注册/鉴权/重试的任何说明。</div></div>
+  <div class="row"><div class="k">F18</div><div class="v">平台急停「<b>相当于断电</b>」（手册 §4.2.1）。摔倒处理同样要求先切断动力（§5.7）。</div></div>
+  <div class="row"><div class="k">F21</div><div class="v">本体控制含前后、左右旋、<b>横移</b>、身高、速度、站立/下蹲、爬坡步态 —— 即全向 <code>vx/vy/ωz</code>，与 <code>Move(vx,vy,vyaw)</code> 对应。</div></div>
+  <div class="row"><div class="k">F22 / F24 / F25</div><div class="v">发任务前置信度须 <b>≥ 0.9</b>；相邻点位间距须 <b>&gt; 0.5 m</b>；建图速度 <b>≤ 0.3 m/s</b>、直线 + 90° 转弯、起点闭环、玻璃前置实物遮挡。</div></div>
+  <div class="row"><div class="k">F26</div><div class="v"><b>同步</b> = 把 PC 端改动写入机器人地图源文件；<b>发布</b> = 机器人开机自动拉取。只编辑不同步/不发布，开机不会用新信息。</div></div>
+  <div class="row"><div class="k">F27</div><div class="v">视频源含可见光 / 红外热成像 / <b>深度相机</b>。</div></div>
+  <div class="row"><div class="k">F30</div><div class="v">遥控档位软限位（低速档爬坡 &lt;45°、台阶 &lt;25 cm、越障 &lt;40 cm）<b>低于</b>整机极限（45° / 40 cm / 5 m/s）。DDS 直控路径上这层软限位<b>不生效</b>。</div></div>
+</div>
+
+<h3>文档未覆盖 —— 禁止假设</h3>
+
+<table>
+<thead><tr><th style="width:60px">#</th><th>缺口</th><th style="width:230px">阻塞什么</th></tr></thead>
+<tbody>
+<tr><td><b>G1</b></td><td>单点 <code>sendNavigate</code> 是否产生可被 <code>getCurrentByRobotId</code> 查询的任务</td><td><span class="tag t-bad">整条慢通道</span> 最高优先级</td></tr>
+<tr><td>G2</td><td><code>currentState</code>/<code>robotState</code>/<code>resultState</code>/<code>status</code> 的取值枚举</td><td>到点与失败判定</td></tr>
+<tr><td>G3</td><td>实时位姿（平面 <code>x/y/th</code>）接口</td><td>WAM 位姿备份、到点距离判据</td></tr>
+<tr><td>G4</td><td>定位置信度接口（全库 0 命中）</td><td><code>≥0.9</code> 安全门禁无法自动化</td></tr>
+<tr><td>G5</td><td>控制延迟接口</td><td>WAM 通道准入判据</td></tr>
+<tr><td>G6</td><td>手动/自动巡检模式切换接口</td><td>双通道自动交接</td></tr>
+<tr><td>G7</td><td><code>updateControllerUser</code> 的 <code>state</code>/<code>force</code> 实际取值</td><td>控制权抢占与释放</td></tr>
+<tr><td>G8</td><td>Token header 名与续期方式</td><td>长驻客户端</td></tr>
+<tr><td>G9</td><td>气体标定时间来源；能否「立即采样一次」</td><td><code>GasBackend</code> 两个方法</td></tr>
+<tr><td>G10</td><td>本体遥控（速度下发）的协议、URL、载荷、频率上限</td><td>备用快通道</td></tr>
+<tr><td><b>G11</b></td><td>第三方直连宇树 DDS 是否被边缘侧独占；释放平台控制后 <code>Move</code> 是否生效</td><td><span class="tag t-bad">DDS 方案生死线</span></td></tr>
+<tr><td>G12</td><td>深度相机对外流的协议、编码、内参、时间戳、尺度</td><td>深度数据可用性</td></tr>
+<tr><td>G13</td><td><code>RosMapMan.mapSpot</code> 解析格式；<code>RosPoints.th</code> 单位（度/弧度）</td><td>坐标对齐</td></tr>
+<tr><td>G14</td><td><code>RosPointsTag.tagFamily</code> 取值与识别算法</td><td>能否与我方 AprilTag 统一</td></tr>
+<tr><td>G15</td><td>现场部署形态（<code>:8001</code> 云端 vs <code>:8888</code> 离线）与写权限</td><td>自动化闭环是否成立</td></tr>
+<tr><td>G16</td><td><code>ShowRobotTaskAllEntity</code> 被三个语义不同接口共用为响应类型，疑似导出标注错误</td><td>地图导出脚本的解析假设</td></tr>
+</tbody>
+</table>
+
+<h2 id="matrix">能力取舍矩阵</h2>
+
+<p>判断标准只有一条：<b>是否服务于「MissionBrain 可编排的执行体」+「WAM 训练数据」这两个诉求。</b></p>
+
+<figure>
+<svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,PingFang SC,sans-serif">
+  <defs><style>
+    .qt{font-size:14px;font-weight:700}.qi{font-size:11.5px;fill:#9aa4b5}
+    .ql{font-size:10.5px;letter-spacing:.1em;fill:#6b7688}
+  </style></defs>
+  <rect x="20" y="20" width="425" height="175" rx="10" fill="#12241c" stroke="#1f5c42"/>
+  <rect x="455" y="20" width="425" height="175" rx="10" fill="#141d2b" stroke="#1c3e5e"/>
+  <rect x="20" y="207" width="425" height="175" rx="10" fill="#231d10" stroke="#5c4a15"/>
+  <rect x="455" y="207" width="425" height="175" rx="10" fill="#1c1630" stroke="#3d2f66"/>
+
+  <text x="40" y="46" class="ql" fill="#8fe5bb">必用</text>
+  <text x="40" y="68" class="qt" fill="#8fe5bb">不用就要重造且做不好</text>
+  <text x="40" y="92" class="qi">LiDAR 地图资产 · mapUpdate 建图/重定位/加载</text>
+  <text x="40" y="111" class="qi">虚拟墙 / 检修区 · 同步与发布</text>
+  <text x="40" y="130" class="qi">teach-and-repeat 点位 · sendNavigate 单点派单</text>
+  <text x="40" y="149" class="qi">stopTask / pauseTask / back 返桩</text>
+  <text x="40" y="168" class="qi">getRobotMapAll 导出 · video/getStreamUrl 取流</text>
+
+  <text x="475" y="46" class="ql" fill="#a8d3ff">可用但需包装</text>
+  <text x="475" y="68" class="qt" fill="#a8d3ff">能力有用，语义不匹配</text>
+  <text x="475" y="92" class="qi">控制人查改 → Arbiter 租约层</text>
+  <text x="475" y="111" class="qi">告警查询 → 旁路证据源，不驱动状态机</text>
+  <text x="475" y="130" class="qi">气体历史 → 语义改为「窗口聚合」</text>
+  <text x="475" y="149" class="qi">巡检结果图片 → evidence_uri 索引</text>
+  <text x="475" y="168" class="qi">自动巡检任务 → 仅作 E1 失败的 fallback</text>
+
+  <text x="40" y="233" class="ql" fill="#f5d78a">明确规避</text>
+  <text x="40" y="255" class="qt" fill="#f5d78a">平台很复杂，我们用不上</text>
+  <text x="40" y="279" class="qi">表计读数 · 红外测温 · 声纹 · 液位计 · 边界</text>
+  <text x="40" y="298" class="qi">设备缺陷统计 · 巡检报告 · 效率分析 · 报表导出</text>
+  <text x="40" y="317" class="qi">告警确认工作流 · cron 调度 · 优先级 · 线路编排</text>
+  <text x="40" y="336" class="qi">区域/楼层/设备/联动设备树 · 充电房管理</text>
+  <text x="40" y="355" class="qi">机械臂 J1–J6 · 人脸识别 · 声像仪 · 版本升级</text>
+
+  <text x="475" y="233" class="ql" fill="#cdb8ff">必须绕过</text>
+  <text x="475" y="255" class="qt" fill="#cdb8ff">平台做不到，走别的路</text>
+  <text x="475" y="279" class="qi">连续速度控制 → SportClient.Move 1008</text>
+  <text x="475" y="298" class="qi">高频位姿 / 本体感受 → /sportmodestate · /lowstate</text>
+  <text x="475" y="317" class="qi">运动级安全停 → StopMove 1003 · Damp 1001</text>
+  <text x="475" y="336" class="qi">气体标定溯源 → 人工台账 YAML</text>
+  <text x="475" y="355" class="qi">定位置信度门禁 → 人工确认 + 审计留痕</text>
+</svg>
+<figcaption>四象限取舍。左上是必须复用的厂商能力，右下是必须绕过平台的能力，左下整块是本次明确不接的平台业务。</figcaption>
+</figure>
+
+<h3>必用 —— 不用就要重造且做不好</h3>
+<table>
+<thead><tr><th style="width:180px">能力</th><th style="width:330px">接口 / 依据</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>LiDAR SLAM 地图资产</td><td><code>mapMan/*</code>；手册 §4.4.1</td><td>厂商导航栈的权威地图，我们绝不自建稠密 SLAM</td></tr>
+<tr><td>建图 / 重定位 / 加载地图</td><td><code>POST mapMan/mapUpdate</code>，<code>action</code> 0–6 + <code>xyth</code></td><td><b>可程序化</b>，能进 preflight 自动化</td></tr>
+<tr><td>虚拟墙 / 检修区</td><td><code>avoid/*</code>（<code>RosAvoidStrategy</code>）；手册 §4.4.1</td><td>唯一的静态安全围栏；临时障碍靠检修区避免导航超时</td></tr>
+<tr><td>同步 / 发布</td><td><code>mapMan/syncMap</code>、<code>updateState</code></td><td>地图改动不同步等于没改，必须进运维 SOP</td></tr>
+<tr><td>teach-and-repeat 点位</td><td><code>robot_point/*</code>（ROS 位姿点）、<code>point/*</code>（业务配置）</td><td>我们唯一能指挥狗去的目标</td></tr>
+<tr><td>单点拓扑派单</td><td><code>POST point/sendNavigate?robotId=&amp;pointsId=</code></td><td><code>NavBackend.goto_goal()</code> 的首选落点（待 E1 验证）</td></tr>
+<tr><td>任务停止 / 暂停 / 返桩</td><td><code>robotTask/stopTask</code>、<code>pauseTask</code>、<code>back</code></td><td><code>NavBackend.cancel()</code> 与任务级 abort</td></tr>
+<tr><td>地图/线路/点位导出</td><td><code>GET mapMan/getRobotMapAll?robotId=</code></td><td>反向生成 SharedMap 绑定（注意 G16）</td></tr>
+<tr><td>视频取流</td><td><code>GET video/getStreamUrl</code></td><td>本地视觉与证据留存。<b>不要</b>用已废弃的 <code>archivesMan/getRtspUrl</code></td></tr>
+</tbody>
+</table>
+
+<h3>可用但需包装</h3>
+<table>
+<thead><tr><th style="width:170px">能力</th><th style="width:300px">包装成什么</th><th>注意</th></tr></thead>
+<tbody>
+<tr><td>控制人查询 / 修改</td><td>Arbiter 的租约层</td><td><code>selectControllerUser</code> 已废弃，改用 <code>updateControllerUser</code>，取值待抓包（G7）</td></tr>
+<tr><td>告警查询</td><td><code>PerceptionBackend</code> 的旁路证据源</td><td><code>Alarm.srcImage</code>/<code>rstImage</code> 作 <code>evidence_uri</code>。<b>不驱动任务状态机</b></td></tr>
+<tr><td>气体历史</td><td><code>GasBackend.sample()</code> 语义改为「窗口聚合查询」</td><td>没有「立即采样」；标定另走台账</td></tr>
+<tr><td>巡检结果记录</td><td>证据索引</td><td><code>robotTaskItem/getTaskLog</code> 的图片 URL 可用；识别值不用</td></tr>
+<tr><td>自动巡检任务</td><td>仅作 <code>sendNavigate</code> 失败时的 fallback 派单方式</td><td><code>addAutoInspection</code> + <code>executeNow</code> 能换来正规 taskId，代价是延迟与配置污染</td></tr>
+</tbody>
+</table>
+
+<h3>明确规避 —— 平台复杂但我们用不上</h3>
+<table>
+<thead><tr><th style="width:330px">规避对象</th><th>为什么</th></tr></thead>
+<tbody>
+<tr><td>表计读数、红外测温、声纹监测、液位计、边界检测配置</td><td>电力/工业巡检业务，与我们的 <code>target_label</code> 语义无关；标注流程繁琐（表计要按序取圆周三点、液位计要按序点四角），接进来即被锁进厂商业务模型</td></tr>
+<tr><td>设备缺陷统计、巡检分析报告、巡检效率分析、报表导出</td><td>纯运营报表</td></tr>
+<tr><td>告警确认工作流（确认/撤销/批量/误报标记）</td><td>人工运营流程，不是机器契约</td></tr>
+<tr><td>任务 cron 调度、优先级、线路编排、回充策略</td><td>会与 MissionBrain 形成<b>双调度源</b>，超时/取消/幂等语义打架</td></tr>
+<tr><td>区域 / 楼层 / 设备 / 联动设备（卷帘门、电梯、充电屋门）树</td><td>现场配置强耦合，且离线连云后禁止新增（F28）</td></tr>
+<tr><td>机械臂（J1–J6、教学回放）、人脸识别、声像仪</td><td>本机未配备或需求未覆盖；人脸识别手册正文缺失，属未文档化能力</td></tr>
+<tr><td>应用版本管理 / 升级 / 重启、充电房管理</td><td>运维职能；返桩只用 <code>robotTask/back</code> 即可</td></tr>
+</tbody>
+</table>
+
+<h3 id="traps">三个陷阱</h3>
+<div class="note bad">
+<b>陷阱 1 · 把 <code>currentPointsId</code> / <code>inspectionRate</code> 当位姿用。</b>
+它们是点位级离散进度，且<b>不在</b> <code>getCurrentByRobotId</code> 里（F6/F7）。用来判到点勉强够，用来训 WAM 完全不够。
+</div>
+<div class="note bad">
+<b>陷阱 2 · 把 <code>alarmCallback</code> 当成「可配置的 webhook」。</b>
+OpenAPI 里它是平台侧的接收端点，没有任何注册、鉴权、重试说明（F16）。近期只能轮询。
+</div>
+<div class="note bad">
+<b>陷阱 3 · 把「深度相机可选」当成「能拿到可训练的标定深度流」。</b>
+拿到一个播放 URL ≠ 拿到带内参和时间戳的深度帧（G12）。
+</div>
+
+<h2 id="arch">目标架构</h2>
+
+<figure>
+<svg viewBox="0 0 900 470" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,PingFang SC,sans-serif">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L7,3 z" fill="#7c8798"/>
+    </marker>
+    <style>
+      .bt{font-size:14.5px;font-weight:700}.bs{font-size:11.5px;fill:#9aa4b5}
+      .el{font-size:11px;fill:#8b95a6;font-family:SF Mono,Consolas,monospace}
+      .bl{font-size:10px;letter-spacing:.11em;fill:#6b7688}
+    </style>
+  </defs>
+
+  <rect x="60" y="18" width="780" height="86" rx="11" fill="#1a1f2b" stroke="#2a3240"/>
+  <text x="82" y="42" class="bl">任务层 · 分钟级</text>
+  <text x="82" y="64" class="bt" fill="#e6e9ef">MissionBrain</text>
+  <text x="82" y="86" class="bs">FSM: IDLE → SCOUTING → DOG_NAV → DOG_SEARCH → GAS_SAMPLE → …　事件契约 v1 冻结，events.py 一行不改</text>
+
+  <line x1="450" y1="104" x2="450" y2="142" stroke="#7c8798" stroke-width="1.6" marker-end="url(#ar)"/>
+  <text x="462" y="128" class="el">dog.inspect / gas.sample / dog.abort</text>
+
+  <rect x="60" y="142" width="780" height="76" rx="11" fill="#1c1630" stroke="#3d2f66"/>
+  <text x="82" y="166" class="bl">仲裁层 · 新增</text>
+  <text x="82" y="188" class="bt" fill="#cdb8ff">DogControlArbiter</text>
+  <text x="82" y="209" class="bs">单命令所有者 · 租约 TTL · preflight 门禁 · 命令看门狗 · 外部抢占检测</text>
+
+  <line x1="255" y1="218" x2="255" y2="262" stroke="#7c8798" stroke-width="1.6" marker-end="url(#ar)"/>
+  <line x1="645" y1="218" x2="645" y2="262" stroke="#7c8798" stroke-width="1.6" marker-end="url(#ar)"/>
+  <text x="118" y="243" class="el" fill="#8fe5bb">慢通道（互斥）</text>
+  <text x="508" y="243" class="el" fill="#cdb8ff">快通道（互斥）</text>
+
+  <rect x="60" y="262" width="390" height="128" rx="11" fill="#12241c" stroke="#1f5c42"/>
+  <text x="82" y="286" class="bt" fill="#8fe5bb">TopseeNav / Perception / Gas</text>
+  <text x="82" y="308" class="bs">HTTP 独立轮询线程 · 1–2 Hz</text>
+  <text x="82" y="329" class="el">POST point/sendNavigate</text>
+  <text x="82" y="348" class="el">GET  robotTask/getCurrentByRobotId</text>
+  <text x="82" y="367" class="el">GET  robotTask/stopTask · gas/getGasHistory</text>
+
+  <rect x="470" y="262" width="370" height="128" rx="11" fill="#1c1630" stroke="#3d2f66"/>
+  <text x="492" y="286" class="bt" fill="#cdb8ff">UnitreeSportClient · DDS</text>
+  <text x="492" y="308" class="bs">WAM 动作级闭环 · 10–50 Hz</text>
+  <text x="492" y="329" class="el">Move(vx,vy,vyaw) 1008</text>
+  <text x="492" y="348" class="el">/sportmodestate · /lowstate ≈500Hz</text>
+  <text x="492" y="367" class="el">StopMove 1003 · Damp 1001</text>
+
+  <rect x="60" y="412" width="780" height="42" rx="9" fill="#231d10" stroke="#5c4a15"/>
+  <text x="450" y="439" text-anchor="middle" font-size="13" font-weight="700" fill="#f5d78a">
+    铁律：arbiter.topsee_cmd_enabled 与 arbiter.unitree_cmd_enabled 永不同时为真
+  </text>
+</svg>
+<figcaption>三层分工。MissionBrain 只发任务级事件，Arbiter 保证物理狗上同一时刻只有一个命令所有者，两条通道各自实现自己的频段。</figcaption>
+</figure>
+
+<h3 id="fsm">Arbiter 状态机</h3>
+
+<figure>
+<svg viewBox="0 0 900 430" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,PingFang SC,sans-serif">
+  <defs>
+    <marker id="a2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L7,3 z" fill="#7c8798"/>
+    </marker>
+    <style>
+      .sn{font-size:12.5px;font-weight:700;fill:#e6e9ef}
+      .tl{font-size:10.5px;fill:#8b95a6}
+      .hl{font-size:10.5px;fill:#f5d78a;font-weight:700}
+    </style>
+  </defs>
+
+  <rect x="30" y="28" width="112" height="44" rx="9" fill="#1a1f2b" stroke="#2a3240"/>
+  <text x="86" y="55" text-anchor="middle" class="sn">IDLE</text>
+
+  <rect x="212" y="28" width="126" height="44" rx="9" fill="#141d2b" stroke="#1c3e5e"/>
+  <text x="275" y="55" text-anchor="middle" class="sn">PREFLIGHT</text>
+
+  <rect x="408" y="28" width="140" height="44" rx="9" fill="#12241c" stroke="#1f5c42"/>
+  <text x="478" y="55" text-anchor="middle" class="sn">MISSION_NAV</text>
+
+  <rect x="612" y="112" width="258" height="52" rx="9" fill="#231d10" stroke="#5c4a15" stroke-width="2"/>
+  <text x="741" y="134" text-anchor="middle" class="sn" fill="#f5d78a">WAITING_HUMAN_MODE_SWITCH</text>
+  <text x="741" y="152" text-anchor="middle" class="tl">F14：无模式切换接口 → 必须停在这里</text>
+
+  <rect x="656" y="212" width="170" height="44" rx="9" fill="#1c1630" stroke="#3d2f66"/>
+  <text x="741" y="239" text-anchor="middle" class="sn" fill="#cdb8ff">WAM_ACTIVE</text>
+
+  <rect x="620" y="308" width="240" height="44" rx="9" fill="#141d2b" stroke="#1c3e5e"/>
+  <text x="740" y="335" text-anchor="middle" class="sn">HANDOVER_TO_MISSION</text>
+
+  <rect x="212" y="308" width="132" height="44" rx="9" fill="#241416" stroke="#5c2226"/>
+  <text x="278" y="335" text-anchor="middle" class="sn" fill="#ffb3b6">SAFE_HOLD</text>
+
+  <rect x="30" y="308" width="112" height="44" rx="9" fill="#241416" stroke="#5c2226"/>
+  <text x="86" y="335" text-anchor="middle" class="sn" fill="#ffb3b6">FAULT</text>
+
+  <line x1="142" y1="50" x2="206" y2="50" stroke="#7c8798" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="174" y="42" text-anchor="middle" class="tl">acquire</text>
+
+  <line x1="338" y1="50" x2="402" y2="50" stroke="#7c8798" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="370" y="42" text-anchor="middle" class="tl">门禁通过</text>
+
+  <path d="M262,72 L262,180 L110,180 L110,302" fill="none" stroke="#7c8798" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="172" y="174" class="tl">门禁失败 / 摔倒</text>
+
+  <path d="M548,50 L590,50 L590,112" fill="none" stroke="#7c8798" stroke-width="1.5" marker-end="url(#a2)"/>
+  <path d="M590,112 L612,124" fill="none" stroke="#7c8798" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="600" y="90" class="tl">arrived 且需 WAM 段</text>
+
+  <line x1="741" y1="164" x2="741" y2="206" stroke="#7c8798" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="752" y="190" class="hl">人工已切手动巡检 + probe_dds_authority 通过</text>
+
+  <line x1="741" y1="256" x2="741" y2="302" stroke="#7c8798" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="752" y="284" class="tl">完成 / abort / 租约 TTL 到</text>
+
+  <path d="M620,330 L360,330" fill="none" stroke="#7c8798" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="490" y="322" text-anchor="middle" class="tl">断网 / WAM 崩溃 / 控制权被外部抢走</text>
+
+  <path d="M278,308 L278,240 L86,240 L86,72" fill="none" stroke="#7c8798" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="120" y="234" class="tl">已释放控制权</text>
+
+  <path d="M86,308 L86,290 L60,290 L60,72" fill="none" stroke="#7c8798" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#a2)"/>
+  <text x="14" y="196" class="tl" transform="rotate(-90 14 196)">仅人工 reset_after_fault</text>
+
+  <rect x="30" y="382" width="840" height="34" rx="8" fill="#141d2b" stroke="#1c3e5e"/>
+  <text x="450" y="404" text-anchor="middle" font-size="12" fill="#a8d3ff">
+    与初版最大区别：HANDOVER_TO_WAM 被替换为 WAITING_HUMAN_MODE_SWITCH —— 自动交接现在做不到，不许假装切换成功后直接下发 Move
+  </text>
+</svg>
+<figcaption>Arbiter 状态机。虚线是唯一需要人工介入才能恢复的转移（摔倒、DDS 被占、定位丢失都归入 FAULT）。</figcaption>
+</figure>
+
+<h3>preflight 门禁</h3>
+<table>
+<thead><tr><th style="width:130px">检查</th><th style="width:250px">数据源</th><th style="width:200px">门槛</th><th>近期可自动化</th></tr></thead>
+<tbody>
+<tr><td>控制人空闲</td><td><code>updateControllerUser</code>（取值待 G7）</td><td>空闲或成功抢占</td><td><span class="tag t-gap">待抓包</span></td></tr>
+<tr><td>无冲突任务</td><td><code>getCurrentByRobotId</code></td><td>无执行中任务，否则先 <code>stopTask</code></td><td><span class="tag t-ok">是</span></td></tr>
+<tr><td>定位置信度</td><td><b>无接口</b>（G4）</td><td>≥ 0.9</td><td><span class="tag t-bad">否 · 人工确认 + 留痕</span></td></tr>
+<tr><td>控制延迟</td><td><b>无接口</b>（G5）</td><td>&gt;200 ms 告警、&gt;500 ms 禁 WAM</td><td><span class="tag t-bad">否</span></td></tr>
+<tr><td>电量</td><td><code>state/getStateData</code></td><td>高于两格（F29）</td><td><span class="tag t-ok">是</span></td></tr>
+<tr><td>DDS 权限</td><td><code>probe_dds_authority()</code></td><td><code>StopMove</code> 有响应</td><td><span class="tag t-gap">需 G11 前置结论</span></td></tr>
+</tbody>
+</table>
+<p>置信度不达标时<b>可程序化补救</b>：<code>POST mapMan/mapUpdate</code> 带 <code>action=1</code>（重定位）+ <code>xyth</code>。
+但重定位是否成功仍无法程序化读取，只能人工看 UI。</p>
+
+<h3 id="abort">abort 三级</h3>
+<table>
+<thead><tr><th style="width:110px">级别</th><th style="width:200px">触发者</th><th>动作</th><th style="width:180px">禁止</th></tr></thead>
+<tbody>
+<tr><td>任务级</td><td><code>MissionSupervisor</code> → <code>dog.abort()</code></td><td><code>Arbiter.force_release()</code> → <code>StopMove</code> + <code>stopTask</code> + 吊销租约 + best-effort 释放控制人</td><td>—</td></tr>
+<tr><td>运动级</td><td>Arbiter 看门狗 / WAM 本地危险</td><td>DDS <code>StopMove</code> 1003，必要时 <code>Damp</code> 1001</td><td>不得越级发 <code>mission.abort</code></td></tr>
+<tr><td>灾难级</td><td><b>人工</b></td><td>平台急停 / 遥控器 <code>L2+B</code> 阻尼</td><td><b>禁止程序调用</b>（≈断电，F18）</td></tr>
+</tbody>
+</table>
+<p>保持现有不变量：<code>mission.abort</code> 的所有权仍<b>只属于</b> <code>MissionSupervisor</code>，
+<code>DogAdapter</code> 不监听该事件；WAM 只能调 <code>Arbiter.safe_hold()</code>。</p>
+
+<h3 id="inv">安全不变量（固化为 pytest 断言）</h3>
+<pre><code># I1  单命令所有者
+assert not (arbiter.topsee_cmd_enabled and arbiter.unitree_cmd_enabled)
+# I2  无有效租约不得下发速度
+assert unitree.last_move_token in (None, arbiter.lease_token)
+# I3  WAM_ACTIVE 期间零次 sendNavigate
+assert arbiter.state != "WAM_ACTIVE" or topsee.navigate_calls_in_state == 0
+# I4  MISSION_NAV 期间零次 Move
+assert arbiter.state != "MISSION_NAV" or unitree.move_calls_in_state == 0
+# I5  命令看门狗超时后速度必须归零
+assert unitree.cmd_after_watchdog == (0.0, 0.0, 0.0)
+# I6  未确认人工切换模式，不得进入 WAM_ACTIVE
+assert arbiter.state != "WAM_ACTIVE" or arbiter.human_mode_ack is True
+# I7  abort 后租约必须吊销
+assert (not dog.abort_called) or arbiter.lease_token is None
+# I8  平台急停不在常规停止路径里
+assert "platform_estop" not in arbiter.normal_stop_methods
+# I9  置信度未达标不得通过 preflight
+assert (not arbiter.preflight_ok) or arbiter.confidence_ack &gt;= 0.9
+# I10 SAFE_HOLD / FAULT / IDLE 下两通道使能均为假
+assert arbiter.state not in ("SAFE_HOLD", "FAULT", "IDLE") or arbiter.no_owner</code></pre>
+
+<h2 id="contract">契约变更 —— 对现有代码的最小侵入</h2>
+
+<div class="note ok">
+<b>不变的：</b><code>mission_brain/events.py</code>（含 <code>FORBIDDEN_KEYS</code>）、<code>brain.py</code>、<code>supervisor.py</code>、
+<code>adapters/dog_base.py</code>，以及 <code>NavBackend</code>/<code>PerceptionBackend</code>/<code>GasBackend</code>
+三个 Protocol 的<b>方法签名</b>。以下是必须做的四处改动。
+</div>
+
+<h3>5.1 到点判定：三态 + 多证据 + 可上报故障</h3>
+<p><code>NavBackend.is_arrived() -> bool</code> 签名不变，但 <code>TopseeNav</code> 内部维护三态，并新增一个<b>可选</b>故障钩子：</p>
+<pre><code>class NavStatus(str, Enum):
+    ARRIVED  = "arrived"
+    EN_ROUTE = "en_route"
+    UNKNOWN  = "unknown"   # 平台字符串不在白名单内 → 不信任
+
+class TopseeNav:
+    def is_arrived(self) -&gt; bool:
+        """三条独立证据，任一为 ARRIVED 且不冲突才返回 True：
+        1. currentState 命中可配置白名单（取值待 G2 实测）
+        2. ShowRobotTaskAllEntity.pointsId == 目标 pointsId
+        3. （可选）DDS 位姿与点位 x/y 距离 &lt; arrive_radius_m
+        UNKNOWN 连续计数超 unknown_tolerance 次 → 记录 nav fault。
+        """
+
+    def poll_fault(self) -&gt; Optional[str]:
+        """可选扩展钩子。返回 nav 失败原因或 None。
+        取值：nav_status_unrecognized / nav_timeout / controller_lost /
+              platform_unreachable / goal_not_in_active_map
+        """</code></pre>
+<p><code>adapters/dog_sdk.py</code> 的 <code>tick()</code> 里加一段向后兼容探测（<b>不改 Protocol</b>）：</p>
+<pre><code>fault = getattr(self.nav, "poll_fault", lambda: None)()
+if fault and not self._arrived_emitted:
+    self._emit(make_event(EventType.DOG_INSPECT_FAILED, ...,
+        payload={"region_id": ..., "stage": "nav", "reason": fault}))</code></pre>
+<div class="note warn">
+<b>为什么必须加。</b>现状下平台字符串对不上就会静默返回 <code>False</code>，一路死等到 supervisor 的
+<code>stage_timeout_s</code>，把「接口语义不匹配」误报成「狗走得慢」。F17 的「导航超时，未找到有效路径」
+也需要独立 reason，否则真机上永远查不出根因。
+</div>
+
+<h3>5.2 SharedMap 加一层稳定绑定</h3>
+<p><code>pointsId</code> 是平台自动生成的不透明串（现场形如 <code>快速打点-1785465994716</code>），地图重建或重打点后会失效，
+而 <code>SharedMap.from_dict()</code> 只校验 JSON 自洽，<b>不校验目标在平台侧是否存在</b> —— 失效在软件层完全不可见。</p>
+<pre><code>{
+  "version": 2,
+  "frame": "dog_map",
+  "regions": {
+    "region_x": {
+      "region_id": "region_x",
+      "dog_goal_label": "wp_region_x_staging",
+      "drone_route_id": "route_region_x_scout",
+      "anchor_ids": ["AX-01", "TAG-0"]
+    }
+  },
+  "platform_binding": {
+    "map_id": "&lt;RosMapMan.mapId&gt;",
+    "map_version": "&lt;RosMapMan.mapVersion&gt;",
+    "exported_at": "2026-08-03T14:00:00+08:00",
+    "goals": {
+      "wp_region_x_staging": {
+        "points_id": "快速打点-1785465994716",
+        "points_name": "…",
+        "x": 12.4, "y": 5.1, "th": 0.52
+      }
+    }
+  }
+}</code></pre>
+<ul>
+<li><code>dog_goal_label</code> 是<b>我们的</b>语义资产：人写、稳定、进 git。</li>
+<li><code>platform_binding</code> 是<b>缓存</b>，由导出脚本生成，带地图版本与时间戳。</li>
+<li>每次现场重打点/重建地图后重跑导出脚本，脚本必须输出 diff 报告，人工确认没有 region 静默丢失。</li>
+<li>加载时校验：<code>map_id</code> 与当前机器人加载的地图一致，且每个 label 都有绑定，否则拒绝启动。</li>
+</ul>
+
+<h3>5.3 HTTP 不得阻塞 tick 循环</h3>
+<p>现状：<code>EventBus.publish()</code> 是进程内同步调用，<code>MissionSupervisor</code> 约定单线程 tick，
+demo 里 <code>dog.tick()</code> / <code>brain.tick()</code> / <code>scout.process_frame()</code> 在同一个 10 Hz 循环里顺序执行。
+若 <code>is_arrived()</code> 直接同步 HTTP：轮询频率被 tick 放大到 10 Hz（超出 1–2 Hz 预算、可能触发网关限流），
+且一次卡顿会连带拖慢无人机侧的超时检测，<b>连 abort 路径本身都会被拖慢</b>。</p>
+<div class="stripe">
+  <div class="row"><div class="k">轮询</div><div class="v"><code>TopseeClient</code> 内置<b>独立轮询线程</b>，按 1–2 Hz 刷新状态缓存</div></div>
+  <div class="row"><div class="k">读取</div><div class="v"><code>is_arrived()</code> / <code>search_target()</code> 只读缓存，附带 <code>age_ms</code>；超过 <code>stale_ms</code> 一律返回 <code>UNKNOWN</code></div></div>
+  <div class="row"><div class="k">取消</div><div class="v"><code>cancel()</code> 走<b>同步 HTTP + 2 s 短超时</b>；超时后仍把本地状态置为「已尝试取消」，绝不无限阻塞调用方</div></div>
+</div>
+
+<h3>5.4 气体：标定走人工台账，不许伪造</h3>
+<p><code>calibration_at()</code> 在平台侧无任何数据源（F13）。两个坏选项——返回当前时间（门禁形同虚设，安全后门）
+或返回很早时间（气检永久瘫痪）——都不接受。决策是引入运维维护、进 git 的标定台账：</p>
+<pre><code># configs/mission/gas_calibration.yaml
+sensors:
+  - robot_id: B2000397
+    device_id: gas_rs485
+    channels: [CH4, H2S, CO, O2]
+    calibrated_at: 2026-07-20T09:30:00+08:00
+    calibrated_by: 张某
+    certificate: docs/references/gas-cal/2026-07-20.pdf</code></pre>
+<ul>
+<li><code>TopseeGas.calibration_at()</code> 读该台账；缺失或过期 → 照现有逻辑发 <code>GAS_FAILED</code>，
+但 reason 细分为 <code>calibration_source_unavailable</code>（无台账）与 <code>calibration_stale</code>（台账过期）。</li>
+<li><code>sample(window_s)</code> 语义如实改为「按 <code>[now-window_s, now]</code> 查 <code>gas/getGasHistory</code> 并聚合」，
+<code>GAS_COMPLETED</code> 的 payload 里注明数据来自历史聚合而非即时采样。</li>
+<li>若客户要求真正的即时采样，只能接气体传感器的原始 Modbus/RS485 链路，绕过平台。</li>
+</ul>
+
+<h2 id="wam">WAM 采集规格</h2>
+
+<p>对齐无人机侧 <code>EpisodeRecorder</code> 的既有约定：一目录一 episode，视频第 N 帧对应 <code>frames.csv</code> 第 N 行，
+<b>主时钟按深度帧 ts 变化计帧，不按控制循环计</b>。完整字段表见 MD 版 §6.2。</p>
+
+<h3>动作空间与无人机 <code>RcAxes</code> 对照</h3>
+<table>
+<thead><tr><th style="width:230px">无人机 <code>RcAxes</code></th><th style="width:200px">机器狗</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>pitch</code> &gt; 0 前进</td><td><code>vx</code></td><td>语义一致</td></tr>
+<tr><td><code>roll</code> 左右横移</td><td><code>vy</code></td><td>B2 明确支持横移（F21）</td></tr>
+<tr><td><code>yaw</code></td><td><code>vyaw</code>（ωz）</td><td>语义一致</td></tr>
+<tr><td><code>throttle</code> 升降</td><td><b>无直接对应</b></td><td>改用 <code>body_height_cmd</code> + 站/蹲离散量</td></tr>
+<tr><td>—</td><td><code>gait</code> / <code>speed_level</code> / <code>posture</code></td><td>无人机没有；用整数码或 one-hot 单列存，<b>不塞进连续动作向量</b></td></tr>
+</tbody>
+</table>
+<p>训练用连续动作 <code>a_t = [vx, vy, vyaw]</code>（SI 单位，非无量纲杆量），裁剪到安全盒。
+采集起步建议 <code>|v| ≤ 1.0 m/s</code>，远低于整机 5 m/s。</p>
+
+<div class="note bad">
+<b>重要安全缺口。</b>遥控器档位的软限位（爬坡 &lt;45°、台阶 &lt;25 cm、越障 &lt;40 cm，F30）
+在 DDS <code>Move()</code> 直控路径上<b>不生效</b>。我们必须在自己的控制律里重新实现这层保护，
+否则 WAM 动作头可能让狗尝试超出安全限位的坡度或台阶。
+</div>
+
+<h3>为什么 <code>FORBIDDEN_KEYS</code> 红线在这里依然正确</h3>
+<p><code>events.py</code> 禁止 <code>global_pose</code> / <code>pose_xyz</code> / <code>point_cloud</code> /
+<code>covariance</code> / <code>video_b64</code> / <code>depth_b64</code> / <code>transform</code> / <code>T_world</code> 进事件总线。
+有人会认为「WAM 需要位姿，所以这条红线是设计矛盾」—— 不是：</p>
+<ol>
+<li><code>EventBus.publish()</code> 是同步调用，50–500 Hz 的位姿加图像会直接拖死确定性任务 FSM。</li>
+<li>Brain 只需要 region / goal / <code>evidence_uri</code> 这一层语义；稠密几何属于 recorder 与 WAM runtime。</li>
+<li>odom 未与地图对齐时冒充 <code>global_pose</code>，会让无人机 Scout 与狗的 goal 错配 —— 这是最危险的失败模式。</li>
+<li>证据用 URI 传递已足够，不需要 base64。</li>
+</ol>
+<div class="note warn">
+<b>因此 WAM 数据流完全绕开 <code>mission_brain</code>，直接落盘。</b>
+这条必须写进 <code>adapters/dog_unitree.py</code> 的模块 docstring。否则将来有人为了调试顺手发一个
+<code>dog.debug</code> 事件带上 x/y/yaw，<code>validate_event()</code> 会在运行时直接炸掉整条 mission。
+</div>
+
+<h3>Episode 验收门槛</h3>
+<p>新建 <code>tools/dog_episode_check.py</code>。<b>不要</b>复用 wander 的 <code>episode_check.py</code>——
+它的 turn 事件门槛不适用于狗的拓扑段，这与 orbit 数据的教训是同一个道理。</p>
+<table>
+<thead><tr><th style="width:200px">检查项</th><th>门槛</th></tr></thead>
+<tbody>
+<tr><td><code>frame_match</code></td><td><code>len(frames.csv) == video_rgb 帧数</code></td></tr>
+<tr><td><code>depth_p95_ok</code></td><td><code>depth_age_ms</code> p95 &lt; 600 ms</td></tr>
+<tr><td><code>pose_coverage</code></td><td><code>pose_x/y/yaw</code> 非空占比 ≥ 95%</td></tr>
+<tr><td><code>action_nonzero</code></td><td><code>|a| &gt; ε</code> 帧占比 ≥ 90%（HOLD 段可配置排除）</td></tr>
+<tr><td><code>single_owner_ok</code></td><td>租约日志无 <code>TOPSEE ∩ UNITREE</code> 重叠窗口</td></tr>
+<tr><td><code>conf_declared</code></td><td>开录时置信度已记录；未达 0.9 则 <code>outcome</code> 不得标 <code>completed</code></td></tr>
+<tr><td><code>cmd_watchdog_ok</code></td><td>无「连续 &gt;0.5 s 无命令但速度异常大」的脏段</td></tr>
+<tr><td><code>no_platform_estop</code></td><td><code>meta</code> 未把平台急停当正常结束</td></tr>
+<tr><td><code>duration</code></td><td>有效运动 ≥ 120 s</td></tr>
+<tr><td><code>map_align_declared</code></td><td><code>meta.json</code> 声明 <code>T_map_from_odom</code> 来源或显式 <code>odom_only</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="road">落地路线图</h2>
+
+<p>原则：<b>先只读、再写入、最后碰运动。</b>M6–M9 全是纯软件，不占设备、不依赖任何待确认项。</p>
+
+<table>
+<thead><tr><th style="width:130px">阶段</th><th>交付物</th><th style="width:190px">依赖</th><th style="width:230px">验收</th></tr></thead>
+<tbody>
+<tr><td><b>M6</b> 只读探针</td><td><code>tools/topsee_probe.py</code>：登录、导出地图/点位/线路、抓状态字符串、跑 E1–E9 并产出 <code>artifacts/topsee_probe_*.json</code></td><td>只读账号 + 现场网络</td><td>E1/E2 有明确结论</td></tr>
+<tr><td><b>M7</b> HTTP 适配</td><td><code>adapters/dog_topsee.py</code>：<code>TopseeClient</code>（轮询线程 + 短超时 cancel）、<code>TopseeNav</code>（三态 + <code>poll_fault</code>）；<code>tests/test_dog_topsee.py</code> 用本地 HTTP fixture</td><td>M6 的 E1/E2 结论</td><td>认证 / 重试 / 状态映射 / 取消 / 未知枚举失败路径全覆盖</td></tr>
+<tr><td><b>M8</b> 语义绑定</td><td><code>SharedMap</code> v2 <code>platform_binding</code> + <code>tools/export_dog_bindings.py</code>（含 diff 报告）+ 加载期校验</td><td>M6 导出样例</td><td>重打点后能检出 region 静默丢失</td></tr>
+<tr><td><b>M9</b> 感知与气体</td><td><code>TopseePerception</code>（本地视觉优先，告警图作旁路证据）、<code>TopseeGas</code>（台账 + 窗口聚合）、<code>configs/mission/gas_calibration.yaml</code></td><td>—</td><td>无台账时如实发 <code>calibration_source_unavailable</code></td></tr>
+<tr><td><b>M10</b> DDS 通道</td><td><code>adapters/dog_unitree.py</code>（位姿订阅 + <code>Move</code> + <code>StopMove</code>/<code>Damp</code> + <code>probe_dds_authority</code>）</td><td><span class="tag t-bad">E4（G11）必须先通过</span></td><td>围栏内极小幅度 <code>Move</code> 有响应且无冲突</td></tr>
+<tr><td><b>M11</b> 仲裁层</td><td><code>adapters/dog_arbiter.py</code> + <code>tests/test_dog_arbiter.py</code>（I1–I10 全部固化为断言）</td><td>M7 + M10</td><td>10 条不变量全绿</td></tr>
+<tr><td><b>M12</b> 狗版录制</td><td>狗版 recorder + <code>tools/dog_episode_check.py</code></td><td>M10</td><td>验收门槛全过</td></tr>
+</tbody>
+</table>
+
+<h3>G1 门禁升级</h3>
+<p>原 G1「狗单独 10 次到点成功」不足以覆盖新发现的风险，追加三条：</p>
+<div class="stripe">
+  <div class="row"><div class="k">G1a</div><div class="v"><code>sendNavigate</code> → <code>getCurrentByRobotId</code> 的到点判定链在真机上闭环可用（E1 通过）；若走 fallback 派单方式，需说明并重测</div></div>
+  <div class="row"><div class="k">G1b</div><div class="v">实测状态字符串枚举表已归档，<code>is_arrived()</code> 的白名单<b>来自实测而非猜测</b>；<code>UNKNOWN</code> 超阈值能正确报 <code>nav_status_unrecognized</code></div></div>
+  <div class="row"><div class="k">G1c</div><div class="v"><code>nav_timeout</code>（F17 的「未找到有效路径」）与「一直没到点」能被区分开，不再靠 <code>stage_timeout_s</code> 兜底掩盖</div></div>
+</div>
+
+<h3>运维 SOP 补充（手册要求但初版方案曾遗漏）</h3>
+<div class="stripe">
+  <div class="row"><div class="k">地图</div><div class="v">改动后<b>必须同步</b>，需要开机自动生效则再<b>发布</b>（F26）。现场重打点后只调新增点位接口而不同步/发布，狗开机仍在用旧地图</div></div>
+  <div class="row"><div class="k">置信度</div><div class="v">每次发任务前确认（F22）。长期趴在充电桩会丢定位（手册 §5.6）</div></div>
+  <div class="row"><div class="k">反光柱</div><div class="v">挪动后<b>必须通知厂商重新标定</b>，每周用柔软干布擦拭（F31）。这直接决定 <code>robotTask/back</code> 一键返桩能否用</div></div>
+  <div class="row"><div class="k">摔倒</div><div class="v">必须人工物理介入：先切断动力 → 确认关节放松后抓机身扶正（禁止拉腿/传感器/摄像头）→ 重启自检 → 检查外壳/关节/线缆/雷达。<b>不允许程序自动重试</b>，Arbiter 须停在 <code>FAULT</code> 等人工 <code>reset_after_fault()</code></div></div>
+  <div class="row"><div class="k">账号</div><div class="v">平台账号有<b>授权天数</b>（F5）。长驻服务的登录失败要区分「临时网络错误」（可重试）与「授权过期」（须人工联系厂商）</div></div>
+  <div class="row"><div class="k">部署形态</div><div class="v">确认是 <code>:8001</code> 云端还是 <code>:8888</code> 离线一体机（G15）。若离线连云，多项配置禁止本地新增（F28），我们的角色可能退化为「只读 + 发单点导航」</div></div>
+</div>
+
+<h2 id="exp">开工前必做的验证实验</h2>
+
+<div class="note bad">
+<b>E1 不过就不要写 M7 的生产代码。</b>这是全篇唯一可能导致「代码写完但压根跑不起来」的假设。
+</div>
+
+<table>
+<thead><tr><th style="width:52px">#</th><th style="width:210px">假设</th><th style="width:280px">怎么验</th><th style="width:150px">预期</th><th>失败则怎么改</th></tr></thead>
+<tbody>
+<tr><td><b>E1</b></td><td><code>sendNavigate</code> 之后 <code>getCurrentByRobotId</code> 能查到对应变化</td><td>只读账号先查基线 → 调一次 <code>sendNavigate</code> → 1 Hz 轮询直到肉眼确认到达，全程记录 <code>pointsId</code>/<code>currentState</code>/<code>totalState</code>/<code>taskId</code></td><td>到达前后返回值有可区分的变化</td><td>改用 <code>addAutoInspection</code> + <code>executeNow</code> 包成单点任务换取正规 taskId；或退化为 DDS 位姿距离判据（依赖 E4）</td></tr>
+<tr><td>E2</td><td><code>currentState</code>/<code>totalState</code> 有稳定有限取值集</td><td>在 E1 基础上制造：正常到达、无效 <code>pointsId</code>、中途 <code>stopTask</code>、断网、路径被挡</td><td>得到实测枚举表</td><td>字符串比较不可靠 → <code>is_arrived()</code> 改用距离判据，或暂停实现等厂商给枚举</td></tr>
+<tr><td>E3</td><td>手动 ⇄ 自动巡检切换有可调用的 HTTP 接口</td><td>Chrome F12 抓包，在 Web 端手动切两次模式</td><td>找到接口且能脱离页面调用</td><td>自动交接不可行，Arbiter 停在 <code>WAITING_HUMAN_MODE_SWITCH</code>（已按此设计）</td></tr>
+<tr><td><b>E4</b></td><td>释放平台控制后 DDS 稳定可用，边缘侧不再抢控制</td><td>空场地 + 安全围栏，<code>unitree_sdk2</code> 订阅 <code>/sportmodestate</code>，平台侧空闲时下发极小幅度 <code>Move</code>，观察响应与冲突</td><td>稳定订阅 + 控制成功无冲突</td><td>DDS 方案不成立 → 回退到平台本体遥控接口（需 G10 抓包），或要求厂商显式禁用边缘侧自动控制</td></tr>
+<tr><td>E5</td><td>置信度 / 延迟 / 实时位姿有 HTTP 或 WS 接口</td><td>F12 抓包实时监控页与地图管理详情页</td><td>找到路径与刷新频率</td><td>置信度门禁改为带超时和审计留痕的显式人工确认步骤</td></tr>
+<tr><td>E6</td><td>气体标定记录存在某处</td><td>查机器人档案完整选配表单；直接问厂商「标定记录存哪、有无 API」</td><td>找到字段或拿到明确「没有」的答复</td><td>走人工台账，作为客户已知悉的产品限制记录</td></tr>
+<tr><td>E7</td><td>现场部署形态与写权限</td><td>直接问现场实施人员</td><td>确认 <code>:8001</code> 或 <code>:8888</code></td><td>若离线联云，所有「通过 API 新增点位/线路/任务」的自动化设想需重评</td></tr>
+<tr><td>E8</td><td>深度相机能取到可用深度流</td><td><code>video/getStreamUrl</code> 逐通道取址，确认协议/编码/帧率/时间戳</td><td>拿到可解码流</td><td>深度只用无人机侧 Depth Anything，狗侧只录 RGB</td></tr>
+<tr><td>E9</td><td><code>getRobotMapAll</code> 实际响应结构与标注一致（G16）</td><td>只读调用一次，比对 <code>ShowRobotTaskAllEntity</code> 标注</td><td>结构可解析</td><td>导出脚本改用 <code>robot_point/*</code> 与 <code>mapMan</code> 其它查询接口拼装</td></tr>
+</tbody>
+</table>
+
+<h2 id="errata">勘误 —— 对初版方案的修正</h2>
+
+<table>
+<thead><tr><th style="width:300px">初版说法</th><th style="width:340px">实际</th><th>影响</th></tr></thead>
+<tbody>
+<tr><td><code>getCurrentByRobotId</code> 返回 <code>RobotTask</code>，字段 <code>currentPointsId</code>/<code>inspectionRate</code></td><td>返回 <code>ShowRobotTaskAllEntity</code>，字段是 <code>pointsId</code>/<code>currentState</code>（F6）；那两个字段仅 <code>getPagingRobotTask</code> 返回（F7）</td><td>到点判定的信息量<b>比初版说的还少</b>，只有一个无枚举字符串</td></tr>
+<tr><td><code>robotTaskItem/testPoints</code> 可作 <code>goto_goal</code> 的备选落点</td><td>该接口<span class="tag t-dep">已 deprecated</span>（F9）</td><td>备选改为「包成单点自动巡检任务」</td></tr>
+<tr><td><code>archivesMan/getRtspUrl</code> 取视频流</td><td><span class="tag t-dep">已 deprecated</span>（F9）</td><td>改用 <code>video/getStreamUrl</code></td></tr>
+<tr><td><code>selectControllerUser</code> 可查控制人空闲</td><td><span class="tag t-dep">已 deprecated</span>（F9/F10）</td><td>改用 <code>updateControllerUser</code>，取值待抓包（G7）</td></tr>
+<tr><td>置信度、延迟可从状态接口读</td><td>OpenAPI 全文<b>0 命中</b>（F12）</td><td>门禁近期无法自动化，必须改为人工确认 + 留痕</td></tr>
+<tr><td><code>updateControllerUser</code> ≈ 模式交接</td><td>它只改<b>控制人</b>；「手动/自动巡检」是另一个概念且<b>无接口</b>（F14）</td><td>必须拆成「控制权租约」与「巡检模式」两轴；自动交接近期不可行</td></tr>
+<tr><td>「MissionBrain 一行不改，只新增适配器」</td><td>事件契约确实可冻结，但 Supervisor → DogAdapter 之间必须插入 Arbiter，且 <code>dog_sdk.py</code> 需加 <code>poll_fault</code> 探测</td><td>改动量比初版估计的大，但仍属小改</td></tr>
+<tr><td>AprilTag 与平台 <code>RosPointsTag</code> 可共用编号空间</td><td><code>RosPointsTag</code> 描述用词是「二维码」，<code>tagFamily</code> 取值与识别算法在手册与 OpenAPI 中<b>均无说明</b>（G14）；我方 <code>tag36h11</code> 是给无人机<b>空中</b>识别用的，视角/高度/距离都不同</td><td><b>撤回该主张</b>，两套标记保持独立，直到厂商确认</td></tr>
+<tr><td><code>dog_goal_id</code> 直接等于 <code>pointsId</code></td><td>会造成地图重建后静默失效</td><td>加稳定语义标签中间层</td></tr>
+<tr><td>分时双通道架构图</td><td>图里画成了确定的箭头，实际上模式切换接口不存在、DDS 权限未验证</td><td>状态机改为含 <code>WAITING_HUMAN_MODE_SWITCH</code>；E3/E4 列为阻塞级实验</td></tr>
+</tbody>
+</table>
+
+<h2 id="ask">待厂商确认清单（可直接发给拓普视）</h2>
+
+<h4>阻塞级 —— 不答复就无法完成自动化</h4>
+<ol>
+<li>单点 <code>POST /point/sendNavigate</code> 是否创建可查询任务？若是，用哪个接口查进度与到点？若不是，推荐的单点派单 + 到点判定方式是什么？</li>
+<li><code>currentState</code>、<code>totalState</code>、<code>robotState</code>、<code>resultState</code> 的完整取值枚举表。</li>
+<li>手动巡检 ⇄ 自动巡检的模式切换 HTTP 接口（路径、参数、返回）。</li>
+<li><code>PUT /state/updateControllerUser</code> 的 <code>state</code> 与 <code>force</code> 取值；Web 端「释放控制」按钮实际发的请求。</li>
+<li>定位置信度、控制延迟、实时位姿（平面 <code>x/y/th</code>）的查询接口与刷新频率。</li>
+<li>第三方程序直连宇树 DDS（<code>unitree_sdk2</code>）是否被边缘侧独占？释放平台控制权后 <code>SportClient.Move</code> 是否生效？是否有官方建议的共存方式？</li>
+<li>登录 Token 的 header 名、有效期、续期方式；账号授权天数到期前的提醒机制。</li>
+</ol>
+
+<h4>重要级</h4>
+<ol start="8">
+<li>气体传感器标定时间/状态是否有存储与接口？能否触发「立即采样一次」？</li>
+<li>深度相机对外流的协议、编码、内参、时间戳与尺度。</li>
+<li><code>RosMapMan.mapSpot</code> 的字符串格式；<code>RosPoints.th</code> 的单位（度还是弧度）。</li>
+<li><code>RosPointsTag.tagFamily</code> 的取值与对应识别算法。</li>
+<li>本体遥控（速度下发）的接口协议、载荷与频率上限。</li>
+<li><code>mapMan/getRobotMapAll</code> 的实际响应结构（OpenAPI 标注为 <code>ShowRobotTaskAllEntity</code>，疑似导出错误）。</li>
+<li><code>taskAlarm/alarmCallback</code> 能否配置回调地址？鉴权、重试、事件时序如何？</li>
+<li>现场部署形态确认：云端 <code>:8001</code> 还是离线一体机 <code>:8888</code>？离线连云后我们能否通过 API 新增点位/线路？</li>
+</ol>
+
+<h2 id="ref">接口速查</h2>
+
+<h3>平台侧（已核验）</h3>
+<table>
+<thead><tr><th style="width:170px">用途</th><th style="width:400px">Method + Path</th><th>备注</th></tr></thead>
+<tbody>
+<tr><td>RSA 公钥</td><td><code>GET /service/api/permission/free/security/rsa?securityKey=</code></td><td>已实测，返回 <code>code:0</code></td></tr>
+<tr><td>PC 登录</td><td><code>POST /service/api/permission/free/pc/login</code></td><td>—</td></tr>
+<tr><td>实时状态列表</td><td><code>GET /service/api/robot/state/getStateData</code></td><td>未登录返回 401 纯文本</td></tr>
+<tr><td>修改控制人</td><td><code>PUT /service/api/robot/state/updateControllerUser?robotId=&amp;state=&amp;force=</code></td><td>取值待确认</td></tr>
+<tr><td><del>查控制人空闲</del></td><td><del><code>PUT /service/api/robot/state/selectControllerUser</code></del></td><td><span class="tag t-dep">deprecated</span> 描述 <code>02 空闲 / 04 忙碌</code></td></tr>
+<tr><td>单点导航</td><td><code>POST /service/api/robot/point/sendNavigate?robotId=&amp;pointsId=</code></td><td>返回裸 <code>Result</code>，无 taskId</td></tr>
+<tr><td>当前任务</td><td><code>GET /service/api/robot/instrument/robotTask/getCurrentByRobotId?robotId=</code></td><td>→ <code>ShowRobotTaskAllEntity</code></td></tr>
+<tr><td>巡检结果分页</td><td><code>GET /service/api/robot/instrument/robotTask/getPagingRobotTask</code></td><td>→ <code>RobotTask</code>（含 <code>currentPointsId</code>/<code>inspectionRate</code>）</td></tr>
+<tr><td>停止 / 暂停任务</td><td><code>GET .../instrument/robotTask/stopTask?robotId=</code> / <code>pauseTask</code></td><td>任务级 abort</td></tr>
+<tr><td>一键返桩 / 离桩</td><td><code>GET .../robotTask/back?robotId=</code> / <code>POST .../sendChargingLeave</code></td><td>依赖反光柱标定</td></tr>
+<tr><td>建图 / 重定位 / 加载地图</td><td><code>POST /service/api/robot/mapMan/mapUpdate</code>（<code>MapUpdateDomain</code>）</td><td><code>action</code> 0–6 + <code>xyth</code> + <code>mapType</code></td></tr>
+<tr><td>地图/线路/点位导出</td><td><code>GET /service/api/robot/mapMan/getRobotMapAll?robotId=</code></td><td>响应标注疑似有误（G16）</td></tr>
+<tr><td>点位详情</td><td><code>GET /service/api/robot/point/getPointsById?pointsId=</code></td><td>—</td></tr>
+<tr><td>ROS 点位增改导出</td><td><code>POST/PUT /service/api/robot/robot_point/*</code></td><td><code>RosPointsShowEntity</code></td></tr>
+<tr><td>视频流</td><td><code>GET /service/api/robot/video/getStreamUrl</code></td><td>必填 <code>deviceId,ip,screenshot,stream,streamMode</code>；响应未结构化</td></tr>
+<tr><td><del>RTSP 地址</del></td><td><del><code>GET /service/api/robot/archivesMan/getRtspUrl</code></del></td><td><span class="tag t-dep">deprecated</span>（<code>protocol: FLV|WEBRTC</code>）</td></tr>
+<tr><td>气体历史</td><td><code>GET /service/api/robot/gas/getGasHistory</code></td><td>只有历史聚合</td></tr>
+<tr><td>告警列表 / 历史</td><td><code>GET /service/api/robot/taskAlarm/getAlarmList</code> / <code>getAlarmHistory</code></td><td>只读，作旁路证据</td></tr>
+<tr><td>告警回调</td><td><code>POST /service/api/robot/taskAlarm/alarmCallback</code></td><td>平台侧接收端点，注册方式未知</td></tr>
+<tr><td>云台控制</td><td><code>GET /service/api/robot/thirdParty/camera/ptzcontrol</code></td><td>必填 <code>command,deviceId,direction,speed</code>；须先进手动巡检</td></tr>
+<tr><td>自动巡检任务</td><td><code>POST .../instrument/autoInspection/addAutoInspection</code> + <code>executeNow</code></td><td>仅作 E1 失败时的 fallback</td></tr>
+<tr><td><del>测试单独点位</del></td><td><del><code>POST .../instrument/robotTaskItem/testPoints</code></del></td><td><span class="tag t-dep">deprecated</span></td></tr>
+</tbody>
+</table>
+
+<h3>宇树 B2 SDK</h3>
+<table>
+<thead><tr><th style="width:220px">能力</th><th style="width:340px">调用</th><th>API ID</th></tr></thead>
+<tbody>
+<tr><td>连续速度</td><td><code>SportClient.Move(vx, vy, vyaw)</code></td><td>1008</td></tr>
+<tr><td>相对位移</td><td><code>MoveToPos(x, y, yaw)</code></td><td>1036</td></tr>
+<tr><td>停止</td><td><code>StopMove()</code></td><td>1003</td></tr>
+<tr><td>软急停（阻尼）</td><td><code>Damp()</code></td><td>1001</td></tr>
+<tr><td>站立 / 卧倒</td><td><code>StandUp()</code> / <code>StandDown()</code></td><td>1004 / 1005</td></tr>
+<tr><td>切步态</td><td><code>SwitchGait(gait)</code></td><td>1011</td></tr>
+<tr><td>身高 / 速度档</td><td><code>BodyHeight(h)</code> / <code>SpeedLevel(level)</code></td><td>1013 / 1015</td></tr>
+<tr><td>运动状态</td><td>DDS <code>/sportmodestate</code>（position、velocity、yaw）</td><td>—</td></tr>
+<tr><td>本体感受</td><td>DDS <code>/lowstate</code>（≈500 Hz，12 电机 + IMU + 足底力）</td><td>—</td></tr>
+</tbody>
+</table>
+
+<h3>参与本方案的评审</h3>
+<table>
+<thead><tr><th style="width:110px">视角</th><th style="width:150px">模型</th><th>主要贡献</th></tr></thead>
+<tbody>
+<tr><td>能力取舍</td><td>GPT-5.6 Terra</td><td>四象限矩阵；指出 <code>alarmCallback</code> 不是可配置 webhook、深度流「有 URL ≠ 有可训练深度」</td></tr>
+<tr><td>接口设计</td><td>Grok 4.5</td><td>Arbiter 状态机与租约模型；<code>updateControllerUser</code> 与巡检模式必须拆成两轴；安全停用 <code>Damp</code>/<code>StopMove</code> 而非平台急停</td></tr>
+<tr><td>红队反驳</td><td>Claude Sonnet 5</td><td>找出 <code>getCurrentByRobotId</code> 响应结构错误、E1 致命假设、<code>tick()</code> 阻塞风险、<code>dog_goal_id</code> 强耦合、撤回 AprilTag 合并主张</td></tr>
+<tr><td>综合与核验</td><td>Claude Opus 5</td><td>逐条脚本核验上述指控；发现 <code>mapUpdate</code> 的 <code>action</code> 0–6 + <code>xyth</code> 可程序化建图/重定位</td></tr>
+</tbody>
+</table>
+
+<footer>
+权威规格：<code>docs/design/2026-08-03-dog-integration-plan.md</code>　·　
+材料：手册整合版 482 行 + OpenAPI 275 接口 / 154 schema + 平台只读探活 + 界面截图 12 张　·　
+2026-08-03
+</footer>
+
+</main>
+</div>
+</body>
+</html>

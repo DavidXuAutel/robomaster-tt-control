@@ -3,6 +3,15 @@
 显式 mode:
   - stub: 明确使用 DogStubAdapter
   - backend: 必须注入 nav+perception+gas，缺一即报错（禁止隐式回退）
+
+三个 backend 协议保持 v1 签名不变。为了让真机适配器（TopseeNav / TopseeGas）
+能如实上报平台侧的失败原因，这里用 getattr 探测两个**可选**扩展钩子：
+
+  nav.poll_fault()        -> Optional[str]  导航失败原因
+  gas.calibration_reason() -> Optional[str]  标定门禁失败的细分原因
+
+没实现这两个钩子的 backend（如 FakeNav / FakeGas）行为完全不变。
+背景见 docs/design/2026-08-03-dog-integration-plan.md §5.1、§5.4。
 """
 
 from __future__ import annotations
@@ -155,6 +164,25 @@ class DogSdkAdapter(DogAdapter):
             return
         t = float(now if now is not None else time.time())
         if self._inspect and self._nav_started and not self._arrived_emitted:
+            fault = self._nav_fault()
+            if fault:
+                # 平台状态对不上白名单/查不到任务/导航超时，都不能靠 supervisor
+                # 的 stage_timeout_s 兜底掩盖成「狗走得慢」
+                self._nav_started = False
+                self._emit(
+                    make_event(
+                        EventType.DOG_INSPECT_FAILED,
+                        mission_id=self.mission_id or "",
+                        source=self.source,
+                        sent_at=t,
+                        payload={
+                            "region_id": self._inspect["region_id"],
+                            "stage": "nav",
+                            "reason": fault,
+                        },
+                    )
+                )
+                return
             if self.nav.is_arrived():
                 self._arrived_emitted = True
                 self._emit(
@@ -191,6 +219,30 @@ class DogSdkAdapter(DogAdapter):
         if self._gas_cmd and not self._sample_done:
             self._do_gas(t)
 
+    def _nav_fault(self) -> Optional[str]:
+        """探测 nav 的可选 poll_fault 钩子。未实现则永远返回 None。"""
+        hook = getattr(self.nav, "poll_fault", None)
+        if hook is None:
+            return None
+        try:
+            fault = hook()
+        except Exception:  # noqa: BLE001 — 诊断钩子不许影响主流程
+            logger.exception("nav.poll_fault failed; ignored")
+            return None
+        return str(fault) if fault else None
+
+    def _calibration_reason(self, fallback: str) -> str:
+        """探测 gas 的可选 calibration_reason 钩子，拿不到就用旧 reason。"""
+        hook = getattr(self.gas, "calibration_reason", None)
+        if hook is None:
+            return fallback
+        try:
+            reason = hook()
+        except Exception:  # noqa: BLE001 — 同上
+            logger.exception("gas.calibration_reason failed; ignored")
+            return fallback
+        return str(reason) if reason else fallback
+
     def _do_gas(self, t: float) -> None:
         assert self._gas_cmd and self.mission_id
         region_id = str(self._gas_cmd["region_id"])
@@ -215,11 +267,28 @@ class DogSdkAdapter(DogAdapter):
                     mission_id=self.mission_id,
                     source=self.source,
                     sent_at=t,
-                    payload={"region_id": region_id, "reason": "calibration_stale"},
+                    payload={
+                        "region_id": region_id,
+                        "reason": self._calibration_reason("calibration_stale"),
+                    },
                 )
             )
             return
         readings = self.gas.sample(float(self._gas_cmd["sample_window_s"]))
+        if not readings:
+            # 平台只能按时间窗回查历史，窗口内没数据是正常结果；
+            # 绝不编造读数去凑 GAS_COMPLETED 的非空校验
+            self._sample_done = True
+            self._emit(
+                make_event(
+                    EventType.GAS_FAILED,
+                    mission_id=self.mission_id,
+                    source=self.source,
+                    sent_at=t,
+                    payload={"region_id": region_id, "reason": "no_gas_data"},
+                )
+            )
+            return
         self._sample_done = True
         self._emit(
             make_event(

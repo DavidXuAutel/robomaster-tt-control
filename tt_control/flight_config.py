@@ -42,7 +42,9 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
             logger.warning("配置文件 %s 不存在，使用 dataclass 默认值", path)
         return {}
 
-    with open(path) as f:
+    # JSON 按 RFC 8259 恒为 UTF-8；不显式声明会在非 UTF-8 locale 的机器上
+    # （如中文 Windows 的 cp936）读带中文注释的配置直接抛 UnicodeDecodeError
+    with open(path, encoding="utf-8") as f:
         cfg: dict[str, Any] = json.load(f)
 
     logger.info("已加载配置文件 %s", path)

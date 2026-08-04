@@ -23,4 +23,7 @@ tt_control.bak-*/
 tmp/
 .claude/settings.local.json
 .claude/.cc-writes/
-data/mission_evidence/
+_bak_*/
+.claude/
+.synced_from_git_rev
+docs/references/**/*.pdf

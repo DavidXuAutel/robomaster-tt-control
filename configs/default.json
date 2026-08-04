@@ -106,8 +106,6 @@
     "pano_complete_deg": 340.0,
     "pano_min_s": 2.0,
     "pano_timeout_s": 20.0,
-    "pano_step_deadband_deg": 0.5,
-    "h_missing_s": 1.0,
     "h_missing_frames": 5
   }
 }

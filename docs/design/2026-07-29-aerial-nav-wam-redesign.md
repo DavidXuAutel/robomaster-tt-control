@@ -10,7 +10,7 @@ inputs:
   - docs/handover/2026-07-29-aerial-b0-b1-orchestration-handover.md
   - artifacts/b1_seen20_metrics_20260727-072347.json
 hosts:
-  train: "10.239.121.21:31126 (1 机 2×H100) — B0 从头训 + B1 FT 同机"
+  train: "10.239.121.22:31103 (1 机 2×H100) — B0 从头训 + B1 FT 同机"
   eval: "10.239.121.22:30682 (1 机 1×H100 + AirSim，串行单消费)"
   renderer: "10.229.20.125:41451"
   forbidden: "10.229.66.70 (robot net)"
@@ -49,7 +49,7 @@ v1（B0 joint → B1 failure-replay DAgger FT）在工程链路上跑通了，�
 2. **评测先可信，再用于选点**：无 `dataset_stats.json` 直接 fail-closed；落 per-episode 记录；metrics 以 `(ckpt_sha, ann_sha, seed, protocol)` 为键，杜绝陈旧/重复复用。
 3. **门禁对噪声鲁棒**：确定性配比采样；软失败（连续 N 窗才 fail）；阈值来自可信基线。
 4. **微调不自伤**：resume 满状态或调度器快进；保留正则（λ_video>0 / L2-SP-to-base）；EMA + 按可信评测选最优；可回滚。
-5. **单一事实源**：runtime = 本仓 `aerial-wam` 分支的 checkout（整个 FastWAM 已 vendoring 进来），禁止 scp 热补；部署即 `git checkout aerial-wam`。
+5. **单一事实源**：runtime = worktree 某 commit 的 checkout，禁止 scp 热补；部署即 `git checkout <sha>`。
 6. **一切可复现/幂等/可续跑**：保留 v1 编排里好的状态机 + 幂等队列 + checkpoint watcher。
 
 ---
@@ -215,7 +215,7 @@ B0 SR=0 意味着"20% NE 下降"的 S1 目标建立在流沙上。v2 **B0 从头
 5. **Stage 2 扩/宽矫正集**（若单轮收益不足再上迭代 DAgger）。
 6. **Stage 4 选点**，与可信基线比 SR/NE。
 
-> 已落地（本 `aerial-wam` 分支，vendoring 自 FastWAM `feat/aerial-b0-b1-orchestration@46a1138`，共 19 tests passed）：
+> 已落地（worktree `aerial-b0-b1-orchestration`，未 commit，共 19 tests passed）：
 > - **L1** 确定性配额采样 + 软失败门禁：`weighted_source_dataset.py`、`ft_source_monitor.py`、`ft_mix_dataset.py`、FT task config。
 > - **L2/清除 ckpt guard**：`trainer.py::_assert_resume_allowed` 拒绝从 pre-v2 aerial checkpoint（默认拦 `m1b-20260722-012926`、`step_000500.pt`）resume，逃生舱 `AERIAL_ALLOW_LEGACY_RESUME=1`；测试 `test_resume_guard.py`。
 > 其余为本设计提案，待确认后按上表顺序实施。
@@ -224,7 +224,7 @@ B0 SR=0 意味着"20% NE 下降"的 S1 目标建立在流沙上。v2 **B0 从头
 
 ## 7. v2 实现规格（模型 / 数据 / 评测 / 训练）
 
-> 以下取自 `aerial-wam` 分支现有实现（`configs/model/fastwam_joint.yaml`、`configs/data/aerial_openfly.yaml`、`configs/task/aerial_joint_1cam_1e-4.yaml`、`experiments/aerial/eval/*`）。标 **[v2 改]** 处为本设计相对 v1 的改动点。
+> 以下取自 worktree 现有实现（`configs/model/fastwam_joint.yaml`、`configs/data/aerial_openfly.yaml`、`configs/task/aerial_joint_1cam_1e-4.yaml`、`experiments/aerial/eval/*`）。标 **[v2 改]** 处为本设计相对 v1 的改动点。
 
 ### 7.1 模型结构（FastWAM joint，MoT）
 
@@ -284,13 +284,10 @@ find /home/a25689 -path '*m1b-20260722-012926*step_000500.pt' -delete
 ### 8.2 训练主机环境准备（`:31126`）
 
 ```bash
-# 代码单一事实源：runtime = robomaster-tt-control 的 aerial-wam 分支（已 vendoring 整个 FastWAM）。
-# 禁止 scp 热补；部署即 checkout。
-export RUNTIME=/home/a25689/aerial_wam_runtime/robomaster-tt-control
-# 首次：git clone -b aerial-wam <robomaster-remote> "$RUNTIME"
-git -C "$RUNTIME" fetch && git -C "$RUNTIME" checkout aerial-wam && git -C "$RUNTIME" pull
+# 代码单一事实源：checkout 到 v2 worktree 的 commit（禁止 scp 热补）
+export RUNTIME=/home/a25689/aerial_wam_runtime/FastWAM
+git -C "$RUNTIME" fetch && git -C "$RUNTIME" checkout <v2-sha>
 export PATH=/home/a25689/aerial_wam_runtime/env/bin:$PATH
-pip install -e "$RUNTIME"                                                       # 装 fastwam 包
 python -c "import torch; print(torch.__version__, torch.cuda.device_count())"   # 期望 2
 
 # 数据 + 文本 embed + Wan2.2/Action DiT 权重就位（本地 /home，勿走 Ceph 热路径）

@@ -778,10 +778,6 @@ class App:
             if self._wander_state:
                 self._act_state = self._wander_state
 
-        zones = (
-            self._controller.zone_nearness(nearness) if nearness is not None else (0.0, 0.0, 0.0)
-        )
-
         # 诊断：每秒一次打印深度链路状态，定位「悬停不走」（2026-07-24）
         now_dbg = time.time()
         if is_on and now_dbg - self._auto_dbg_ts >= 1.0:
@@ -795,16 +791,16 @@ class App:
             if self._fsm.p.wander_mode:
                 wander_info = f" wander={self._wander_state} evt={self._fsm.last_wander_event!r}"
             logger.info(
-                "AUTO dbg: video_fps=%.1f %s fsm=%s zones=L%.2f/M%.2f/R%.2f sub=%r rc=%s%s",
-                fps, depth_info, result.state.value, zones[0], zones[1], zones[2],
-                result.sub_state, result.axes.as_tuple(), wander_info,
+                "AUTO dbg: video_fps=%.1f %s fsm=%s sub=%r rc=%s%s",
+                fps, depth_info, result.state.value, result.sub_state,
+                result.axes.as_tuple(), wander_info,
             )
 
         if result.abort_reason:
             self._disengage_auto(result.abort_reason)
             return None
         return AvoidDecision(axes=result.axes, state=result.sub_state or result.state.value,
-                             zones=zones)
+                             zones=self._controller.zone_nearness(nearness) if nearness is not None else (0, 0, 0))
 
     def _loop(self) -> int:
         blank = np.zeros((720, 960, 3), dtype=np.uint8)

@@ -21,6 +21,8 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 | 改漫游（Wander）代码或参数 | `design/2026-07-27-wander-explore-design.md`（仅 Claude 可改） |
 | 了解项目全部能力 | `handover/2026-07-25-capability-inventory.md` |
 | 空地协同（无人机×机器狗）演示 | `design/air-ground/README.md` + `handover/2026-07-31-air-ground-deferred-hardware.md` + 方案总览 HTML |
+| **对接机器狗（宇树 B2 + 拓普视平台）** | `design/2026-08-03-dog-integration-plan.md`（权威规格）+ 同名 `.html`（报告版） |
+| 接着写机器狗代码 / 真机联调前准备 | `handover/2026-08-03-dog-integration-m6-m11-implementation.md` |
 
 ## 现有文档
 
@@ -38,6 +40,8 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-31-air-ground-g1-g2-design.md` — G1–G2 真机适配设计（Codex 审过：串行 Scout / abort 广播 / 防假绿）
 - `2026-07-31-air-ground-mission-overview.html` — 空地协同方案总览（术语悬停 + 设计理由，面向阅读）
 - `air-ground/` — 分模块详设与 Codex 审稿索引（M0–M5 软件已实现）
+- `2026-08-03-dog-integration-plan.md` — **机器狗对接方案 v2**（宇树 B2 × 拓普视平台）：能力取舍矩阵、Arbiter 分时双通道、契约变更、WAM 采集规格、M6–M12 路线图、E1–E9 验证实验、待厂商确认清单
+- `2026-08-03-dog-integration-plan.html` — 同上的报告版（含架构图与状态机 SVG）
 
 ### dev-notes/ — 开发过程笔记
 - `2026-07-18-avoidance-dev-notes.md` — 视觉避障离线开发说明
@@ -49,6 +53,7 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-27-wander-codex-cross-review.md` — Wander × Codex 交叉评审记录
 - `2026-07-28-wander-cage-flight-plan.md` — Wander 铁丝笼真机验证方案与规格偏离申请
 - `2026-07-28-wander-defect-ticket.md` — Wander 模块缺陷审查与修复工单
+- `2026-07-28-wander-review-and-fix-plan.md` — Wander 缺陷审查与修复工单：3 项 P0 安全 + 4 项 P1 规格落空 + 复现脚本，供实现方逐条执行
 - `2026-07-28-wander-side-danger-abort.md` — 首飞 abort 复盘：侧区触发 danger 导致必然 abort
 - `2026-07-28-wander-verify-graylock.md` — VERIFY 灰区死循环 + 铁丝笼二飞复盘
 - `2026-07-28-orbit-wander-decoupling.md` — **绕飞与漫游模块解耦**：耦合点核查、边界约定、需求与模块错配的反例
@@ -72,11 +77,14 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-30-air-ground-phased-gates.md` — 空地协同分阶段验收门 G0–G5（契约/狗/机/交接/气检/端到端）
 - `2026-07-31-air-ground-deferred-hardware.md` — 真机/人工待测搁置清单
 - `2026-07-31-air-ground-marker-print-guide.md` — 标记物打印编号约定
+- `2026-08-03-dog-integration-m6-m11-implementation.md` — **机器狗对接 M6–M11 实现交接**：落地清单、自测结果、探针/绑定导出用法、真机联调前的配置空位与三件人工前置
 
 ### references/ — 外部参考
 - `2026-07-20-scoutxwam-world-model-analysis.md` / `.html` — ScoutXWAM 世界模型技术方案分析
 - `world_model_report_jiedu.md` — 世界模型 · ScoutWAM 汇报的通俗解读与独立评估
 - `大众具身智能遥操作数据飞轮_研究分析报告.md` — 大众遥操作数据飞轮系统研究分析报告
+- `机器人巡检平台用户说明书/2026-08-03-dog-inspection-platform-user-manual.md` — 拓普视全地形巡检机器人 PC 端手册（离线版+在线云端版去重整合，含修正说明）
+- `机器狗文档/机器人模块.openapi.json` / `登录模块.openapi.json` — 巡检平台 API 参考
 
 ## 约定
 - 新增文档请放入对应用途目录，沿用 `YYYY-MM-DD-<主题>` 命名。
