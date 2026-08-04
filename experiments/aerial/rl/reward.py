@@ -15,8 +15,12 @@ The spec gives the *shape*, not a scalar:
 ``NavigationReward`` is stateful: it remembers the previous distance so the
 collector can call ``.step(obs, action)`` once per env step. ``reward_terms``
 is a pure function for the imagination side (given explicit distances / p_coll).
-Success (arrival) and metrics thresholds align with the eval side's
-``OPENFLY_SUCCESS_DIST_M``.
+
+Arrival radius: ``RewardConfig.success_dist_m`` is the *online* arrival /
+termination gate and defaults to ``OPENFLY_SUCCESS_DIST_M`` only as a fallback —
+the training entrypoint sets a tighter value (see ``configs/aerial_rl.yaml``).
+The 20 m ``OPENFLY_SUCCESS_DIST_M`` is the loose *eval SR metric* radius and is
+intentionally NOT reused as the per-step termination threshold.
 """
 from __future__ import annotations
 

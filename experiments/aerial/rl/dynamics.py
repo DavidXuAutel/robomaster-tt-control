@@ -31,12 +31,18 @@ from experiments.aerial.rl.env.obs import Observation
 
 @dataclass
 class DynamicsOutput:
-    """One imagined transition (§4.4: ``(z_{t+1}, p_coll, progress, done) = f(z,a)``)."""
+    """One imagined transition (§4.4: ``(z_{t+1}, p_coll, progress, done) = f(z,a)``).
+
+    ``arrived`` distinguishes a *goal-reached* termination from a collision one so
+    the imagination reward can mirror the real ``NavigationReward`` (which adds a
+    success bonus on arrival). ``done`` is true for either terminal cause.
+    """
 
     z_next: np.ndarray
     p_coll: float
     progress: float
     done: bool
+    arrived: bool = False
 
 
 class LatentDynamics(abc.ABC):
@@ -80,11 +86,18 @@ class StubLatentDynamics(LatentDynamics):
         obstacle: Optional[np.ndarray] = None,
         latent_dim: int = 8,
         collide_radius_m: float = 2.0,
+        success_dist_m: float = 3.0,
     ) -> None:
         self.latent_dim = int(latent_dim)
         self._goal = None if goal is None else np.asarray(goal, dtype=np.float64).reshape(3)
         self._obstacle = None if obstacle is None else np.asarray(obstacle, dtype=np.float64).reshape(3)
         self._collide_radius = float(collide_radius_m)
+        self._success_dist = float(success_dist_m)
+
+    def set_goal(self, goal: Optional[np.ndarray]) -> None:
+        """Point imagination at the current episode's goal (corrector calls this
+        before each imagine so imagined progress/arrival track the real task)."""
+        self._goal = None if goal is None else np.asarray(goal, dtype=np.float64).reshape(3)
 
     def encode(self, obs: Observation) -> np.ndarray:
         z = np.zeros(self.latent_dim, dtype=np.float64)
@@ -114,8 +127,11 @@ class StubLatentDynamics(LatentDynamics):
         progress = 0.0
         if prev_goal_dist is not None and new_goal_dist is not None:
             progress = prev_goal_dist - new_goal_dist
-        done = p_coll >= 1.0
-        return DynamicsOutput(z_next=z_next, p_coll=p_coll, progress=progress, done=done)
+        arrived = new_goal_dist is not None and new_goal_dist < self._success_dist
+        done = bool(p_coll >= 1.0 or arrived)
+        return DynamicsOutput(
+            z_next=z_next, p_coll=p_coll, progress=progress, done=done, arrived=arrived,
+        )
 
     @staticmethod
     def _dist(pos: np.ndarray, target: Optional[np.ndarray]) -> Optional[float]:

@@ -24,7 +24,7 @@ from experiments.aerial.rl.collector import RolloutCollector
 from experiments.aerial.rl.corrector import CorrectorConfig, SerialCorrectorLoop
 from experiments.aerial.rl.dynamics import StubLatentDynamics
 from experiments.aerial.rl.env.action import clip_body_delta
-from experiments.aerial.rl.env.obs import Observation
+from experiments.aerial.rl.env.obs import PolicyObservation
 from experiments.aerial.rl.reward import RewardConfig
 from experiments.aerial.rl.safety import NullSafetyShield, ThresholdSafetyShield
 
@@ -32,10 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 class HeuristicPolicy:
-    """Goal-seeking body-delta policy: step toward the goal, capped per axis.
+    """PRIVILEGED goal-seeking stand-in — NOT an RGB policy.
 
-    Continuous (``act``) so the collector's RL path is exercised. With no goal it
-    idles (zero delta). Not a learned policy — a stand-in so V0 collection runs.
+    Steers toward the (externally supplied) goal using only proprio (x, y, z,
+    yaw), so it respects the RGB-only input boundary — it receives a
+    ``PolicyObservation`` and never touches depth/IMU. But it reaches the goal
+    via a straight-line oracle rather than perception, so it exists only to
+    exercise the V0 collection path end-to-end with no checkpoint. Swap in a
+    learned ``act(view)`` policy once one exists. With no goal it idles.
     """
 
     def __init__(self, goal_getter, step_m: float = 3.0) -> None:
@@ -45,7 +49,7 @@ class HeuristicPolicy:
     def reset(self) -> None:
         return None
 
-    def act(self, obs: Observation) -> np.ndarray:
+    def act(self, obs: PolicyObservation) -> np.ndarray:
         goal = self._goal_getter()
         if goal is None:
             return np.zeros(4, dtype=np.float64)
@@ -96,6 +100,28 @@ def _build_env(env_cfg: Any) -> Any:
     raise ValueError(f"unknown env backend {backend!r} (expected mock|airsim)")
 
 
+def _build_dynamics(dyn_cfg: Any, *, success_dist_m: float) -> Any:
+    """Dispatch on ``dynamics.kind``. ``wan`` is an offline distillation source
+    (spec §4.4/§11) — it must NOT drive the online corrector, so selecting it
+    here is a hard error rather than a silent fall-back to the stub."""
+    kind = str(_get(dyn_cfg, "kind", "stub"))
+    if kind == "stub":
+        return StubLatentDynamics(
+            goal=None,  # set per-episode by the corrector before imagination
+            latent_dim=int(_get(dyn_cfg, "latent_dim", 8)),
+            collide_radius_m=float(_get(dyn_cfg, "collide_radius_m", 2.0)),
+            success_dist_m=float(success_dist_m),
+        )
+    if kind == "wan":
+        raise ValueError(
+            "dynamics.kind='wan' (WanImaginationDynamics) is an OFFLINE "
+            "distillation source only (spec §4.4/§11) — stepping the Wan2.2 "
+            "pixel model in the online RL loop is a non-goal. Use kind='stub' "
+            "for V0; the real fast latent WM (V1) drops into the stub slot."
+        )
+    raise ValueError(f"unknown dynamics kind {kind!r} (expected stub|wan)")
+
+
 def _build_safety(safety_cfg: Any) -> Any:
     kind = str(_get(safety_cfg, "kind", "null"))
     if kind in ("null", "none", "None"):
@@ -132,15 +158,15 @@ def build_from_config(cfg: Any) -> SerialCorrectorLoop:
         w_progress=float(_get(rc, "w_progress", 1.0)),
         w_collision=float(_get(rc, "w_collision", 10.0)),
         w_maneuver=float(_get(rc, "w_maneuver", 0.01)),
+        # Online arrival/termination radius — tighter than the eval SR metric
+        # (OPENFLY_SUCCESS_DIST_M=20 m); default 3 m if the YAML omits it.
+        success_dist_m=float(_get(rc, "success_dist_m", 3.0)),
         success_bonus=float(_get(rc, "success_bonus", 10.0)),
     )
 
-    dc = _get(cfg, "dynamics", {})
-    dynamics = StubLatentDynamics(
-        goal=None,
-        latent_dim=int(_get(dc, "latent_dim", 8)),
-        collide_radius_m=float(_get(dc, "collide_radius_m", 2.0)),
-    )
+    # Imagined dynamics shares the reward's arrival radius so imagined and real
+    # returns agree on when the goal is reached.
+    dynamics = _build_dynamics(_get(cfg, "dynamics", {}), success_dist_m=reward_cfg.success_dist_m)
 
     cc = _get(cfg, "corrector", {})
     ic = _get(cfg, "imagination", {})

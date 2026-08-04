@@ -111,6 +111,15 @@ class SerialCorrectorLoop:
         except ValueError as exc:
             return {"status": "skipped", "reason": f"insufficient data: {exc}"}
         result = self.dynamics.update(windows)
+        if result.get("skipped"):
+            # Gate flipped ON but the dynamics has no real training step yet (the
+            # V1 fast-WM has not landed): report "noop", never "updated". Flipping
+            # a boolean must not fabricate progress.
+            return {
+                "status": "noop",
+                "reason": result.get("reason", "dynamics.update is a stub"),
+                **result,
+            }
         return {"status": "updated", **result}
 
     # -- GATE V4: imagination actor-critic update ------------------------
@@ -129,9 +138,16 @@ class SerialCorrectorLoop:
             transitions = self.buffer.sample(self.config.imagine_batch)
         except ValueError as exc:
             return {"status": "skipped", "reason": f"insufficient data: {exc}"}
+        # Point imagination at the current episode goal so imagined progress /
+        # arrival track the real task (a stub with goal=None yields progress≡0,
+        # a reward misaligned with the real collector).
+        set_goal = getattr(self.dynamics, "set_goal", None)
+        if callable(set_goal):
+            set_goal(getattr(getattr(self.collector, "env", None), "goal", None))
         z0 = np.stack([self.dynamics.encode(t.obs) for t in transitions], axis=0)
         rollout = imagine(
             self.dynamics, self.imagination_policy, z0, self.config.imagine_horizon,
+            reward_cfg=getattr(self.collector, "reward_cfg", None),  # match real weights + bonus
         )
         # >>> V4 INSERTION POINT: actor_critic.update(rollout) <<<
         return {

@@ -91,7 +91,12 @@ def imagine(
             pcs[b, t] = out.p_coll
             progs[b, t] = out.progress
             maneuver = float(np.linalg.norm(a))
-            rews[b, t] = reward_terms(out.progress, out.p_coll, maneuver, cfg)["reward"]
+            r = reward_terms(out.progress, out.p_coll, maneuver, cfg)["reward"]
+            # Mirror NavigationReward.step: arrival earns the same success bonus,
+            # so imagined and real returns are on one scale (spec reward §4.5).
+            if getattr(out, "arrived", False):
+                r += cfg.success_bonus
+            rews[b, t] = r
             if out.done:
                 alive[b] = False
                 dones[b, t] = True

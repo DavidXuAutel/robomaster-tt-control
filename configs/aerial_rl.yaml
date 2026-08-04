@@ -24,6 +24,10 @@ reward:
   w_collision: 10.0
   w_maneuver: 0.01
   success_bonus: 10.0
+  # Online arrival/termination radius (m). Deliberately TIGHTER than the eval
+  # success metric (metrics.OPENFLY_SUCCESS_DIST_M = 20 m): the eval radius is a
+  # loose "did it get to the region" score, not a per-step termination gate.
+  success_dist_m: 3.0
 
 dynamics:
   kind: stub               # stub | wan  (wan = offline distillation source only)

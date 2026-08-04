@@ -51,7 +51,9 @@ def act_delta(
     """
     act = getattr(policy, "act", None)
     if callable(act):
-        raw = act(obs)
+        # Hand the RGB-only view, never the full Observation: depth/IMU/velocity/
+        # collision GT must not reach the policy graph (spec §1.2 boundary).
+        raw = act(obs.policy_view())
     else:
         predict_delta = getattr(policy, "predict_delta", None)
         if callable(predict_delta):

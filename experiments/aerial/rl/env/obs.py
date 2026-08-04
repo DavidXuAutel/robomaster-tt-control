@@ -78,6 +78,40 @@ class Observation:
             dtype=np.float32,
         )
 
+    def policy_view(self) -> "PolicyObservation":
+        """Restrict to the policy-visible fields (RGB + 4-D proprio).
+
+        The collector hands *this*, not the full ``Observation``, to a policy's
+        ``act`` — so depth / IMU / velocity / collision GT are structurally
+        unreachable from inside the policy (a leak attempt raises
+        ``AttributeError`` instead of silently succeeding). Privileged consumers
+        (reward, safety shield) still take the full ``Observation``.
+        """
+        return PolicyObservation(rgb=self.rgb, proprio=self.proprio4(), t=self.t)
+
+
+@dataclass(frozen=True)
+class PolicyObservation:
+    """The ONLY observation view a policy may consume (spec §1.2: RGB + proprio).
+
+    Deliberately omits ``depth`` / ``imu`` / ``collided`` / velocity so the
+    RGB-only boundary is enforced by the type, not just documented. ``position``
+    / ``yaw`` are derived from the 4-D proprio (both are legitimate policy
+    inputs); there is no accessor for the velocity triple.
+    """
+
+    rgb: np.ndarray                      # [H, W, 3] uint8 — the only exteroception
+    proprio: np.ndarray                  # [4] (x, y, z, yaw)
+    t: float = 0.0
+
+    @property
+    def position(self) -> np.ndarray:
+        return np.asarray(self.proprio[:3], dtype=np.float64)
+
+    @property
+    def yaw(self) -> float:
+        return float(self.proprio[3])
+
 
 def depth_sanity_detail(depth: Optional[np.ndarray]) -> Dict[str, Any]:
     """Build a ``sim_verify.lib.sanity.depth_ok``-compatible detail dict.
