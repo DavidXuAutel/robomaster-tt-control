@@ -43,6 +43,22 @@ def _frozen_episode(n=6):
     ]
 
 
+def _instant_crash_episode(n=1):
+    """A short episode that ends in a collision — a bad spawn / instant crash.
+
+    ``collided`` rides on the Observation; a 1-step episode has no path to
+    difference, so it's the only signal that distinguishes this from a healthy
+    short run.
+    """
+    trans = []
+    for i in range(n):
+        obs = _obs([float(i), 0.0, 2.0], frame_val=10 + i * 20)
+        obs.collided = True
+        trans.append(Transition(obs=obs, action=np.ones(4) * 0.5,
+                                reward=-10.0, done=True))
+    return trans
+
+
 # --- round-trip --------------------------------------------------------------
 
 def test_episode_arrays_shapes_and_dtypes():
@@ -117,6 +133,35 @@ def test_flat_reward_is_not_a_hard_failure():
     assert ds.assert_nontrivial(ds.quality_report(ep)) == []
 
 
+# --- quarantine (instant crash) ---------------------------------------------
+
+def test_instant_crash_is_quarantined_not_hard_failed():
+    # 1-step episode ending in collision: path is structurally 0 so the
+    # move/frozen checks can't see it — but it IS an instant crash.
+    rep = ds.quality_report(_instant_crash_episode(n=1))
+    assert ds.assert_nontrivial(rep) == []            # NOT a hard failure
+    reasons = ds.quarantine_reasons(rep)
+    assert reasons and "instant crash" in reasons[0]  # but quarantined
+
+
+def test_two_step_crash_is_quarantined():
+    rep = ds.quality_report(_instant_crash_episode(n=2))
+    assert ds.quarantine_reasons(rep)                 # steps<=SPAWN_COLLISION_MAX_STEPS
+
+
+def test_healthy_moving_episode_not_quarantined():
+    # frames vary + moved + no early collision => usable.
+    assert ds.quarantine_reasons(ds.quality_report(_moving_episode(n=6))) == []
+
+
+def test_late_collision_not_quarantined():
+    # a long run that happens to collide at the end is real training data,
+    # NOT a spawn artifact — must not be quarantined.
+    ep = _moving_episode(n=6)
+    ep[-1].obs.collided = True
+    assert ds.quarantine_reasons(ds.quality_report(ep)) == []
+
+
 # --- summaries ---------------------------------------------------------------
 
 def test_manifest_and_quality_summary_written(tmp_path):
@@ -129,3 +174,14 @@ def test_manifest_and_quality_summary_written(tmp_path):
     data = json.loads(summ.read_text())
     assert data["episodes"] == 2
     assert data["total_steps"] == sum(r["steps"] for r in reps)
+    assert data["quarantined"] == 0 and data["usable"] == 2
+
+
+def test_quality_summary_counts_quarantined(tmp_path):
+    reps = [ds.quality_report(_moving_episode()),
+            ds.quality_report(_instant_crash_episode(n=1))]
+    summ = ds.write_quality_summary(tmp_path, reps)
+    import json
+    data = json.loads(summ.read_text())
+    assert data["episodes"] == 2
+    assert data["quarantined"] == 1 and data["usable"] == 1

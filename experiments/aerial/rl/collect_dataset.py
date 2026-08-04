@@ -11,7 +11,7 @@ fails loudly instead of producing unusable training data.
 
     # on a 4090-reachable host (RGB-only, matches configs/aerial_rl.yaml V0):
     python -m experiments.aerial.rl.collect_dataset --backend airsim \
-        --episodes 20 --max-steps 200 --step-hz 12 \
+        --episodes 20 --max-steps 200 --step-hz 8 \
         --out experiments/aerial/rl/artifacts/dataset_v0
 
 Hydra-free (builds via ``build_from_config``). Exits non-zero if any episode
@@ -67,7 +67,8 @@ def main(argv: "list[str] | None" = None) -> int:
     p.add_argument("--backend", choices=["mock", "airsim"], default="mock")
     p.add_argument("--episodes", type=int, default=3)
     p.add_argument("--max-steps", type=int, default=200)
-    p.add_argument("--step-hz", type=float, default=12.0)
+    p.add_argument("--step-hz", type=float, default=8.0,  # measured closed-loop floor (7.1–8.3 Hz)
+                   help="serial-loop rate; keep <= measured closed-loop floor so dt matches")
     p.add_argument("--out", default="experiments/aerial/rl/artifacts/dataset_v0")
     p.add_argument("--host", default="10.229.20.125")
     p.add_argument("--port", type=int, default=41451)
@@ -84,14 +85,16 @@ def main(argv: "list[str] | None" = None) -> int:
     manifest: list[dict] = []
     reports: list[dict] = []
     failures: list[str] = []
+    quarantined: list[str] = []
 
     def _sink(transitions, stats) -> None:
         idx = len(manifest)
         path = ds.write_episode(out_dir, idx, transitions)
         rep = ds.quality_report(transitions)
         rep["achieved_hz"] = round(stats.achieved_hz, 2)
-        bad = ds.assert_nontrivial(rep)
-        status = "OK" if not bad else "BAD"
+        bad = ds.assert_nontrivial(rep)           # silent-but-fatal -> hard fail
+        quar = ds.quarantine_reasons(rep)         # instant crash -> soft exclude
+        status = "BAD" if bad else ("QUARANTINE" if quar else "OK")
         logger.info(
             "ep %d: %d steps @ %.1f Hz | path %.2f m | rew_sum %.2f | %s | %s",
             idx, rep["steps"], stats.achieved_hz, rep["path_length_m"],
@@ -99,9 +102,12 @@ def main(argv: "list[str] | None" = None) -> int:
         )
         for f in bad:
             failures.append(f"ep{idx}: {f}")
+        for q in quar:
+            quarantined.append(f"ep{idx}: {q}")
         manifest.append({"file": path.name, "steps": rep["steps"],
                          "return": rep["reward_sum"], "achieved_hz": rep["achieved_hz"],
-                         "nontrivial": not bad})
+                         "nontrivial": not bad, "quarantined": bool(quar),
+                         "usable": not bad and not quar})
         reports.append(rep)
 
     loop = build_from_config(_build_cfg(args))
@@ -117,25 +123,48 @@ def main(argv: "list[str] | None" = None) -> int:
     # iterations=N / episodes_per_iter=1 would restart i at 0 every iter and
     # silently re-collect annotation[0] N times.
     try:
-        loop.collector.collect(args.episodes, episodes=loop.episodes)
+        stats = loop.collector.collect(args.episodes, episodes=loop.episodes)
     finally:
         close = getattr(loop.collector.env, "close", None)
         if callable(close):
             close()
 
+    n = len(manifest)
+    quar_frac = (len(quarantined) / n) if n else 0.0
     ds.write_manifest(out_dir, manifest, meta={
         "backend": args.backend, "step_hz": args.step_hz,
         "max_steps": args.max_steps, "grab_depth": bool(args.grab_depth),
+        "skipped_reset_collision": stats.skipped,
+        "quarantined": len(quarantined),
+        "quarantine_fraction": round(quar_frac, 3),
     })
     summary_path = ds.write_quality_summary(out_dir, reports)
-    logger.info("wrote %d episodes + %s", len(manifest), summary_path.name)
+    logger.info("wrote %d episodes + %s (skipped %d spawn-collision at reset)",
+                n, summary_path.name, stats.skipped)
 
+    # Silent-but-fatal episodes (frozen / black / never-moved) always fail.
     if failures:
         for f in failures:
             print(f"[collect] FAIL: {f}", file=sys.stderr)
         print(f"[collect] {len(failures)} trivial/dead episode(s) — dataset unusable", file=sys.stderr)
         return 1
-    print(f"[collect] OK: {len(manifest)} usable episodes in {out_dir}")
+
+    # Instant crashes are excluded per-episode, but a flood means the start-pose
+    # distribution is broken — fail the run only past MAX_QUARANTINE_FRACTION.
+    if quarantined:
+        for q in quarantined:
+            print(f"[collect] QUARANTINE: {q}", file=sys.stderr)
+        if quar_frac > ds.MAX_QUARANTINE_FRACTION:
+            print(f"[collect] {len(quarantined)}/{n} episodes quarantined "
+                  f"({quar_frac:.0%} > {ds.MAX_QUARANTINE_FRACTION:.0%}) — "
+                  "start poses likely broken", file=sys.stderr)
+            return 1
+        print(f"[collect] {len(quarantined)}/{n} quarantined "
+              f"({quar_frac:.0%}, within tolerance) — excluded from usable set",
+              file=sys.stderr)
+
+    usable = n - len(quarantined)
+    print(f"[collect] OK: {usable}/{n} usable episodes in {out_dir}")
     return 0
 
 

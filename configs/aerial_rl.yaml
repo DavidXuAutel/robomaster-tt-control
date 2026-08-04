@@ -15,8 +15,12 @@ env:
   # frame grab); the CLOSED loop (moveByVelocityAsync(dt).join + capture + RPC)
   # tops out cross-net H100→4090 at ~14 Hz RGB-only. dt=1/step_hz drives BOTH the
   # velocity-command duration AND the per-step action cap, so setting this above
-  # the achievable rate desyncs commanded vs actual motion — keep it under ~14.
-  step_hz: 12.0
+  # the achievable rate desyncs commanded vs actual motion.
+  # MEASURED: the dataset_v0 run commanded 12 Hz but achieved only 7.1–8.3 Hz
+  # (mean 7.9) — every action label encoded an 83 ms step the loop couldn't hit,
+  # a ~17% per-step dynamics desync. Set to 8 Hz, under the measured floor, so
+  # commanded dt matches actual loop time and the labels are consistent.
+  step_hz: 8.0
   grab_depth: false        # depth is supervision-only (spec §1.2); per-step
                            # DepthPlanar drops the loop to ~3 Hz. Gather offline.
   health_check: true       # sanity-gate IMU + depth on reset (airsim backend)

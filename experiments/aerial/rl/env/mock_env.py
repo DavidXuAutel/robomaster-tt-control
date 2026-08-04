@@ -55,7 +55,10 @@ class MockAirSimDroneEnv:
             self._yaw = 0.0
             self._goal = None
         self._vel = np.zeros(3, dtype=np.float64)
-        self._collided = False
+        # Populate collision at reset (as the real env does via observe): a start
+        # pose outside the box is a spawn-inside-geometry artifact the collector's
+        # entry guard should catch before any step.
+        self._collided = bool(np.any(np.abs(self._pos) > self.config.bounds_m))
         return self.observe()
 
     def step(self, action: np.ndarray) -> tuple[Observation, Dict[str, Any]]:

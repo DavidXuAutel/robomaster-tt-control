@@ -70,6 +70,9 @@ class CollectStats:
     steps: int = 0
     seconds: float = 0.0
     interventions: int = 0
+    # Episodes dropped at reset because the vehicle spawned already colliding
+    # (spawn-inside-geometry). Not counted in `episodes`; never reach the buffer.
+    skipped: int = 0
     returns: List[float] = field(default_factory=list)
 
     @property
@@ -89,6 +92,7 @@ class RolloutCollector:
         max_steps: int = 200,
         target_hz: float = 30.0,
         on_episode: Optional[Callable[[Episode, CollectStats], None]] = None,
+        skip_reset_collision: bool = True,
     ) -> None:
         self.env = env
         self.policy = policy
@@ -97,6 +101,10 @@ class RolloutCollector:
         self.safety = safety
         self.max_steps = int(max_steps)
         self.target_hz = float(target_hz)
+        # Drop episodes whose reset spawns the vehicle already in collision
+        # (inside geometry): no action has been taken, so it's a spawn artifact,
+        # not a learnable trajectory. Skipped before any step / buffer write.
+        self.skip_reset_collision = bool(skip_reset_collision)
         # Optional sink invoked with every completed episode (e.g. persist to
         # disk). None -> collector stays purely in-memory (offline tests / V0).
         self.on_episode = on_episode
@@ -104,6 +112,16 @@ class RolloutCollector:
     def collect_episode(self, episode: Optional[Dict[str, Any]] = None) -> tuple[Episode, CollectStats]:
         instruction = str((episode or {}).get("gpt_instruction", ""))
         obs = self.env.reset(episode)
+        # Entry guard: a vehicle already colliding at reset spawned inside
+        # geometry. Skip before any step so it never pollutes the buffer/dataset
+        # as a 1-step instant crash. (`collided` is populated at reset by both
+        # backends — airsim_env.observe() / mock bounds check.)
+        if self.skip_reset_collision and bool(getattr(obs, "collided", False)):
+            logger.warning(
+                "reset spawned in collision — skipping episode "
+                "(spawn-inside-geometry; start pose may need resampling)"
+            )
+            return [], CollectStats(episodes=0, skipped=1)
         if hasattr(self.policy, "reset"):
             self.policy.reset()
 
@@ -172,5 +190,6 @@ class RolloutCollector:
             total.steps += s.steps
             total.seconds += s.seconds
             total.interventions += s.interventions
+            total.skipped += s.skipped
             total.returns.extend(s.returns)
         return total

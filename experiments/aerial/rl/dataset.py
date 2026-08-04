@@ -32,6 +32,17 @@ MIN_FRAME_VARIATION = 1e-3   # mean |Δ| between consecutive RGB frames (uint8 s
 MIN_RGB_STD = 1.0            # pixel std across the episode (all-black/constant guard)
 MIN_PATH_LENGTH_M = 1e-3     # summed |Δposition| — did the vehicle move at all?
 
+# An episode that ends in a collision after <=this many steps is an instant
+# crash — a bad spawn / start pose, not a learnable trajectory. Quarantined
+# (excluded from the usable set) rather than hard-failed: for steps<=1 the path
+# length is structurally 0 (a lone position can't be differenced), so `collided`
+# is the ONLY valid discriminator here — the frozen/moved path checks can't see it.
+SPAWN_COLLISION_MAX_STEPS = 2
+# Run level: a handful of instant crashes is expected, but if more than this
+# fraction of a collection is quarantined the start-pose distribution is broken
+# and the whole run should fail.
+MAX_QUARANTINE_FRACTION = 0.2
+
 
 def episode_arrays(transitions: Sequence[Transition]) -> Dict[str, np.ndarray]:
     """Stack an episode's transitions into per-field arrays for ``.npz`` storage."""
@@ -122,6 +133,27 @@ def assert_nontrivial(report: Dict[str, Any]) -> List[str]:
     return failures
 
 
+def quarantine_reasons(report: Dict[str, Any]) -> List[str]:
+    """Soft exclusions: episodes that ran cleanly but aren't usable training data.
+
+    Distinct from ``assert_nontrivial`` (silent-but-fatal, always a hard fail): a
+    quarantined episode's collection succeeded — it's just untrustworthy. The
+    canonical case is the *instant crash*: a 1–2 step episode ending in a
+    collision (spawn-inside-geometry or a start pose facing a wall). The path
+    check in ``assert_nontrivial`` can't catch these — a 1-step episode has a
+    structurally-zero path — so ``collided`` is the discriminator. These are
+    excluded per-episode; the *run-level* gate (``MAX_QUARANTINE_FRACTION``)
+    decides whether there are enough of them to condemn the whole collection.
+    """
+    reasons: List[str] = []
+    if report["collisions"] > 0 and 0 < report["steps"] <= SPAWN_COLLISION_MAX_STEPS:
+        reasons.append(
+            f"instant crash: collision within {report['steps']} step(s) "
+            "— suspected bad spawn / start pose"
+        )
+    return reasons
+
+
 def write_manifest(out_dir: Path, entries: List[Dict[str, Any]], meta: Optional[Dict[str, Any]] = None) -> Path:
     """Write the dataset index (``manifest.json``) listing every episode + meta."""
     out_dir = Path(out_dir)
@@ -142,8 +174,11 @@ def write_quality_summary(out_dir: Path, per_episode: List[Dict[str, Any]]) -> P
         vals = [float(r[key]) for r in per_episode]
         return {"min": min(vals), "max": max(vals), "mean": float(np.mean(vals))}
 
+    quarantined = int(sum(1 for r in per_episode if quarantine_reasons(r)))
     summary = {
         "episodes": len(per_episode),
+        "quarantined": quarantined,           # instant-crash / bad-spawn episodes
+        "usable": len(per_episode) - quarantined,
         "total_steps": int(sum(r["steps"] for r in per_episode)),
         "total_collisions": int(sum(r["collisions"] for r in per_episode)),
         "rgb_frame_variation": _agg("rgb_frame_variation"),
