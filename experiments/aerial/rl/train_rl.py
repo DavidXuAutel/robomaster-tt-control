@@ -101,10 +101,12 @@ def _build_env(env_cfg: Any) -> Any:
     raise ValueError(f"unknown env backend {backend!r} (expected mock|airsim)")
 
 
-def _build_dynamics(dyn_cfg: Any, *, success_dist_m: float) -> Any:
+def _build_dynamics(dyn_cfg: Any, *, success_dist_m: float, wm_cfg: Any = None) -> Any:
     """Dispatch on ``dynamics.kind``. ``wan`` is an offline distillation source
     (spec §4.4/§11) — it must NOT drive the online corrector, so selecting it
-    here is a hard error rather than a silent fall-back to the stub."""
+    here is a hard error rather than a silent fall-back to the stub. ``torch``
+    is the real DreamerV3 RSSM WM (V1) and needs torch (H100); it reads the
+    ``world_model:`` block, imported lazily so the stub/mock path stays torch-free."""
     kind = str(_get(dyn_cfg, "kind", "stub"))
     if kind == "stub":
         return StubLatentDynamics(
@@ -120,7 +122,17 @@ def _build_dynamics(dyn_cfg: Any, *, success_dist_m: float) -> Any:
             "pixel model in the online RL loop is a non-goal. Use kind='stub' "
             "for V0; the real fast latent WM (V1) drops into the stub slot."
         )
-    raise ValueError(f"unknown dynamics kind {kind!r} (expected stub|wan)")
+    if kind == "torch":
+        try:
+            from experiments.aerial.rl.dynamics_torch import TorchRSSMDynamics
+        except ImportError as exc:  # torch absent (dev host) -> clear H100 pointer
+            raise RuntimeError(
+                "dynamics.kind='torch' needs the torch DreamerV3 RSSM WM, which "
+                "runs on the H100 (torch 2.7.1+cu128) — it is not importable here. "
+                f"Use kind='stub' on the GPU-less host. (import error: {exc})"
+            ) from exc
+        return TorchRSSMDynamics.from_config(wm_cfg or {})
+    raise ValueError(f"unknown dynamics kind {kind!r} (expected stub|wan|torch)")
 
 
 def _build_safety(safety_cfg: Any) -> Any:
@@ -171,8 +183,13 @@ def build_from_config(cfg: Any) -> SerialCorrectorLoop:
     )
 
     # Imagined dynamics shares the reward's arrival radius so imagined and real
-    # returns agree on when the goal is reached.
-    dynamics = _build_dynamics(_get(cfg, "dynamics", {}), success_dist_m=reward_cfg.success_dist_m)
+    # returns agree on when the goal is reached. The world_model block feeds the
+    # torch DreamerV3 WM (kind=torch); ignored by stub/wan.
+    dynamics = _build_dynamics(
+        _get(cfg, "dynamics", {}),
+        success_dist_m=reward_cfg.success_dist_m,
+        wm_cfg=_get(cfg, "world_model", {}),
+    )
 
     cc = _get(cfg, "corrector", {})
     ic = _get(cfg, "imagination", {})
