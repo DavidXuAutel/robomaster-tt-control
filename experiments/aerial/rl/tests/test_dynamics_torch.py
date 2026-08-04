@@ -48,8 +48,8 @@ def _windows(batch=2, length=3, size=16):
     return ws
 
 
-def _tiny_model(size=8):
-    # Small dims + tiny image so the whole thing runs fast on CPU.
+def _tiny_model(size=16):
+    # Small dims + smallest legal image (multiple of 16, >=16) for fast CPU.
     return TorchRSSMDynamics(
         image_size=size, recurrent_dim=16, stoch_dim=4, stoch_classes=4,
         hidden_dim=16, num_bins=41, device="cpu", torch_dtype=torch.float32,
@@ -134,7 +134,7 @@ def test_from_config_reads_world_model_block():
         "recurrent_dim": 16, "stoch_dim": 4, "stoch_classes": 4, "num_bins": 41,
         "bin_lo": -10.0, "bin_hi": 10.0, "free_bits": 1.0,
         "loss_scales": {"pred": 1.0, "dyn": 1.0, "rep": 0.1},
-        "lr": 1e-4, "grad_clip": 1000.0, "image_size": 8,
+        "lr": 1e-4, "grad_clip": 1000.0, "image_size": 16,
         "decoder": {"train_only": True}, "device": "cpu",
     }
     m = TorchRSSMDynamics.from_config(cfg)

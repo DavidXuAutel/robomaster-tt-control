@@ -50,7 +50,7 @@ reward:
   maneuver_curriculum_ramp: 1.0
 
 dynamics:
-  kind: stub               # stub | wan | torch
+  kind: torch              # V1 ON — flipped after H100 §2–§3 PASS (2026-08-04)
                            #   stub  = analytic latent (V0, offline-testable)
                            #   wan   = offline distillation source ONLY (§4.4/§11)
                            #   torch = DreamerV3 RSSM WM (V1) — needs torch (H100);
@@ -98,7 +98,7 @@ corrector:
   episodes_per_iter: 1
   max_steps: 200
   # V0 runs today; V1/V4 stay gated OFF until each milestone passes.
-  enable_wm_update: false     # GATE V1: world-model training
+  enable_wm_update: true      # GATE V1 ON — after H100 validate PASS
   enable_policy_update: false # GATE V4: imagination actor-critic update
   strict_gates: false
   # WM-training window sampling (used once enable_wm_update flips on): draw

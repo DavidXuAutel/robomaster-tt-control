@@ -144,6 +144,11 @@ def main(argv: List[str] | None = None) -> int:
     p.add_argument("--horizon", type=int, default=15)  # MAX_IMAGINATION_HORIZON (§9)
     p.add_argument("--device", default="cuda")
     p.add_argument("--allow-v0-desync", action="store_true")
+    p.add_argument(
+        "--save-ckpt",
+        action="store_true",
+        help="on PASS, write world_model.checkpoint_dir/wm_step_<N>.pt (runbook §3)",
+    )
     args = p.parse_args(argv)
 
     root = Path(args.dataset)
@@ -165,6 +170,12 @@ def main(argv: List[str] | None = None) -> int:
     passed = learn_ok and diverge_ok
     print(f"[wm-validate] {'PASS' if passed else 'FAIL'}: "
           f"learning={learn_ok} non_divergence={diverge_ok}")
+    if passed and args.save_ckpt:
+        ckpt_dir = Path(wm_cfg.get("checkpoint_dir") or "experiments/aerial/rl/artifacts/wm_ckpt")
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_path = ckpt_dir / f"wm_step_{args.steps}.pt"
+        model.save_checkpoint(str(ckpt_path), step=args.steps)
+        print(f"[wm-validate] checkpoint → {ckpt_path}")
     return 0 if passed else 1
 
 
