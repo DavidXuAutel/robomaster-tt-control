@@ -1,0 +1,9 @@
+# Collected datasets: heavy per-frame tensors stay local, quality JSON is tracked.
+artifacts/**/*.npz
+artifacts/**/*.npy
+# Keep the lightweight, reviewable summaries so a collection's health is on-branch
+# even when the raw frames aren't.
+!artifacts/**/manifest.json
+!artifacts/**/QUALITY_SUMMARY.json
+__pycache__/
+*.pyc

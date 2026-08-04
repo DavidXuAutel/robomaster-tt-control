@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -88,6 +88,7 @@ class RolloutCollector:
         safety: Optional[SafetyShield] = None,
         max_steps: int = 200,
         target_hz: float = 30.0,
+        on_episode: Optional[Callable[[Episode, CollectStats], None]] = None,
     ) -> None:
         self.env = env
         self.policy = policy
@@ -96,6 +97,9 @@ class RolloutCollector:
         self.safety = safety
         self.max_steps = int(max_steps)
         self.target_hz = float(target_hz)
+        # Optional sink invoked with every completed episode (e.g. persist to
+        # disk). None -> collector stays purely in-memory (offline tests / V0).
+        self.on_episode = on_episode
 
     def collect_episode(self, episode: Optional[Dict[str, Any]] = None) -> tuple[Episode, CollectStats]:
         instruction = str((episode or {}).get("gpt_instruction", ""))
@@ -153,6 +157,8 @@ class RolloutCollector:
                 stats.achieved_hz, self.target_hz, stats.steps,
             )
         self.buffer.add_episode(transitions)
+        if self.on_episode is not None:
+            self.on_episode(transitions, stats)
         return transitions, stats
 
     def collect(self, num_episodes: int = 1, episodes: Optional[List[Dict[str, Any]]] = None) -> CollectStats:
