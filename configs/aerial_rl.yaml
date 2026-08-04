@@ -11,7 +11,14 @@ env:
   vehicle: drone_1
   width: 224               # working resolution — Fork A confirmed here
   height: 224
-  step_hz: 30.0            # Plan-A serial real-env rate (cross-net ~30.6 fps)
+  # Plan-A serial real-env rate. The ~30 fps in sim_verify is CAPTURE-ONLY (L2f
+  # frame grab); the CLOSED loop (moveByVelocityAsync(dt).join + capture + RPC)
+  # tops out cross-net H100→4090 at ~14 Hz RGB-only. dt=1/step_hz drives BOTH the
+  # velocity-command duration AND the per-step action cap, so setting this above
+  # the achievable rate desyncs commanded vs actual motion — keep it under ~14.
+  step_hz: 12.0
+  grab_depth: false        # depth is supervision-only (spec §1.2); per-step
+                           # DepthPlanar drops the loop to ~3 Hz. Gather offline.
   health_check: true       # sanity-gate IMU + depth on reset (airsim backend)
   seed: 0
 
