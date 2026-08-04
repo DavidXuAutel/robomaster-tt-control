@@ -25,7 +25,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch  # H100 only; the whole script is gated on this import
@@ -91,16 +91,33 @@ def _load_buffer(root: Path, window: int) -> ReplayBuffer:
 
 
 def _check_learning(model: TorchRSSMDynamics, buf: ReplayBuffer,
-                    steps: int, wm_batch: int, window: int) -> bool:
+                    steps: int, wm_batch: int, window: int,
+                    log_path: Optional[Path] = None) -> bool:
     losses: List[float] = []
     recons: List[float] = []
     ent_fracs: List[float] = []
+    if log_path is not None and log_path.exists():
+        log_path.unlink()
     for i in range(steps):
         windows = buf.sample_windows(wm_batch, window)
         out = model.update(windows)
         losses.append(out["loss"])
         recons.append(out["recon_err"])
         ent_fracs.append(out.get("post_entropy_frac", 1.0))
+        if log_path is not None:
+            # Field names MUST match _v0_gate._signal1abc_from_log (loss /
+            # recon_err / post_entropy_frac) so ①a–c reads this as its curve.
+            row = {
+                "step": i,
+                "loss": float(out["loss"]),
+                "recon_err": float(out["recon_err"]),
+                "post_entropy_frac": float(out.get("post_entropy_frac", 1.0)),
+                "loss_dyn": float(out.get("loss_dyn", float("nan"))),
+                "loss_rep": float(out.get("loss_rep", float("nan"))),
+                "grad_norm": float(out.get("grad_norm", float("nan"))),
+            }
+            with log_path.open("a") as f:
+                f.write(json.dumps(row) + "\n")
         if i % max(1, steps // 10) == 0:
             print(f"[wm-validate] step {i:4d} | loss={out['loss']:.4f} "
                   f"recon={out['recon_err']:.4f} dyn={out['loss_dyn']:.3f} "
@@ -183,15 +200,23 @@ def main(argv: List[str] | None = None) -> int:
     print(f"[wm-validate] model on {model.device} | latent_dim={model.latent_dim} "
           f"| image_size={wm_cfg['image_size']}")
 
-    learn_ok = _check_learning(model, buf, args.steps, args.wm_batch, args.window)
+    # Always emit the ①a–c learning log (the gate consumes it even without a
+    # saved ckpt). Mirrors train_depth_head's depth_train.jsonl.
+    ckpt_dir = Path(wm_cfg.get("checkpoint_dir") or "experiments/aerial/rl/artifacts/wm_ckpt")
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    log_path = ckpt_dir / "wm_train.jsonl"
+
+    learn_ok = _check_learning(
+        model, buf, args.steps, args.wm_batch, args.window, log_path=log_path
+    )
     diverge_ok = _check_non_divergence(model, buf, args.window, args.horizon)
 
     passed = learn_ok and diverge_ok
+    print(f"[wm-validate] learning log → {log_path} "
+          f"(feed to `_v0_gate --learning-log {log_path}`)")
     print(f"[wm-validate] {'PASS' if passed else 'FAIL'}: "
           f"learning={learn_ok} non_divergence={diverge_ok}")
     if passed and args.save_ckpt:
-        ckpt_dir = Path(wm_cfg.get("checkpoint_dir") or "experiments/aerial/rl/artifacts/wm_ckpt")
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
         ckpt_path = ckpt_dir / f"wm_step_{args.steps}.pt"
         model.save_checkpoint(str(ckpt_path), step=args.steps)
         print(f"[wm-validate] checkpoint → {ckpt_path}")
