@@ -1,0 +1,150 @@
+{
+  "meta": {
+    "backend": "airsim",
+    "step_hz": 12.0,
+    "max_steps": 200,
+    "grab_depth": false
+  },
+  "episodes": [
+    {
+      "file": "episode_00000.npz",
+      "steps": 200,
+      "return": 49.4875479103066,
+      "achieved_hz": 7.8,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00001.npz",
+      "steps": 200,
+      "return": 44.84030093904585,
+      "achieved_hz": 8.3,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00002.npz",
+      "steps": 200,
+      "return": 50.447577089071274,
+      "achieved_hz": 7.49,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00003.npz",
+      "steps": 200,
+      "return": 49.97102047712542,
+      "achieved_hz": 8.08,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00004.npz",
+      "steps": 200,
+      "return": 47.87529877980705,
+      "achieved_hz": 8.17,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00005.npz",
+      "steps": 200,
+      "return": 48.460963738150895,
+      "achieved_hz": 8.17,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00006.npz",
+      "steps": 200,
+      "return": 45.092347357887775,
+      "achieved_hz": 8.3,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00007.npz",
+      "steps": 200,
+      "return": 50.45145356655121,
+      "achieved_hz": 7.9,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00008.npz",
+      "steps": 1,
+      "return": -9.955208778381348,
+      "achieved_hz": 7.72,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00009.npz",
+      "steps": 1,
+      "return": -10.002751350402832,
+      "achieved_hz": 7.86,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00010.npz",
+      "steps": 200,
+      "return": 47.23882582457736,
+      "achieved_hz": 8.27,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00011.npz",
+      "steps": 200,
+      "return": 49.75651834602468,
+      "achieved_hz": 7.57,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00012.npz",
+      "steps": 200,
+      "return": 45.42215330898762,
+      "achieved_hz": 8.29,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00013.npz",
+      "steps": 200,
+      "return": 48.76368463039398,
+      "achieved_hz": 7.66,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00014.npz",
+      "steps": 200,
+      "return": 52.039218488149345,
+      "achieved_hz": 7.66,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00015.npz",
+      "steps": 200,
+      "return": 49.218902077525854,
+      "achieved_hz": 7.81,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00016.npz",
+      "steps": 200,
+      "return": 52.37004903052002,
+      "achieved_hz": 7.12,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00017.npz",
+      "steps": 43,
+      "return": -0.64860759396106,
+      "achieved_hz": 7.66,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00018.npz",
+      "steps": 92,
+      "return": 11.095065121771768,
+      "achieved_hz": 7.23,
+      "nontrivial": true
+    },
+    {
+      "file": "episode_00019.npz",
+      "steps": 1,
+      "return": -10.00130844116211,
+      "achieved_hz": 8.05,
+      "nontrivial": true
+    }
+  ]
+}

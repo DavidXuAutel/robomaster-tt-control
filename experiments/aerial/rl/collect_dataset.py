@@ -111,7 +111,17 @@ def main(argv: "list[str] | None" = None) -> int:
     if args.backend == "mock" and loop.episodes is None:
         loop.episodes = [_mock_goal_episode()]
         logger.info("mock backend: injected a synthetic start→goal episode")
-    loop.run()
+
+    # Collect N episodes in ONE collector.collect call so episode indexing
+    # advances (i % len(episodes)). Routing through SerialCorrectorLoop with
+    # iterations=N / episodes_per_iter=1 would restart i at 0 every iter and
+    # silently re-collect annotation[0] N times.
+    try:
+        loop.collector.collect(args.episodes, episodes=loop.episodes)
+    finally:
+        close = getattr(loop.collector.env, "close", None)
+        if callable(close):
+            close()
 
     ds.write_manifest(out_dir, manifest, meta={
         "backend": args.backend, "step_hz": args.step_hz,

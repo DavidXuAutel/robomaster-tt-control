@@ -1,0 +1,21 @@
+{
+  "episodes": 20,
+  "total_steps": 3138,
+  "total_collisions": 4,
+  "rgb_frame_variation": {
+    "min": 0.0,
+    "max": 14.01308536529541,
+    "mean": 2.703445425629616
+  },
+  "path_length_m": {
+    "min": 0.0,
+    "max": 55.49488448718361,
+    "mean": 39.70783313343115
+  },
+  "reward_sum": {
+    "min": -10.002751350402832,
+    "max": 52.37004903052002,
+    "mean": 35.596152526099466
+  },
+  "any_depth": true
+}
