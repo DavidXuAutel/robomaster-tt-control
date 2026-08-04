@@ -1,0 +1,56 @@
+# Aerial WAM v2 — model-based RL skeleton config (Plan A).
+# Standalone (not composed via defaults); consumed by
+# experiments/aerial/rl/train_rl.py. Override on the CLI, e.g.
+#   python -m experiments.aerial.rl.train_rl env.backend=airsim corrector.smoke=true
+
+env:
+  backend: mock            # mock | airsim
+  host: 10.229.20.125      # 4090 renderer (see config.env); airsim backend only
+  port: 41451
+  camera: front_custom
+  vehicle: drone_1
+  width: 224               # working resolution — Fork A confirmed here
+  height: 224
+  step_hz: 30.0            # Plan-A serial real-env rate (cross-net ~30.6 fps)
+  health_check: true       # sanity-gate IMU + depth on reset (airsim backend)
+  seed: 0
+
+buffer:
+  capacity_episodes: 1000
+  seed: 0
+
+reward:
+  w_progress: 1.0
+  w_collision: 10.0
+  w_maneuver: 0.01
+  success_bonus: 10.0
+
+dynamics:
+  kind: stub               # stub | wan  (wan = offline distillation source only)
+  latent_dim: 8
+  collide_radius_m: 2.0
+
+imagination:
+  batch: 64
+  horizon: 10              # <= MAX_IMAGINATION_HORIZON (spec §9 cap)
+
+safety:
+  kind: null               # null | threshold
+  min_depth_m: 1.5
+  min_tau_s: 1.0
+  max_p_coll: 0.5
+
+corrector:
+  iterations: 10
+  episodes_per_iter: 1
+  max_steps: 200
+  # V0 runs today; V1/V4 stay gated OFF until each milestone passes.
+  enable_wm_update: false     # GATE V1: world-model training
+  enable_policy_update: false # GATE V4: imagination actor-critic update
+  strict_gates: false
+  smoke: false
+
+# Optional OpenFly annotation of episodes (start/goal poses). null -> single
+# origin->goal-less episode from the env's default reset.
+annotation: null
+max_episodes: 20
