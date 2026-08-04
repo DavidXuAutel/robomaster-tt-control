@@ -233,3 +233,19 @@ def test_load_dataset_skips_quarantined(tmp_path):
     assert len(eps[0]) == 6
     all_eps = ds.load_dataset(tmp_path, skip_quarantined=False)
     assert len(all_eps) == 2
+
+
+def test_quarantine_catches_legacy_short_negative_return(tmp_path):
+    # Legacy dataset_v0 wrote pre-step obs.collided (false on frame 0) even when
+    # the step ended in a crash — reward_sum is the remaining signal.
+    ep = [
+        Transition(
+            obs=_obs([0.0, 0.0, 2.0], frame_val=30),
+            action=np.zeros(4),
+            reward=-10.0,
+            done=True,
+            next_obs=_obs([0.0, 0.0, 2.0], frame_val=30),  # next also clean in legacy
+        )
+    ]
+    reasons = ds.quarantine_reasons(ds.quality_report(ep))
+    assert reasons and "instant crash" in reasons[0]

@@ -54,7 +54,19 @@ def episode_arrays(transitions: Sequence[Transition]) -> Dict[str, np.ndarray]:
         "actions": np.stack([np.asarray(t.action, np.float32) for t in transitions]),  # [N,4]
         "rewards": np.asarray([t.reward for t in transitions], np.float32),
         "dones": np.asarray([t.done for t in transitions], np.bool_),
-        "collided": np.asarray([bool(t.obs.collided) for t in transitions], np.bool_),
+        # Post-step collision (next_obs): the flag that ends an episode lives on
+        # the observation AFTER the action. Using obs.collided alone misses the
+        # instant-crash case (1-step: pre-step obs is clean, post-step is not).
+        "collided": np.asarray(
+            [
+                bool(
+                    (t.next_obs.collided if t.next_obs is not None else False)
+                    or t.obs.collided
+                )
+                for t in transitions
+            ],
+            np.bool_,
+        ),
     }
     # Depth is optional per-step (grab_depth); store it only if every frame has it.
     if all(t.obs.depth is not None for t in transitions):
@@ -107,6 +119,12 @@ def load_episode(path: Path) -> List[Transition]:
     for i in range(n):
         obs = _obs_at(i)
         next_obs = _obs_at(i + 1) if i + 1 < n else obs
+        # On the terminal frame, fold the stored post-step collision into next_obs
+        # so quarantine_reasons sees the crash (legacy npz may only flag collided[i]).
+        if bool(collided[i]):
+            next_obs.collided = True
+            if i + 1 >= n:
+                obs.collided = True
         transitions.append(
             Transition(
                 obs=obs,
@@ -216,12 +234,23 @@ def quarantine_reasons(report: Dict[str, Any]) -> List[str]:
     structurally-zero path — so ``collided`` is the discriminator. These are
     excluded per-episode; the *run-level* gate (``MAX_QUARANTINE_FRACTION``)
     decides whether there are enough of them to condemn the whole collection.
+
+    Also treat ultra-short episodes (``steps <= SPAWN_COLLISION_MAX_STEPS``) with a
+    large negative return as crashes: legacy ``dataset_v0`` npz stored pre-step
+    ``obs.collided`` (always false on the first frame), so ``collisions`` alone
+    under-counts on that corpus.
     """
     reasons: List[str] = []
-    if report["collisions"] > 0 and 0 < report["steps"] <= SPAWN_COLLISION_MAX_STEPS:
+    short = 0 < report["steps"] <= SPAWN_COLLISION_MAX_STEPS
+    if short and report["collisions"] > 0:
         reasons.append(
             f"instant crash: collision within {report['steps']} step(s) "
             "— suspected bad spawn / start pose"
+        )
+    elif short and report["reward_sum"] <= -5.0:
+        reasons.append(
+            f"instant crash: {report['steps']} step(s) with reward_sum="
+            f"{report['reward_sum']:.2f} — suspected bad spawn / start pose"
         )
     return reasons
 
