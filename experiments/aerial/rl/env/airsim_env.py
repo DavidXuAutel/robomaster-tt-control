@@ -179,9 +179,12 @@ class AirSimDroneEnv:
         client.moveByVelocityAsync(
             vx, vy, vz_ned, dt, yaw_mode=yaw_mode, **self._vk
         )
-        # Leave headroom for observe() RPCs (Scene ~15-20 ms cross-net; keep
-        # 40 ms) so the labeled deadline is hit after the frame returns.
-        observe_budget = 0.04
+        # Leave headroom for observe() so the labeled deadline is hit after the
+        # frame returns. RGB Scene JPEG is ~20 ms local / ~30 ms cross-net;
+        # DepthPlanar@224 is ~100 ms local (4090 loopback 2026-08-04 bench) so
+        # the old fixed 40 ms budget overshot by ~80 ms/step whenever
+        # grab_depth=True and falsely capped achieved Hz below commanded.
+        observe_budget = 0.15 if self.config.grab_depth else 0.04
         remaining = dt - (time.perf_counter() - t0)
         if remaining > observe_budget:
             time.sleep(remaining - observe_budget)
