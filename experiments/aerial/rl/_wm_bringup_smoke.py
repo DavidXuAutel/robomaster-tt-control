@@ -60,15 +60,27 @@ def main(argv: list[str] | None = None) -> int:
     manifest_path = root / "manifest.json"
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text())
-        step_hz = float((manifest.get("meta") or {}).get("step_hz", 0) or 0)
-        if step_hz > 8.5 and not args.allow_v0_desync:
-            print(
-                f"[wm-bringup] REFUSE: dataset step_hz={step_hz} looks like the "
-                "dt-desynced V0 smoke corpus. Pass --allow-v0-desync to exercise "
-                "the load path only, or re-collect at step_hz=8 for V1 training.",
-                file=sys.stderr,
-            )
-            return 2
+        meta = manifest.get("meta") or {}
+        step_hz = float(meta.get("step_hz", 0) or 0)
+        grab_depth = bool(meta.get("grab_depth", False))
+        if not args.allow_v0_desync:
+            if grab_depth and step_hz > 6.5:
+                print(
+                    f"[wm-bringup] REFUSE: dataset step_hz={step_hz} with grab_depth "
+                    "exceeds the measured 4090-local depth closed-loop ceiling (~6.2 Hz). "
+                    "Re-collect at step_hz≤5.0, or pass --allow-v0-desync to exercise "
+                    "the load path only.",
+                    file=sys.stderr,
+                )
+                return 2
+            if step_hz > 8.5:
+                print(
+                    f"[wm-bringup] REFUSE: dataset step_hz={step_hz} looks like the "
+                    "dt-desynced V0 smoke corpus. Pass --allow-v0-desync to exercise "
+                    "the load path only, or re-collect at a rate-locked step_hz.",
+                    file=sys.stderr,
+                )
+                return 2
 
     print(f"[wm-bringup] loading {root} {meta_note}")
     episodes = ds.load_dataset(root, skip_quarantined=True)
@@ -135,8 +147,15 @@ def main(argv: list[str] | None = None) -> int:
 
     print("[wm-bringup] OK: disk→buffer→window→stub-V1-gate path verified")
     if manifest_path.exists():
-        step_hz = float((manifest.get("meta") or {}).get("step_hz", 0) or 0)
-        if step_hz > 8.5:
+        meta = manifest.get("meta") or {}
+        step_hz = float(meta.get("step_hz", 0) or 0)
+        grab_depth = bool(meta.get("grab_depth", False))
+        if grab_depth and step_hz > 6.5:
+            print(
+                "[wm-bringup] NOTE: labeled step_hz exceeds measured depth "
+                "closed-loop ceiling (~6.2 Hz) — do not train a real WM on it."
+            )
+        elif step_hz > 8.5:
             print(
                 "[wm-bringup] NOTE: this looks like the V0 smoke corpus "
                 "(step_hz>8.5) — do not train a real WM on it."

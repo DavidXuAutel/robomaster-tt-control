@@ -43,16 +43,35 @@ def _load_world_model_cfg(config_path: Path) -> Dict[str, Any]:
 
 
 def _refuse_v0(root: Path, allow: bool) -> None:
+    """Refuse corpora whose labeled step_hz exceeds a measured closed-loop floor.
+
+    Thresholds (4090 loopback, 2026-08-04):
+      - grab_depth=true  ceiling ≈ 6.2 Hz → refuse labeled step_hz > 6.5
+      - RGB-only legacy   labeled-12 / achieved~7.9 → refuse step_hz > 8.5
+    """
     manifest_path = root / "manifest.json"
     if not manifest_path.exists():
         return
     manifest = json.loads(manifest_path.read_text())
-    step_hz = float((manifest.get("meta") or {}).get("step_hz", 0) or 0)
-    if step_hz > 8.5 and not allow:
+    meta = manifest.get("meta") or {}
+    step_hz = float(meta.get("step_hz", 0) or 0)
+    grab_depth = bool(meta.get("grab_depth", False))
+    if allow:
+        return
+    if grab_depth and step_hz > 6.5:
+        print(
+            f"[wm-validate] REFUSE: dataset step_hz={step_hz} with grab_depth "
+            "exceeds the measured 4090-local depth closed-loop ceiling (~6.2 Hz). "
+            "Re-collect at step_hz≤5.0, or pass --allow-v0-desync only to exercise "
+            "the code path.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if step_hz > 8.5:
         print(
             f"[wm-validate] REFUSE: dataset step_hz={step_hz} is the dt-desynced V0 "
             "corpus — do not train a real WM on it. Pass --allow-v0-desync only to "
-            "exercise the code path, or point --dataset at dataset_v1_rgb.",
+            "exercise the code path, or point --dataset at a rate-locked corpus.",
             file=sys.stderr,
         )
         raise SystemExit(2)

@@ -11,18 +11,15 @@ env:
   vehicle: drone_1
   width: 224               # working resolution — Fork A confirmed here
   height: 224
-  # Plan-A serial real-env rate. The ~30 fps in sim_verify is CAPTURE-ONLY (L2f
-  # frame grab); the CLOSED loop (moveByVelocityAsync(dt).join + capture + RPC)
-  # tops out cross-net H100→4090 at ~14 Hz RGB-only. dt=1/step_hz drives BOTH the
-  # velocity-command duration AND the per-step action cap, so setting this above
-  # the achievable rate desyncs commanded vs actual motion.
-  # MEASURED: the dataset_v0 run commanded 12 Hz but achieved only 7.1–8.3 Hz
-  # (mean 7.9) — every action label encoded an 83 ms step the loop couldn't hit,
-  # a ~17% per-step dynamics desync. Set to 8 Hz, under the measured floor, so
-  # commanded dt matches actual loop time and the labels are consistent.
-  step_hz: 8.0
-  grab_depth: false        # depth is supervision-only (spec §1.2); per-step
-                           # DepthPlanar drops the loop to ~3 Hz. Gather offline.
+  # Plan-A serial real-env rate. CAPTURE-ONLY L2f is ~20 fps; CLOSED loop is slower.
+  # 4090 loopback (2026-08-04, after depth-aware observe_budget):
+  #   RGB-only ceiling ~14 Hz; grab_depth=true ceiling ~6.2 Hz (observe~120 ms).
+  #   Commanded 5.0 + depth rate-locks (achieved 4.99); commanded 6.0 is near the
+  #   ceiling (5.6–6.0). Cross-net H100→4090 depth was ~0.7 Hz — do NOT collect depth
+  #   off-box. Legacy dataset_v0 labeled 12 Hz / achieved ~7.9 is dt-desynced smoke.
+  step_hz: 5.0
+  grab_depth: false        # depth is supervision-only (spec §1.2); enable via
+                           # collect_dataset --grab-depth on 4090 loopback at step_hz≤5.
   health_check: true       # sanity-gate IMU + depth on reset (airsim backend)
   seed: 0
 

@@ -67,7 +67,7 @@ def main(argv: "list[str] | None" = None) -> int:
     p.add_argument("--backend", choices=["mock", "airsim"], default="mock")
     p.add_argument("--episodes", type=int, default=3)
     p.add_argument("--max-steps", type=int, default=200)
-    p.add_argument("--step-hz", type=float, default=8.0,  # measured closed-loop floor (7.1–8.3 Hz)
+    p.add_argument("--step-hz", type=float, default=5.0,  # 4090 loopback+depth floor (2026-08-04)
                    help="serial-loop rate; keep <= measured closed-loop floor so dt matches")
     p.add_argument("--out", default="experiments/aerial/rl/artifacts/dataset_v0")
     p.add_argument("--host", default="10.229.20.125")
