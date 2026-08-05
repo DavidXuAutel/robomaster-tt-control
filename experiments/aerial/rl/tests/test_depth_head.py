@@ -205,6 +205,70 @@ def test_depth_cfg_defaults_to_effective_grad_clip(tmp_path):
     assert _load_depth_cfg(config)["grad_clip"] == pytest.approx(5.0)
 
 
+def test_depth_head_base64_forward_shapes():
+    """Capacity-lift width (base=64) must keep [1b] D̂/logσ spatial contract."""
+    model = _DepthHead(image_size=16, n_frames=2, base=64)
+    rgb = torch.randint(0, 256, (1, 3, 16, 16, 3), dtype=torch.uint8)
+    depth, log_sigma = model.predict_from_window(rgb)
+    assert depth.shape == (1, 16, 16)
+    assert log_sigma.shape == (1, 16, 16)
+    assert torch.all(depth > 0)
+    # Wider net should expose more params than base=32 at same spatial size.
+    n64 = sum(p.numel() for p in model.parameters())
+    n32 = sum(p.numel() for p in _DepthHead(image_size=16, n_frames=2, base=32).parameters())
+    assert n64 > n32
+
+
+def test_base_cli_wins_over_yaml(monkeypatch, tmp_path):
+    cfg = {
+        "n_frames": 4,
+        "base": 32,
+        "delta_weight": 0.0,
+        "approach_oversample": 1,
+        "enable": False,
+        "image_size": 16,
+        "lr": 1.0e-4,
+        "grad_clip": 5.0,
+        "absrel_weight": 1.0,
+        "nll_weight": 0.1,
+        "max_depth_m": 200.0,
+        "scale_depth_min_m": 1.0,
+        "scale_depth_max_m": 40.0,
+        "freeze_encoder": False,
+        "checkpoint_dir": str(tmp_path / "ckpt"),
+    }
+    monkeypatch.setattr(
+        "experiments.aerial.rl.train_depth_head._refuse_bad_corpus",
+        lambda root, allow: None,
+    )
+    monkeypatch.setattr(
+        "experiments.aerial.rl.train_depth_head._load_depth_cfg",
+        lambda path: cfg,
+    )
+
+    def stop_after_overrides(root, window):
+        assert cfg["base"] == 64
+        raise RuntimeError("base override observed")
+
+    monkeypatch.setattr(
+        "experiments.aerial.rl.train_depth_head._usable_episodes",
+        stop_after_overrides,
+    )
+    with pytest.raises(RuntimeError, match="base override observed"):
+        train_depth_main(
+            [
+                "--dataset",
+                str(tmp_path),
+                "--device",
+                "cpu",
+                "--base",
+                "64",
+                "--approach-oversample",
+                "1",
+            ]
+        )
+
+
 def test_approach_oversample_cli_wins_over_yaml(monkeypatch, tmp_path):
     cfg = {
         "n_frames": 4,

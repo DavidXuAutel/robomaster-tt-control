@@ -327,6 +327,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Force full-model finetune even if yaml freeze_encoder=true.",
     )
+    p.add_argument(
+        "--base",
+        type=int,
+        default=None,
+        help="Override yaml depth_head.base (channel width). Capacity lift "
+             "uses 64; canonical AbsRel-PASS ckpt is base=32 — arch mismatch "
+             "refuses --init-ckpt (strict load). Default keeps yaml (32).",
+    )
     args = p.parse_args(argv)
     if args.eval_every < 0:
         p.error("--eval-every must be >= 0")
@@ -349,6 +357,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[depth-train] NOTE: --lr {args.lr} overrides yaml lr={dh_cfg.get('lr')}",
               file=sys.stderr)
         dh_cfg["lr"] = float(args.lr)
+    if args.base is not None:
+        if int(args.base) < 8:
+            p.error("--base must be >= 8")
+        print(f"[depth-train] NOTE: --base {args.base} overrides yaml "
+              f"base={dh_cfg.get('base')}", file=sys.stderr)
+        dh_cfg["base"] = int(args.base)
     if args.no_freeze_encoder:
         dh_cfg["freeze_encoder"] = False
     elif args.freeze_encoder:
@@ -462,7 +476,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         log_path.unlink()
     print(
-        f"[depth-train] recipe: lr={dh_cfg['lr']} delta_weight={dh_cfg['delta_weight']} "
+        f"[depth-train] recipe: base={dh_cfg['base']} n_frames={dh_cfg['n_frames']} "
+        f"lr={dh_cfg['lr']} delta_weight={dh_cfg['delta_weight']} "
         f"grad_clip={grad_clip} "
         f"delta_min_gt_m={dh_cfg.get('delta_min_gt_m')} "
         f"approach_oversample={dh_cfg.get('approach_oversample')} "

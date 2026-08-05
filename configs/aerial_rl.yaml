@@ -90,6 +90,9 @@ world_model:
   depth_head:
     enable: false
     n_frames: 4
+    # Channel width. Canonical AbsRel-PASS ckpt is base=32. Capacity lift
+    # (DA-V2 teacher absent offline on H100) uses CLI ``--base 64`` — do NOT
+    # silently change this default or init-ckpt from base=32 will refuse.
     base: 32
     lr: 1.0e-4
     grad_clip: 5.0           # real clipping; protects AbsRel from outlier batches
