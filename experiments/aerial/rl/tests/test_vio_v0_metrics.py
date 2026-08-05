@@ -63,6 +63,30 @@ def test_depth_median_masks_outdoor_far_plane():
     assert abs(float(s_d[0]) - 1.0) < 1e-3
 
 
+def test_depth_median_navigational_band():
+    """§4.1 2026-08-05: ③ median uses [1, 40] m, not the 200 m AbsRel ceiling."""
+    H, W = 4, 4
+    frame = np.full((H, W), 80.0, dtype=np.float32)  # outdoor mid/far
+    frame[1:3, 1:3] = 20.0  # navigational patch
+    frame_next = frame.copy()
+    frame_next[1:3, 1:3] = 19.0
+    depth = np.stack([frame, frame_next], axis=0)[None, ...]
+    wide = vio.depth_median(depth, max_depth_m=200.0, min_depth_m=None)
+    band = vio.depth_median(depth, max_depth_m=40.0, min_depth_m=1.0)
+    assert float(wide[0, 0]) > 40.0
+    assert abs(float(band[0, 0]) - 20.0) < 1e-3
+    assert abs(float(vio.scale_from_depth_change(band)[0]) - 1.0) < 1e-3
+
+
+def test_scale_support_ratio_masks_dead_proxy():
+    """Wall-parallel / dead ŝ_D≈0 windows are not an applicability domain."""
+    s_d = np.array([1.0, 0.05, 0.9], dtype=np.float32)
+    s_v = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+    out = vio.scale_relative_error(s_d, s_v, min_motion_m=0.5, support_ratio=0.5)
+    assert out["n_valid"] == 2
+    assert not out["valid"][1]
+
+
 def test_sample_scale_windows_forward_filter():
     from experiments.aerial.rl._v0_gate import _window_forward_frac
     from experiments.aerial.rl.buffer import Transition
@@ -84,6 +108,26 @@ def test_sample_scale_windows_forward_filter():
     sideways = [_tr([0, 0, 0]), _tr([0.1, 1.0, 0])]
     assert _window_forward_frac(forward) > 0.5
     assert _window_forward_frac(sideways) < 0.5
+
+
+def test_check_scale_consistency_uses_nav_band_and_support():
+    """Gate ③ defaults must use the 2026-08-05 band + support pins."""
+    B, L, H, W = 8, 8, 4, 4
+    ts = np.linspace(0.0, 1.0, L, dtype=np.float32)
+    timestamps = np.stack([ts] * B, axis=0)
+    vel = np.zeros((B, L, 3), dtype=np.float32)
+    vel[..., 0] = 1.0
+    depth = np.ones((B, L, H, W), dtype=np.float32) * 20.0
+    for t in range(L):
+        depth[:, t] = 20.0 - ts[t]  # Δd ≈ 1 m ≈ motion
+    ok = m.check_scale_consistency(vel, timestamps, depth, thr=m.DEFAULT_THRESHOLDS)
+    assert ok["ok"], ok
+    assert ok["n_valid"] >= m.DEFAULT_THRESHOLDS.min_scale_windows
+    # Dead proxy (constant depth) → not enough support windows.
+    dead = np.ones_like(depth) * 20.0
+    bad = m.check_scale_consistency(vel, timestamps, dead, thr=m.DEFAULT_THRESHOLDS)
+    assert not bad["ok"]
+    assert bad["n_valid"] < m.DEFAULT_THRESHOLDS.min_scale_windows
 
 
 def test_learning_curves_pass_and_fail():

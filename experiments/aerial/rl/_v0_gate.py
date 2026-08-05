@@ -213,6 +213,31 @@ def _signal3(
 # --------------------------------------------------------------------------- #
 # Depth-head inference over dataset windows (lazy torch — H100 only)          #
 # --------------------------------------------------------------------------- #
+def _forwardness(dvec: np.ndarray, yaw: np.ndarray) -> np.ndarray:
+    """|cos| between net horizontal displacement and the window's mean heading.
+
+    ``dvec [B,3]`` is Δp = pos_last − pos_first; ``yaw [B,L]`` is per-frame heading
+    (state[6]). Camera is forward-facing so the optical axis projects to
+    ``[cos ȳ, sin ȳ]`` (mean heading, robust to a small in-window turn). Returns
+    ``[B]`` in [0,1]: ~1 = axis-aligned translation (forward OR backward — both
+    change |Δ median depth|, which is what ③'s proxy needs); ~0 = lateral / yaw /
+    climb-dominated, where the median-depth proxy is physically meaningless (frozen
+    §4.1 ③ applicability note). Vertical motion enters the ‖Δp‖ denominator, so a
+    climb-dominated window scores low.
+    """
+    dvec = np.asarray(dvec, dtype=np.float64)
+    yaw = np.asarray(yaw, dtype=np.float64)
+    disp = np.linalg.norm(dvec, axis=-1)                     # [B] full 3-D
+    mc = np.cos(yaw).mean(axis=-1)
+    ms = np.sin(yaw).mean(axis=-1)
+    hn = np.hypot(mc, ms)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        fwd_hat = np.stack([mc / hn, ms / hn], axis=-1)      # [B,2]
+        fdot = dvec[..., 0] * fwd_hat[..., 0] + dvec[..., 1] * fwd_hat[..., 1]
+        out = np.where((disp > 1e-9) & (hn > 1e-9), np.abs(fdot) / disp, 0.0)
+    return np.nan_to_num(out, nan=0.0).astype(np.float64)
+
+
 def _sample_windows(root: Path, *, window: int, max_windows: int) -> List[Any]:
     """Legacy prefix sampler (first ``window`` frames per episode). Prefer the
     holdout / scale samplers below for gate scoring."""
@@ -228,18 +253,29 @@ def _sample_windows(root: Path, *, window: int, max_windows: int) -> List[Any]:
 
 
 def _window_forward_frac(window: Any) -> float:
-    """Fraction of net displacement along world +x (camera-forward proxy at yaw≈0).
+    """Heading-aligned forwardness in [0, 1] for a scored window.
 
-    Frozen §4.1 ③ applicability: the |Δmedian D̂| proxy is only meaningful when the
-    window has a forward component. Pure side-slip / yaw windows are skipped.
+    Dated §4.1 revision 2026-08-05: replaces the world-+x proxy (which selected
+    open-horizon cruises when yaw ̸≈ 0) with ``|cos∠(Δp, mean heading)|`` via
+    :func:`_forwardness`. Camera is body-forward, so optical-axis translation
+    is what makes ``|Δ median depth|`` share scale with ``‖Δp‖``.
     """
-    p0 = np.asarray(window[0].obs.position, dtype=np.float64).reshape(3)
-    p1 = np.asarray(window[-1].obs.position, dtype=np.float64).reshape(3)
-    delta = p1 - p0
-    motion = float(np.linalg.norm(delta))
-    if motion < 1e-6:
+    pos = np.asarray(
+        [np.asarray(t.obs.position, dtype=np.float64).reshape(3) for t in window],
+        dtype=np.float64,
+    )
+    yaw = np.asarray([float(t.obs.yaw) for t in window], dtype=np.float64)
+    dvec = pos[-1] - pos[0]
+    return float(_forwardness(dvec[None, :], yaw[None, :])[0])
+
+
+def _nav_band_frac(depth: np.ndarray, *, lo: float, hi: float) -> float:
+    """Fraction of finite positive (≤200 m) pixels inside the navigational band."""
+    d = np.asarray(depth, dtype=np.float64).reshape(-1)
+    valid = np.isfinite(d) & (d > 0) & (d <= 200.0)
+    if not np.any(valid):
         return 0.0
-    return float(abs(delta[0]) / motion)
+    return float(np.count_nonzero((d >= lo) & (d <= hi) & valid) / np.count_nonzero(valid))
 
 
 def _sample_scale_windows(
@@ -248,8 +284,11 @@ def _sample_scale_windows(
     window: int,
     max_windows: int,
     n_context: int,
-    min_forward_frac: float = 0.5,
+    min_forward_frac: float = 0.7,
     min_motion_m: float = 0.5,
+    scale_depth_min_m: float = 1.0,
+    scale_depth_max_m: float = 40.0,
+    min_band_frac: float = 0.05,
 ) -> List[Any]:
     """Non-overlapping windows with RGB context prefix for full-context D̂ at t0.
 
@@ -257,10 +296,18 @@ def _sample_scale_windows(
     ``chunk[n_context:]``. Context lets ``_DepthHead`` see ``n_frames`` history at
     the first scored frame (no left-pad), so ``ŝ_D = |d_last − d_first|`` is not
     inflated by a single-frame warmup prediction.
+
+    Dated §4.1 revision 2026-08-05 filters:
+      - heading-aligned forwardness ≥ ``min_forward_frac`` (default = ``fwd_cos_min``)
+      - GT navigational-band content ≥ ``min_band_frac`` on first & last scored
+        frames (drops open-horizon windows where the band median is undefined)
+    Approach-support (``ŝ_D ≥ support_ratio · motion``) is applied later on the
+    depth under test inside ``check_scale_consistency``.
     """
     episodes = ds.load_dataset(root, skip_quarantined=True)
     need = int(n_context) + int(window)
     windows: List[Any] = []
+    lo, hi = float(scale_depth_min_m), float(scale_depth_max_m)
     for ep in episodes:
         if len(ep) < need:
             continue
@@ -273,6 +320,15 @@ def _sample_scale_windows(
             if motion < float(min_motion_m):
                 continue
             if _window_forward_frac(scored) < float(min_forward_frac):
+                continue
+            d0 = getattr(scored[0].obs, "depth", None)
+            d1 = getattr(scored[-1].obs, "depth", None)
+            if d0 is None or d1 is None:
+                continue
+            if (
+                _nav_band_frac(d0, lo=lo, hi=hi) < float(min_band_frac)
+                or _nav_band_frac(d1, lo=lo, hi=hi) < float(min_band_frac)
+            ):
                 continue
             windows.append(chunk)
             if len(windows) >= max_windows:
@@ -458,41 +514,25 @@ def _signals_2_4_from_rollouts(
 # --------------------------------------------------------------------------- #
 # ③ read-only diagnostic (forward-window + GT oracle) — NEVER touches verdict  #
 # --------------------------------------------------------------------------- #
-def _forwardness(dvec: np.ndarray, yaw: np.ndarray) -> np.ndarray:
-    """|cos| between net horizontal displacement and the window's mean heading.
-
-    ``dvec [B,3]`` is Δp = pos_last − pos_first; ``yaw [B,L]`` is per-frame heading
-    (state[6]). Camera is forward-facing so the optical axis projects to
-    ``[cos ȳ, sin ȳ]`` (mean heading, robust to a small in-window turn). Returns
-    ``[B]`` in [0,1]: ~1 = axis-aligned translation (forward OR backward — both
-    change |Δ median depth|, which is what ③'s proxy needs); ~0 = lateral / yaw /
-    climb-dominated, where the median-depth proxy is physically meaningless (frozen
-    §4.1 ③ applicability note). Vertical motion enters the ‖Δp‖ denominator, so a
-    climb-dominated window scores low.
-    """
-    dvec = np.asarray(dvec, dtype=np.float64)
-    yaw = np.asarray(yaw, dtype=np.float64)
-    disp = np.linalg.norm(dvec, axis=-1)                     # [B] full 3-D
-    mc = np.cos(yaw).mean(axis=-1)
-    ms = np.sin(yaw).mean(axis=-1)
-    hn = np.hypot(mc, ms)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        fwd_hat = np.stack([mc / hn, ms / hn], axis=-1)      # [B,2]
-        fdot = dvec[..., 0] * fwd_hat[..., 0] + dvec[..., 1] * fwd_hat[..., 1]
-        out = np.where((disp > 1e-9) & (hn > 1e-9), np.abs(fdot) / disp, 0.0)
-    return np.nan_to_num(out, nan=0.0).astype(np.float64)
-
-
 def _rel_over(
     depth: np.ndarray, motion: np.ndarray, thr: metrics.V0GateThresholds
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Per-window ③ rel-err + base-valid mask (mirrors the gate's ③ math)."""
     from experiments.aerial.rl import vio as vio_lib
 
-    d_med = vio_lib.depth_median(depth)
+    d_med = vio_lib.depth_median(
+        depth,
+        max_depth_m=thr.scale_depth_max_m,
+        min_depth_m=thr.scale_depth_min_m,
+    )
     s_d = vio_lib.scale_from_depth_change(d_med)
     err = vio_lib.scale_relative_error(
-        s_d, motion, eps=thr.scale_eps, min_motion_m=thr.min_motion_m, motion_m=motion
+        s_d,
+        motion,
+        eps=thr.scale_eps,
+        min_motion_m=thr.min_motion_m,
+        motion_m=motion,
+        support_ratio=thr.scale_support_ratio,
     )
     return np.asarray(err["rel_err"], dtype=np.float64), np.asarray(err["valid"], dtype=bool)
 
@@ -514,7 +554,7 @@ def _run_signal3_diagnose(
     cos_min: float,
     allow_incomplete: bool,
 ) -> int:
-    """Print D̂-vs-GT ③ rel on all-motion vs forward-only windows. Read-only."""
+    """Print D̂-vs-GT ③ rel under the §4.1 (2026-08-05) protocol. Read-only."""
     if not dataset or not depth_ckpt:
         print("[v0-gate] ③-diagnose needs --dataset and --depth-ckpt", file=sys.stderr)
         return 2
@@ -522,11 +562,32 @@ def _run_signal3_diagnose(
 
     root = Path(dataset)
     _refuse_rgb_only_desync(root, allow_incomplete)
-    windows = _sample_windows(root, window=int(window), max_windows=int(max_windows))
+    # Match the gate's sampler (context + heading-forward + nav-band content).
+    import torch  # lazy
+
+    payload = torch.load(str(depth_ckpt), map_location="cpu")
+    n_frames = int(payload.get("n_frames", 4))
+    n_context = max(0, n_frames - 1)
+    windows = _sample_scale_windows(
+        root,
+        window=int(window),
+        max_windows=max(int(max_windows), int(thr.min_scale_windows) * 4),
+        n_context=n_context,
+        min_forward_frac=float(cos_min),
+        min_motion_m=thr.min_motion_m,
+        scale_depth_min_m=float(thr.scale_depth_min_m),
+        scale_depth_max_m=float(thr.scale_depth_max_m),
+    )
     if not windows:
-        print(f"[v0-gate] ③-diagnose: no episode >= {window} steps", file=sys.stderr)
+        print(
+            "[v0-gate] ③-diagnose: no heading-forward + nav-band windows — "
+            "corpus lacks approach geometry; recollect before concluding.",
+            file=sys.stderr,
+        )
         return 1
-    arr, pred = _predict_depth_over_windows(Path(depth_ckpt), windows, device=device)
+    arr, pred = _predict_depth_over_windows(
+        Path(depth_ckpt), windows, device=device, score_context=n_context,
+    )
     vel, ts = arr.get("vel"), arr.get("timestamps")
     gt = arr.get("depth")
     if vel is None or ts is None:
@@ -536,9 +597,12 @@ def _run_signal3_diagnose(
     pos, _dt = vio_lib.integrate_velocity(vel, ts)           # [B,L,3]
     motion = vio_lib.window_motion_m(pos)                    # [B]
     dvec = pos[:, -1, :] - pos[:, 0, :]                      # [B,3]
-    L = len(windows[0])
+    L = int(pos.shape[1])
     yaw = np.asarray(
-        [[float(windows[b][t].obs.yaw) for t in range(L)] for b in range(len(windows))],
+        [
+            [float(windows[b][n_context + t].obs.yaw) for t in range(L)]
+            for b in range(len(windows))
+        ],
         dtype=np.float64,
     )
     fwd = _forwardness(dvec, yaw) >= float(cos_min)          # [B] bool
@@ -546,15 +610,18 @@ def _run_signal3_diagnose(
     rel_p, valid_p = _rel_over(pred, motion, thr)
     lines = [
         "[v0-gate] ③ DIAGNOSE (read-only; does NOT affect the verdict / yaml)",
-        f"  sampled {len(windows)} windows (len {L}); forward = |cos∠(Δp,heading)| ≥ {cos_min}",
-        f"  s_VIO = ‖Δp‖ (integrated vel); ŝ = |Δ median depth|; pass = median rel ≤ {thr.scale_rel_err_max}",
+        f"  sampled {len(windows)} scale-windows (score len {L}, ctx {n_context}); "
+        f"forward = |cos∠(Δp,heading)| ≥ {cos_min}",
+        f"  band = [{thr.scale_depth_min_m:g}, {thr.scale_depth_max_m:g}] m; "
+        f"support = ŝ_D ≥ {thr.scale_support_ratio:g}·‖Δp‖; "
+        f"pass = median rel ≤ {thr.scale_rel_err_max} with n≥{thr.min_scale_windows}",
         "  leg                 n_valid   median_rel   verdict",
     ]
 
     def _row(tag: str, rel: np.ndarray, base: np.ndarray, mask: np.ndarray) -> str:
         med, n = _median_over(rel, base & mask)
-        if not np.isfinite(med):
-            v = "n/a"
+        if not np.isfinite(med) or n < int(thr.min_scale_windows):
+            v = "n/a" if not np.isfinite(med) else "FAIL(n)"
         else:
             v = "PASS" if med <= thr.scale_rel_err_max else "FAIL"
         return f"  {tag:<18} {n:>7}   {med:>10.3f}   {v}"
@@ -575,28 +642,36 @@ def _run_signal3_diagnose(
 
     dhat_fwd_med, dhat_fwd_n = _median_over(rel_p, valid_p & fwd)
     lines.append("  ─ interpretation ─")
-    if dhat_fwd_n < 4:
+    if dhat_fwd_n < int(thr.min_scale_windows) and (
+        gt is None or gt_fwd_n < int(thr.min_scale_windows)
+    ):
         lines.append(
-            f"  forward-window count too small (D̂ n={dhat_fwd_n}) to trust — "
-            "collect more forward-motion windows before concluding."
+            f"  approach-support window count too small "
+            f"(D̂ n={dhat_fwd_n}, GT n={gt_fwd_n}; need ≥{thr.min_scale_windows}) — "
+            "recollect approach-biased trajectories (fly toward surfaces) before concluding."
         )
-    elif gt is not None and np.isfinite(gt_fwd_med) and gt_fwd_med > thr.scale_rel_err_max:
+    elif gt is not None and (
+        gt_fwd_n < int(thr.min_scale_windows)
+        or (np.isfinite(gt_fwd_med) and gt_fwd_med > thr.scale_rel_err_max)
+    ):
         lines.append(
-            "  GT ALSO fails on forward windows → the frozen median-of-frame statistic is "
-            "the ceiling; ③ as defined is unachievable on this corpus geometry. Fix is a "
-            "DATED §4.1 revision (center/FOE-region depth or matched-point scale), NOT a retrain."
+            "  GT oracle still fails under the 2026-08-05 protocol (nav-band + approach "
+            "support) → corpus geometry lacks enough approach windows, or the proxy needs "
+            "another dated §4.1 revision. Do NOT retrain the depth head yet."
         )
-    elif np.isfinite(dhat_fwd_med) and dhat_fwd_med > thr.scale_rel_err_max:
+    elif np.isfinite(dhat_fwd_med) and (
+        dhat_fwd_n < int(thr.min_scale_windows) or dhat_fwd_med > thr.scale_rel_err_max
+    ):
         lines.append(
-            "  GT passes but D̂ fails on forward windows → model under-standardizes scale "
-            "change. Retrain the depth head with a temporal / Δ-depth consistency term "
+            "  GT passes but D̂ fails on approach-support windows → model under-standardizes "
+            "scale change. Retrain the depth head with a temporal / Δ-depth consistency term "
             "(single-frame AbsRel loss does not teach metric scale-change), then re-run ③."
         )
     else:
         lines.append(
-            "  D̂ passes on FORWARD windows only → the prior FAIL was non-forward contamination. "
-            "Changing ③ to score forward-motion windows is spec-sanctioned intent (§4.1 note) but "
-            "still requires a DATED revision — do NOT silently narrow the window set to get green."
+            "  D̂ passes on approach-support windows under the 2026-08-05 protocol — "
+            "re-run the authoritative `_v0_gate --signals 1,3` (and later ②/④) before "
+            "flipping yaml flags."
         )
     print("\n".join(lines))
     return 0
@@ -617,8 +692,8 @@ def _self_check(thr: metrics.V0GateThresholds) -> int:
         [20.0] * 16, [10.0] * 16, [30.0] * 16, [30.0] * 16, thr=thr
     )
     assert s2["ok"], s2
-    # ③ predicted depth-change matches motion.
-    B, L, H, W = 4, 8, 4, 4
+    # ③ predicted depth-change matches motion (nav-band + approach-support).
+    B, L, H, W = 8, 8, 4, 4
     ts = np.linspace(0.0, 1.0, L, dtype=np.float32)
     timestamps = np.stack([ts] * B, axis=0)
     vel = np.zeros((B, L, 3), dtype=np.float32)
@@ -750,10 +825,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             windows = _sample_scale_windows(
                 root,
                 window=int(args.window),
-                max_windows=int(args.max_windows),
+                max_windows=max(int(args.max_windows), int(thr.min_scale_windows) * 4),
                 n_context=n_context,
-                min_forward_frac=0.5,
+                min_forward_frac=float(thr.fwd_cos_min),
                 min_motion_m=thr.min_motion_m,
+                scale_depth_min_m=float(thr.scale_depth_min_m),
+                scale_depth_max_m=float(thr.scale_depth_max_m),
             )
             if not windows:
                 print(

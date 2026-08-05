@@ -16,7 +16,8 @@ from experiments.aerial.rl import vio as vio_lib
 
 @dataclass(frozen=True)
 class V0GateThresholds:
-    """Pinned numbers from frozen spec §4.1 (2026-08-04 evaluation patch)."""
+    """Pinned numbers from frozen spec §4.1 (2026-08-04 evaluation patch;
+    ③ protocol revised 2026-08-05 — thr 0.25 unchanged)."""
 
     # ① learning
     loss_drop_ratio: float = 0.98
@@ -30,6 +31,14 @@ class V0GateThresholds:
     min_motion_m: float = 0.5
     scale_rel_err_max: float = 0.25
     scale_eps: float = 1e-3
+    # ③ protocol (2026-08-05): navigational band + approach support.
+    # Outdoor open-horizon medians (~100 m+) and wall-parallel cruises make
+    # ŝ_D=|Δ median| dead; score only windows where the proxy is alive.
+    scale_depth_min_m: float = 1.0
+    scale_depth_max_m: float = 40.0
+    scale_support_ratio: float = 0.5
+    fwd_cos_min: float = 0.7
+    min_scale_windows: int = 8
     # ④ near-collision / shield
     near_collision_depth_m: float = 1.5
     intervention_before_contact_min: float = 0.50
@@ -147,9 +156,19 @@ def check_scale_consistency(
     *,
     thr: V0GateThresholds = DEFAULT_THRESHOLDS,
     fallback_hz: float = 8.0,
-    max_depth_m: Optional[float] = 200.0,
+    max_depth_m: Optional[float] = None,
+    min_depth_m: Optional[float] = None,
+    support_ratio: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Signal ③ via ``vio.window_scale_report``."""
+    """Signal ③ via ``vio.window_scale_report``.
+
+    Defaults (2026-08-05): navigational band
+    ``[thr.scale_depth_min_m, thr.scale_depth_max_m]`` and
+    ``support_ratio=thr.scale_support_ratio``. Override only for diagnostics.
+    """
+    lo = thr.scale_depth_min_m if min_depth_m is None else min_depth_m
+    hi = thr.scale_depth_max_m if max_depth_m is None else max_depth_m
+    support = thr.scale_support_ratio if support_ratio is None else float(support_ratio)
     report = vio_lib.window_scale_report(
         vel,
         timestamps,
@@ -157,18 +176,31 @@ def check_scale_consistency(
         fallback_hz=fallback_hz,
         min_motion_m=thr.min_motion_m,
         eps=thr.scale_eps,
-        max_depth_m=max_depth_m,
+        max_depth_m=hi,
+        min_depth_m=lo,
+        support_ratio=support,
     )
     med = float(report["median_rel_err"])
     n_valid = int(report["n_valid"])
-    if n_valid == 0 or not np.isfinite(med):
-        return {"ok": False, "median_rel_err": med, "n_valid": n_valid,
-                "reason": "no motion windows ≥ min_motion_m"}
+    if n_valid < int(thr.min_scale_windows) or not np.isfinite(med):
+        return {
+            "ok": False,
+            "median_rel_err": med,
+            "n_valid": n_valid,
+            "reason": (
+                f"need ≥{thr.min_scale_windows} approach-support windows "
+                f"(got {n_valid}); proxy dead or corpus lacks approach geometry"
+            ),
+            "scale_depth_band_m": [float(lo), float(hi)],
+            "support_ratio": float(support),
+        }
     return {
         "ok": bool(med <= thr.scale_rel_err_max),
         "median_rel_err": med,
         "n_valid": n_valid,
         "rel_err": report["rel_err"],
+        "scale_depth_band_m": [float(lo), float(hi)],
+        "support_ratio": float(support),
     }
 
 

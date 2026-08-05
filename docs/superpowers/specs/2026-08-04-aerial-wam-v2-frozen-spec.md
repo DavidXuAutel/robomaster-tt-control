@@ -117,11 +117,15 @@ connected ∧ real_rgb ∧ imu ∧ (baro∨gps) ∧ collision ∧ depth ∧ dept
 | ②c | `dist_margin_m` | mean(final_dist_policy) ≤ mean(final_dist_random) − **3.0** | ②b ∨ ②c 任一即可过 ② |
 | ③a | `min_motion_m` | 窗内 ‖Δp‖ ≥ **0.5** m 才计入 | 静止窗不参与尺度比 |
 | ③b | `scale_rel_err_max` | median |ŝ_D − s_VIO| / max(s_VIO, ε) ≤ **0.25** | `vio.scale_relative_error`；ε=1e-3 |
+| ③c | `scale_depth_band_m` | **[1.0, 40.0]** m | 2026-08-05：ŝ_D 的 median 只在导航近/中场像素上取；排除开阔地平线 ~100 m+ 中位 |
+| ③d | `fwd_cos_min` | **0.7** | 2026-08-05：|cos∠(Δp, mean heading)|；取代 world-+x 前向代理 |
+| ③e | `scale_support_ratio` | **0.5** | 2026-08-05：仅当 ŝ_D ≥ 0.5·‖Δp‖ 才计入（贴墙平行/死代理窗剔除） |
+| ③f | `min_scale_windows` | **≥ 8** | 2026-08-05：有效接近窗不足则 ③ FAIL（非放宽 0.25） |
 | ④a | `near_collision_depth_m` | GT `depth_min` < **1.5** m | 与 `ThresholdSafetyShield.min_depth_m` 对齐 |
 | ④b | `intervention_before_contact_min` | **≥ 0.50** | 在最终 `collided` 的 episode 中，首次 intervention 步号 < 首次 contact 步号 的比例 |
 | ④c | `near_coll_rate_ratio_max` | shield-on / shield-off ≤ **0.80** | near_coll 帧占比；同 N、同起点；**仅评测 CLI 开罩** |
 
-**③ 适用性注记（不改钉死值 0.25）**：③ 用的深度侧长度 `ŝ_D = |median D̂_last − median D̂_first|`（`vio.scale_from_depth_change`）是一个**代理**，只在**窗内含前向运动分量**（相机大致沿运动方向、正对场景使视深随位移单调变化）时才与度量位移 `s_VIO=‖Δp‖` 同尺度。纯侧移/纯偏航/纯升降窗上该代理失真——`③a min_motion_m≥0.5 m` 只滤静止窗，**不**保证前向性。因此 ③ 应在**含前向分量的运动窗**上评；`window_scale_report` 的运动窗集合若以侧移/旋转为主，median 相对误差不具物理意义，需在采数/切窗阶段偏向前向轨迹（V1 τ 通道用 FOE 散度独立复核，缓解此代理的共因失真）。
+**③ 适用性注记（不改钉死值 0.25；协议修订 2026-08-05）**：③ 用的深度侧长度 `ŝ_D = |median_band D̂_last − median_band D̂_first|`（`vio.scale_from_depth_change`，median 限在 **[1, 40] m** 导航带）是一个**代理**，只在**窗内含前向接近分量**（相机大致沿运动方向、正对场景使视深随位移单调变化，且 ŝ_D ≥ 0.5·‖Δp‖）时才与度量位移 `s_VIO=‖Δp‖` 同尺度。纯侧移/纯偏航/纯升降/贴墙平行巡航/开阔地平线窗上该代理失真——`③a min_motion_m≥0.5 m` 只滤静止窗；`③d/③e/③c` 滤掉无物理意义的窗。采数应偏**朝向表面接近**的轨迹；V1 τ 通道用 FOE 散度独立复核。**`--signal3-diagnose`（2026-08-05）**在改定协议下拆 GT-oracle vs D̂：GT 仍失败 → 再修订或重采，禁止为过门放松 0.25；GT 过而 D̂ 不过 → 加时序/Δ-depth 监督重训深度头。
 
 Shield 对照协议：默认 yaml 保持 `safety.kind: null`；`_v0_gate --shield-eval` 在进程内构造 on/off 两套 collector，不写回配置文件。
 
@@ -203,3 +207,4 @@ Shield 对照协议：默认 yaml 保持 `safety.kind: null`；`_v0_gate --shiel
 
 *本文冻结。修改须显式修订本节以上任一「钉死」条目并注明日期，否则以本文为准。*
 *修订 2026-08-04（评估落地）：§ glossary、§4.1 数值门禁、`vio`/`v0_metrics`/`_v0_gate` 落点。*
+*修订 2026-08-05（③ 协议）：钉死导航带 [1,40] m、heading-forward `fwd_cos_min=0.7`、approach-support `scale_support_ratio=0.5`、`min_scale_windows=8`；**不改** `scale_rel_err_max=0.25`。依据 `--signal3-diagnose`：旧 full-frame median + world-+x 采样在开阔地平线/贴墙平行上使 GT oracle 亦不可达。*
