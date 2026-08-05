@@ -95,7 +95,10 @@ world_model:
     grad_clip: 1000.0
     absrel_weight: 1.0
     nll_weight: 0.1
+    delta_weight: 1.0      # temporal |Δ band-median| vs GT (V0 ③; 2026-08-05)
     max_depth_m: 200.0       # outdoor AirSim: exclude sky/far-plane from AbsRel
+    scale_depth_min_m: 1.0   # ③ navigational band (must match V0GateThresholds)
+    scale_depth_max_m: 40.0
     checkpoint_dir: experiments/aerial/rl/artifacts/depth_ckpt
 
 imagination:

@@ -25,7 +25,11 @@ import yaml
 
 from experiments.aerial.rl import dataset as ds
 from experiments.aerial.rl.buffer import ReplayBuffer
-from experiments.aerial.rl.dynamics_torch import _DepthHead, depth_head_loss
+from experiments.aerial.rl.dynamics_torch import (
+    _DepthHead,
+    depth_delta_scale_loss,
+    depth_head_loss,
+)
 from experiments.aerial.rl.perception_data import windows_to_perception_arrays
 from experiments.aerial.rl.v0_metrics import DEFAULT_THRESHOLDS, depth_absrel
 
@@ -41,7 +45,10 @@ def _load_depth_cfg(config_path: Path) -> Dict[str, Any]:
     dh.setdefault("grad_clip", 1000.0)
     dh.setdefault("absrel_weight", 1.0)
     dh.setdefault("nll_weight", 0.1)
+    dh.setdefault("delta_weight", 1.0)  # temporal ŝ_D consistency (V0 ③)
     dh.setdefault("max_depth_m", 200.0)
+    dh.setdefault("scale_depth_min_m", 1.0)
+    dh.setdefault("scale_depth_max_m", 40.0)
     dh.setdefault("image_size", int((cfg.get("env") or {}).get("width", 224)))
     dh.setdefault(
         "checkpoint_dir",
@@ -229,6 +236,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             nll_weight=float(dh_cfg["nll_weight"]),
             max_depth_m=float(dh_cfg["max_depth_m"]),
         )
+        # Temporal / Δ-depth: predict the first frame of the window with full
+        # n_frames context (requires window >= n_frames) and match |Δ band-median|
+        # to GT — teaches the scale-change ③ measures (diagnose 2026-08-05).
+        delta_w = float(dh_cfg.get("delta_weight", 0.0))
+        if delta_w > 0.0 and int(args.window) >= int(dh_cfg["n_frames"]):
+            n_f = int(dh_cfg["n_frames"])
+            pred_first, _ = model.predict_from_window(rgb[:, :n_f])
+            d_loss, d_stats = depth_delta_scale_loss(
+                pred_first,
+                pred,
+                gt[:, n_f - 1],
+                gt[:, -1],
+                min_depth_m=float(dh_cfg["scale_depth_min_m"]),
+                max_depth_m=float(dh_cfg["scale_depth_max_m"]),
+            )
+            loss = loss + delta_w * d_loss
+            stats = {**stats, **d_stats, "loss": float(loss.detach().item())}
+        else:
+            stats = {**stats, "delta_rel": float("nan"), "n_delta": 0}
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
@@ -243,6 +269,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(
                 f"[depth-train] step {step}/{args.steps} "
                 f"loss={stats['loss']:.4f} absrel={stats['absrel']:.4f} "
+                f"delta_rel={stats.get('delta_rel', float('nan'))} "
                 f"n_valid={stats['n_valid']}"
             )
 

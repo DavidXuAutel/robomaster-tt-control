@@ -341,6 +341,68 @@ def depth_head_loss(
     }
 
 
+def _band_spatial_median(
+    depth: torch.Tensor,
+    *,
+    min_depth_m: float,
+    max_depth_m: float,
+) -> torch.Tensor:
+    """Per-batch median over H×W inside the navigational band → ``[B]``."""
+    # depth: [B, H, W]
+    flat = depth.reshape(depth.shape[0], -1)
+    lo, hi = float(min_depth_m), float(max_depth_m)
+    valid = torch.isfinite(flat) & (flat >= lo) & (flat <= hi)
+    # Replace invalid with +inf so nanmedian-equivalent via masked fill + median
+    # on a sentinel; if a row is empty, return NaN for that batch element.
+    filled = flat.clone()
+    filled = torch.where(valid, filled, torch.full_like(filled, float("nan")))
+    # torch.nanmedian exists on recent torch; fall back to masked median.
+    try:
+        med = torch.nanmedian(filled, dim=-1).values
+    except (AttributeError, RuntimeError):
+        med = []
+        for b in range(flat.shape[0]):
+            v = flat[b][valid[b]]
+            med.append(v.median() if v.numel() else flat.new_tensor(float("nan")))
+        med = torch.stack(med)
+    return med
+
+
+def depth_delta_scale_loss(
+    pred_first: torch.Tensor,
+    pred_last: torch.Tensor,
+    gt_first: torch.Tensor,
+    gt_last: torch.Tensor,
+    *,
+    min_depth_m: float = 1.0,
+    max_depth_m: float = 40.0,
+    eps: float = 1e-3,
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Temporal / Δ-depth consistency for V0 ③ (ŝ_D = |Δ band-median|).
+
+    Supervises the predicted navigational-band median change against the GT
+    change (same band as frozen §4.1 ③c). Single-frame AbsRel alone does not
+    teach metric scale-change — this term does. Relative form
+    ``|ŝ_pred − ŝ_gt| / max(ŝ_gt, ε)`` matches the gate's relative-error spirit.
+    """
+    p0 = _band_spatial_median(pred_first, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
+    p1 = _band_spatial_median(pred_last, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
+    g0 = _band_spatial_median(gt_first, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
+    g1 = _band_spatial_median(gt_last, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
+    s_pred = torch.abs(p1 - p0)
+    s_gt = torch.abs(g1 - g0)
+    ok = torch.isfinite(s_pred) & torch.isfinite(s_gt) & (s_gt >= float(eps))
+    if not bool(ok.any()):
+        zero = pred_first.sum() * 0.0
+        return zero, {"delta_rel": float("nan"), "n_delta": 0}
+    rel = torch.abs(s_pred[ok] - s_gt[ok]) / torch.clamp(s_gt[ok], min=float(eps))
+    loss = rel.mean()
+    return loss, {
+        "delta_rel": float(loss.detach().item()),
+        "n_delta": int(ok.sum().item()),
+    }
+
+
 # ============================================================================
 # The world model
 # ============================================================================
