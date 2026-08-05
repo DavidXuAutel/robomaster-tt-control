@@ -95,7 +95,12 @@ world_model:
     grad_clip: 1000.0
     absrel_weight: 1.0
     nll_weight: 0.1
-    delta_weight: 1.0      # temporal |Δ band-median| vs GT (V0 ③; 2026-08-05)
+    # Δ-depth for V0 ③: keep << AbsRel (1.0 from-scratch → AbsRel 0.98/0.70 FAIL).
+    # Prefer --init-ckpt finetune from canonical AbsRel-PASS ckpt.
+    delta_weight: 0.1
+    delta_min_gt_m: 0.5      # approach gate: only ŝ_gt ≥ this contributes
+    delta_support_ratio: 0.6 # match §4.1 scale_support_ratio
+    approach_oversample: 4   # rank candidate windows by GT |Δ| before batching
     max_depth_m: 200.0       # outdoor AirSim: exclude sky/far-plane from AbsRel
     scale_depth_min_m: 1.0   # ③ navigational band (must match V0GateThresholds)
     scale_depth_max_m: 40.0

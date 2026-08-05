@@ -377,6 +377,9 @@ def depth_delta_scale_loss(
     min_depth_m: float = 1.0,
     max_depth_m: float = 40.0,
     eps: float = 1e-3,
+    min_gt_delta_m: float = 0.5,
+    motion_m: Optional[torch.Tensor] = None,
+    support_ratio: float = 0.0,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """Temporal / Δ-depth consistency for V0 ③ (ŝ_D ≈ |Δ band-mean| in train).
 
@@ -384,6 +387,12 @@ def depth_delta_scale_loss(
     change (same band as frozen §4.1 ③c). Single-frame AbsRel alone does not
     teach metric scale-change — this term does. Relative form
     ``|ŝ_pred − ŝ_gt| / max(ŝ_gt, ε)`` matches the gate's relative-error spirit.
+
+    Approach gating (2026-08-05 recipe): only rows with
+    ``ŝ_gt ≥ min_gt_delta_m`` (and optionally ``ŝ_gt ≥ support_ratio · ‖Δp‖``
+    when ``motion_m`` is provided) contribute. Flat / wall-parallel windows
+    have near-zero GT Δ and previously dominated the batch → AbsRel collapse
+    under ``delta_weight=1`` from-scratch retrains.
     """
     p0 = _band_spatial_mean(pred_first, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
     p1 = _band_spatial_mean(pred_last, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
@@ -391,7 +400,14 @@ def depth_delta_scale_loss(
     g1 = _band_spatial_mean(gt_last, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
     s_pred = torch.abs(p1 - p0)
     s_gt = torch.abs(g1 - g0)
-    ok = torch.isfinite(s_pred) & torch.isfinite(s_gt) & (s_gt >= float(eps))
+    ok = (
+        torch.isfinite(s_pred)
+        & torch.isfinite(s_gt)
+        & (s_gt >= max(float(eps), float(min_gt_delta_m)))
+    )
+    if motion_m is not None and float(support_ratio) > 0.0:
+        mot = motion_m.reshape(-1).to(dtype=s_gt.dtype, device=s_gt.device)
+        ok = ok & torch.isfinite(mot) & (s_gt >= float(support_ratio) * mot)
     if not bool(ok.any()):
         zero = pred_first.sum() * 0.0
         return zero, {"delta_rel": float("nan"), "n_delta": 0}

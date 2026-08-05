@@ -45,7 +45,12 @@ def _load_depth_cfg(config_path: Path) -> Dict[str, Any]:
     dh.setdefault("grad_clip", 1000.0)
     dh.setdefault("absrel_weight", 1.0)
     dh.setdefault("nll_weight", 0.1)
-    dh.setdefault("delta_weight", 1.0)  # temporal ŝ_D consistency (V0 ③)
+    # Keep delta << AbsRel/SILog: delta_weight=1.0 from-scratch collapsed AbsRel
+    # (0.98 / 0.70 archived 2026-08-05). Prefer finetune from canonical PASS ckpt.
+    dh.setdefault("delta_weight", 0.1)
+    dh.setdefault("delta_min_gt_m", 0.5)  # approach gate: ŝ_gt ≥ this
+    dh.setdefault("delta_support_ratio", 0.6)  # match §4.1 scale_support_ratio
+    dh.setdefault("approach_oversample", 4)  # candidate pool / batch for Δ bias
     dh.setdefault("max_depth_m", 200.0)
     dh.setdefault("scale_depth_min_m", 1.0)
     dh.setdefault("scale_depth_max_m", 40.0)
@@ -120,6 +125,63 @@ def _holdout_windows(episodes: List[Any], window: int) -> List[Any]:
     return windows
 
 
+def _band_mean_np(
+    depth: np.ndarray, *, min_depth_m: float, max_depth_m: float
+) -> np.ndarray:
+    """Numpy sibling of ``_band_spatial_mean`` for approach scoring (no torch)."""
+    flat = np.asarray(depth, dtype=np.float64).reshape(depth.shape[0], -1)
+    valid = np.isfinite(flat) & (flat >= float(min_depth_m)) & (flat <= float(max_depth_m))
+    masked = np.where(valid, flat, np.nan)
+    with np.errstate(all="ignore"):
+        return np.nanmean(masked, axis=-1).astype(np.float32)
+
+
+def _sample_approach_biased_windows(
+    buf: ReplayBuffer,
+    batch: int,
+    window: int,
+    *,
+    oversample: int,
+    min_depth_m: float,
+    max_depth_m: float,
+    min_gt_delta_m: float,
+    support_ratio: float,
+) -> List[Any]:
+    """Prefer windows with alive GT ŝ_D (approach geometry for Δ-depth).
+
+    Draws ``batch * oversample`` candidates, ranks by GT |Δ band-mean|, and
+    keeps the top ``batch`` that pass the approach gate when possible. Falls
+    back to uniform sampling when the pool has no approach-alive windows so
+    AbsRel training never stalls.
+    """
+    batch = int(batch)
+    oversample = max(1, int(oversample))
+    n_cand = max(batch, batch * oversample)
+    candidates = buf.sample_windows(n_cand, int(window))
+    if oversample <= 1 or n_cand == batch:
+        return candidates[:batch]
+    arrays = windows_to_perception_arrays(candidates)
+    if "depth" not in arrays:
+        return candidates[:batch]
+    depth = arrays["depth"]
+    # Score on window endpoints (same |Δ| order as train-loop first/last frames).
+    g0 = _band_mean_np(depth[:, 0], min_depth_m=min_depth_m, max_depth_m=max_depth_m)
+    g1 = _band_mean_np(depth[:, -1], min_depth_m=min_depth_m, max_depth_m=max_depth_m)
+    s_gt = np.abs(g1.astype(np.float64) - g0.astype(np.float64))
+    pos = arrays["position"]
+    motion = np.linalg.norm(pos[:, -1] - pos[:, 0], axis=-1).astype(np.float64)
+    alive = np.isfinite(s_gt) & (s_gt >= float(min_gt_delta_m))
+    if float(support_ratio) > 0.0:
+        alive &= np.isfinite(motion) & (s_gt >= float(support_ratio) * motion)
+    scores = np.where(alive, s_gt, -1.0)
+    order = np.argsort(-scores)
+    picked = [candidates[int(i)] for i in order[:batch]]
+    if not any(scores[int(i)] >= 0.0 for i in order[:batch]):
+        # No approach-alive candidates — keep uniform so AbsRel still trains.
+        return candidates[:batch]
+    return picked
+
+
 def _holdout_absrel(
     model: _DepthHead,
     holdout_eps: List[Any],
@@ -174,11 +236,39 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--log-every", type=int, default=50)
     p.add_argument("--holdout-frac", type=float, default=0.2, help="episode fraction reserved for ①d AbsRel")
     p.add_argument("--split-seed", type=int, default=0)
+    p.add_argument(
+        "--init-ckpt",
+        type=Path,
+        default=None,
+        help="Finetune from an existing DepthHead ckpt (prefer canonical AbsRel-PASS)",
+    )
+    p.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        default=None,
+        help="Override yaml checkpoint_dir (write FAIL candidates outside canonical)",
+    )
+    p.add_argument(
+        "--lr",
+        type=float,
+        default=None,
+        help="Override yaml lr (finetune often uses 3e-5)",
+    )
+    p.add_argument(
+        "--delta-weight",
+        type=float,
+        default=None,
+        help="Override yaml delta_weight for this run",
+    )
     args = p.parse_args(argv)
 
     root = args.dataset
     _refuse_bad_corpus(root, args.allow_v0_desync)
     dh_cfg = _load_depth_cfg(args.config)
+    if args.delta_weight is not None:
+        dh_cfg["delta_weight"] = float(args.delta_weight)
+    if args.lr is not None:
+        dh_cfg["lr"] = float(args.lr)
     if bool(dh_cfg.get("enable")):
         print(
             "[depth-train] NOTE: world_model.depth_head.enable is true in yaml; "
@@ -209,20 +299,45 @@ def main(argv: Optional[List[str]] = None) -> int:
         n_frames=int(dh_cfg["n_frames"]),
         base=int(dh_cfg["base"]),
     ).to(device)
+    if args.init_ckpt is not None:
+        ckpt_path = Path(args.init_ckpt)
+        blob = torch.load(ckpt_path, map_location=device, weights_only=False)
+        state = blob["model"] if isinstance(blob, dict) and "model" in blob else blob
+        missing, unexpected = model.load_state_dict(state, strict=True)
+        print(
+            f"[depth-train] init from {ckpt_path} "
+            f"(missing={len(missing)} unexpected={len(unexpected)} "
+            f"prior_holdout={blob.get('holdout_absrel') if isinstance(blob, dict) else None})"
+        )
     opt = torch.optim.AdamW(model.parameters(), lr=float(dh_cfg["lr"]), betas=(0.9, 0.95))
     grad_clip = float(dh_cfg["grad_clip"])
 
-    ckpt_dir = Path(str(dh_cfg["checkpoint_dir"]))
+    ckpt_dir = Path(str(args.checkpoint_dir or dh_cfg["checkpoint_dir"]))
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     log_path = ckpt_dir / "depth_train.jsonl"
     if log_path.exists():
         log_path.unlink()
+    print(
+        f"[depth-train] recipe: lr={dh_cfg['lr']} delta_weight={dh_cfg['delta_weight']} "
+        f"delta_min_gt_m={dh_cfg.get('delta_min_gt_m')} "
+        f"approach_oversample={dh_cfg.get('approach_oversample')} "
+        f"ckpt_dir={ckpt_dir}"
+    )
 
     absrels: List[float] = []
     losses: List[float] = []
     model.train()
     for step in range(1, int(args.steps) + 1):
-        windows = buf.sample_windows(int(args.wm_batch), int(args.window))
+        windows = _sample_approach_biased_windows(
+            buf,
+            int(args.wm_batch),
+            int(args.window),
+            oversample=int(dh_cfg.get("approach_oversample", 1)),
+            min_depth_m=float(dh_cfg["scale_depth_min_m"]),
+            max_depth_m=float(dh_cfg["scale_depth_max_m"]),
+            min_gt_delta_m=float(dh_cfg.get("delta_min_gt_m", 0.5)),
+            support_ratio=float(dh_cfg.get("delta_support_ratio", 0.0)),
+        )
         arrays = windows_to_perception_arrays(windows)
         if "depth" not in arrays:
             print("[depth-train] FAIL: batch missing depth", file=sys.stderr)
@@ -237,12 +352,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             max_depth_m=float(dh_cfg["max_depth_m"]),
         )
         # Temporal / Δ-depth: predict the first frame of the window with full
-        # n_frames context (requires window >= n_frames) and match |Δ band-median|
-        # to GT — teaches the scale-change ③ measures (diagnose 2026-08-05).
+        # n_frames context (requires window >= n_frames) and match |Δ band-mean|
+        # to GT on approach-alive rows — teaches ③ without drowning AbsRel.
         delta_w = float(dh_cfg.get("delta_weight", 0.0))
         if delta_w > 0.0 and int(args.window) >= int(dh_cfg["n_frames"]):
             n_f = int(dh_cfg["n_frames"])
             pred_first, _ = model.predict_from_window(rgb[:, :n_f])
+            pos = torch.from_numpy(np.ascontiguousarray(arrays["position"])).to(device)
+            motion_m = torch.linalg.norm(pos[:, -1] - pos[:, 0], dim=-1)
             d_loss, d_stats = depth_delta_scale_loss(
                 pred_first,
                 pred,
@@ -250,6 +367,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 gt[:, -1],
                 min_depth_m=float(dh_cfg["scale_depth_min_m"]),
                 max_depth_m=float(dh_cfg["scale_depth_max_m"]),
+                min_gt_delta_m=float(dh_cfg.get("delta_min_gt_m", 0.5)),
+                motion_m=motion_m,
+                support_ratio=float(dh_cfg.get("delta_support_ratio", 0.0)),
             )
             loss = loss + delta_w * d_loss
             stats = {**stats, **d_stats, "loss": float(loss.detach().item())}
@@ -270,6 +390,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"[depth-train] step {step}/{args.steps} "
                 f"loss={stats['loss']:.4f} absrel={stats['absrel']:.4f} "
                 f"delta_rel={stats.get('delta_rel', float('nan'))} "
+                f"n_delta={stats.get('n_delta', 0)} "
                 f"n_valid={stats['n_valid']}"
             )
 
@@ -298,6 +419,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "base": int(dh_cfg["base"]),
                 "holdout_absrel": holdout,
                 "depth_cfg": dh_cfg,
+                "init_ckpt": str(args.init_ckpt) if args.init_ckpt else None,
             },
             path,
         )
