@@ -221,3 +221,33 @@ def test_merge_cli_exits_nonzero_when_incomplete(tmp_path):
     p = tmp_path / "part.json"
     p.write_text(json.dumps({"signals": {"1": {"ok": True}, "3": {"ok": True}}}))
     assert gate.main(["--merge", str(p)]) == 1
+
+
+# --------------------------------------------------------------------------- #
+# ③ diagnostic: forward-motion window selection (pure math)                     #
+# --------------------------------------------------------------------------- #
+def test_forwardness_separates_forward_lateral_climb():
+    from experiments.aerial.rl._v0_gate import _forwardness
+
+    # heading = +x (yaw 0) for all three windows, L=4.
+    yaw = np.zeros((3, 4), dtype=np.float64)
+    dvec = np.array(
+        [
+            [5.0, 0.0, 0.0],   # forward along heading  → |cos| ≈ 1
+            [0.0, 5.0, 0.0],   # pure lateral (strafe)  → |cos| ≈ 0
+            [0.0, 0.0, 5.0],   # pure climb             → |cos| ≈ 0
+        ],
+        dtype=np.float64,
+    )
+    f = _forwardness(dvec, yaw)
+    assert f[0] > 0.95
+    assert f[1] < 0.05
+    assert f[2] < 0.05
+
+
+def test_forwardness_backward_is_axis_aligned():
+    from experiments.aerial.rl._v0_gate import _forwardness
+
+    # moving backward along heading still changes |Δ median depth| → keep it.
+    f = _forwardness(np.array([[-5.0, 0.0, 0.0]]), np.zeros((1, 4)))
+    assert f[0] > 0.95

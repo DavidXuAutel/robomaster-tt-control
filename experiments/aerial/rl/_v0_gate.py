@@ -455,6 +455,153 @@ def _signals_2_4_from_rollouts(
     return s2, s4
 
 
+# --------------------------------------------------------------------------- #
+# ③ read-only diagnostic (forward-window + GT oracle) — NEVER touches verdict  #
+# --------------------------------------------------------------------------- #
+def _forwardness(dvec: np.ndarray, yaw: np.ndarray) -> np.ndarray:
+    """|cos| between net horizontal displacement and the window's mean heading.
+
+    ``dvec [B,3]`` is Δp = pos_last − pos_first; ``yaw [B,L]`` is per-frame heading
+    (state[6]). Camera is forward-facing so the optical axis projects to
+    ``[cos ȳ, sin ȳ]`` (mean heading, robust to a small in-window turn). Returns
+    ``[B]`` in [0,1]: ~1 = axis-aligned translation (forward OR backward — both
+    change |Δ median depth|, which is what ③'s proxy needs); ~0 = lateral / yaw /
+    climb-dominated, where the median-depth proxy is physically meaningless (frozen
+    §4.1 ③ applicability note). Vertical motion enters the ‖Δp‖ denominator, so a
+    climb-dominated window scores low.
+    """
+    dvec = np.asarray(dvec, dtype=np.float64)
+    yaw = np.asarray(yaw, dtype=np.float64)
+    disp = np.linalg.norm(dvec, axis=-1)                     # [B] full 3-D
+    mc = np.cos(yaw).mean(axis=-1)
+    ms = np.sin(yaw).mean(axis=-1)
+    hn = np.hypot(mc, ms)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        fwd_hat = np.stack([mc / hn, ms / hn], axis=-1)      # [B,2]
+        fdot = dvec[..., 0] * fwd_hat[..., 0] + dvec[..., 1] * fwd_hat[..., 1]
+        out = np.where((disp > 1e-9) & (hn > 1e-9), np.abs(fdot) / disp, 0.0)
+    return np.nan_to_num(out, nan=0.0).astype(np.float64)
+
+
+def _rel_over(
+    depth: np.ndarray, motion: np.ndarray, thr: metrics.V0GateThresholds
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Per-window ③ rel-err + base-valid mask (mirrors the gate's ③ math)."""
+    from experiments.aerial.rl import vio as vio_lib
+
+    d_med = vio_lib.depth_median(depth)
+    s_d = vio_lib.scale_from_depth_change(d_med)
+    err = vio_lib.scale_relative_error(
+        s_d, motion, eps=thr.scale_eps, min_motion_m=thr.min_motion_m, motion_m=motion
+    )
+    return np.asarray(err["rel_err"], dtype=np.float64), np.asarray(err["valid"], dtype=bool)
+
+
+def _median_over(rel: np.ndarray, mask: np.ndarray) -> Tuple[float, int]:
+    m = mask & np.isfinite(rel)
+    n = int(np.count_nonzero(m))
+    return (float(np.median(rel[m])) if n else float("nan")), n
+
+
+def _run_signal3_diagnose(
+    dataset: Optional[str],
+    depth_ckpt: Optional[str],
+    thr: metrics.V0GateThresholds,
+    *,
+    device: str,
+    window: int,
+    max_windows: int,
+    cos_min: float,
+    allow_incomplete: bool,
+) -> int:
+    """Print D̂-vs-GT ③ rel on all-motion vs forward-only windows. Read-only."""
+    if not dataset or not depth_ckpt:
+        print("[v0-gate] ③-diagnose needs --dataset and --depth-ckpt", file=sys.stderr)
+        return 2
+    from experiments.aerial.rl import vio as vio_lib
+
+    root = Path(dataset)
+    _refuse_rgb_only_desync(root, allow_incomplete)
+    windows = _sample_windows(root, window=int(window), max_windows=int(max_windows))
+    if not windows:
+        print(f"[v0-gate] ③-diagnose: no episode >= {window} steps", file=sys.stderr)
+        return 1
+    arr, pred = _predict_depth_over_windows(Path(depth_ckpt), windows, device=device)
+    vel, ts = arr.get("vel"), arr.get("timestamps")
+    gt = arr.get("depth")
+    if vel is None or ts is None:
+        print("[v0-gate] ③-diagnose: corpus missing vel/timestamps", file=sys.stderr)
+        return 1
+
+    pos, _dt = vio_lib.integrate_velocity(vel, ts)           # [B,L,3]
+    motion = vio_lib.window_motion_m(pos)                    # [B]
+    dvec = pos[:, -1, :] - pos[:, 0, :]                      # [B,3]
+    L = len(windows[0])
+    yaw = np.asarray(
+        [[float(windows[b][t].obs.yaw) for t in range(L)] for b in range(len(windows))],
+        dtype=np.float64,
+    )
+    fwd = _forwardness(dvec, yaw) >= float(cos_min)          # [B] bool
+
+    rel_p, valid_p = _rel_over(pred, motion, thr)
+    lines = [
+        "[v0-gate] ③ DIAGNOSE (read-only; does NOT affect the verdict / yaml)",
+        f"  sampled {len(windows)} windows (len {L}); forward = |cos∠(Δp,heading)| ≥ {cos_min}",
+        f"  s_VIO = ‖Δp‖ (integrated vel); ŝ = |Δ median depth|; pass = median rel ≤ {thr.scale_rel_err_max}",
+        "  leg                 n_valid   median_rel   verdict",
+    ]
+
+    def _row(tag: str, rel: np.ndarray, base: np.ndarray, mask: np.ndarray) -> str:
+        med, n = _median_over(rel, base & mask)
+        if not np.isfinite(med):
+            v = "n/a"
+        else:
+            v = "PASS" if med <= thr.scale_rel_err_max else "FAIL"
+        return f"  {tag:<18} {n:>7}   {med:>10.3f}   {v}"
+
+    all_mask = np.ones_like(fwd, dtype=bool)
+    lines.append(_row("D̂  all-motion", rel_p, valid_p, all_mask))
+    lines.append(_row("D̂  forward-only", rel_p, valid_p, fwd))
+
+    gt_fwd_med = float("nan")
+    gt_fwd_n = 0
+    if gt is not None:
+        rel_g, valid_g = _rel_over(gt, motion, thr)
+        lines.append(_row("GT  all-motion", rel_g, valid_g, all_mask))
+        lines.append(_row("GT  forward-only", rel_g, valid_g, fwd))
+        gt_fwd_med, gt_fwd_n = _median_over(rel_g, valid_g & fwd)
+    else:
+        lines.append("  GT  (absent)         GT depth not in corpus — oracle leg skipped")
+
+    dhat_fwd_med, dhat_fwd_n = _median_over(rel_p, valid_p & fwd)
+    lines.append("  ─ interpretation ─")
+    if dhat_fwd_n < 4:
+        lines.append(
+            f"  forward-window count too small (D̂ n={dhat_fwd_n}) to trust — "
+            "collect more forward-motion windows before concluding."
+        )
+    elif gt is not None and np.isfinite(gt_fwd_med) and gt_fwd_med > thr.scale_rel_err_max:
+        lines.append(
+            "  GT ALSO fails on forward windows → the frozen median-of-frame statistic is "
+            "the ceiling; ③ as defined is unachievable on this corpus geometry. Fix is a "
+            "DATED §4.1 revision (center/FOE-region depth or matched-point scale), NOT a retrain."
+        )
+    elif np.isfinite(dhat_fwd_med) and dhat_fwd_med > thr.scale_rel_err_max:
+        lines.append(
+            "  GT passes but D̂ fails on forward windows → model under-standardizes scale "
+            "change. Retrain the depth head with a temporal / Δ-depth consistency term "
+            "(single-frame AbsRel loss does not teach metric scale-change), then re-run ③."
+        )
+    else:
+        lines.append(
+            "  D̂ passes on FORWARD windows only → the prior FAIL was non-forward contamination. "
+            "Changing ③ to score forward-motion windows is spec-sanctioned intent (§4.1 note) but "
+            "still requires a DATED revision — do NOT silently narrow the window set to get green."
+        )
+    print("\n".join(lines))
+    return 0
+
+
 def _self_check(thr: metrics.V0GateThresholds) -> int:
     """Synthetic fixtures — locks §4.1 numbers + the depth-pillar aggregation."""
     s1abc = metrics.check_learning_curves(
@@ -537,11 +684,23 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="①d holdout split seed (must match train_depth_head)")
     p.add_argument("--allow-incomplete", action="store_true")
     p.add_argument("--self-check", action="store_true")
+    p.add_argument("--signal3-diagnose", action="store_true",
+                   help="read-only: D̂-vs-GT ③ rel on all-motion vs forward-only windows (never affects verdict)")
+    p.add_argument("--fwd-cos-min", type=float, default=0.7,
+                   help="forward-window threshold |cos∠(Δp,heading)| (③-diagnose only)")
     args = p.parse_args(argv)
     thr = metrics.DEFAULT_THRESHOLDS
 
     if args.self_check:
         return _self_check(thr)
+
+    if args.signal3_diagnose:
+        return _run_signal3_diagnose(
+            args.dataset, args.depth_ckpt, thr,
+            device=args.device, window=int(args.window),
+            max_windows=int(args.max_windows), cos_min=float(args.fwd_cos_min),
+            allow_incomplete=args.allow_incomplete,
+        )
 
     if args.merge:
         signals = _merge_partials([Path(m) for m in args.merge])
