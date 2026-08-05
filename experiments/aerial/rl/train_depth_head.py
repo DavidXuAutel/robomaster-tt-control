@@ -17,7 +17,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -58,6 +58,12 @@ def _load_depth_cfg(config_path: Path) -> Dict[str, Any]:
     # fixed; train decoder (depth head) only so scale can move without AbsRel
     # regression. CLI --freeze-encoder overrides; yaml default stays false.
     dh.setdefault("freeze_encoder", False)
+    # ③ architecture levers (2026-08-05 dead-Δ diagnose). Both default false so
+    # every existing checkpoint keeps loading and every prior recipe reproduces;
+    # they change parameter shapes, so a run that sets them cannot warm-start
+    # from a plain ckpt with strict=True.
+    dh.setdefault("motion_channels", False)
+    dh.setdefault("scale_factorized", False)
     dh.setdefault("image_size", int((cfg.get("env") or {}).get("width", 224)))
     dh.setdefault(
         "checkpoint_dir",
@@ -73,6 +79,10 @@ def _apply_freeze_encoder(model: _DepthHead, freeze: bool) -> list:
     When ``freeze`` is True, encoder ``requires_grad=False`` and only
     ``model.decoder`` params are returned (structurally blocks encoder AbsRel
     drift). When False, all parameters remain trainable and are returned.
+
+    ``scale_mlp`` (scale-factorized nets) counts as head, not encoder: it is the
+    single DOF the Δ objective is meant to move, so freezing it would make
+    decoder-only Δ finetuning a no-op for ③.
     """
     if not freeze:
         for p in model.parameters():
@@ -80,9 +90,57 @@ def _apply_freeze_encoder(model: _DepthHead, freeze: bool) -> list:
         return list(model.parameters())
     for p in model.encoder.parameters():
         p.requires_grad = False
-    for p in model.decoder.parameters():
+    head = list(model.decoder.parameters())
+    if getattr(model, "scale_factorized", False):
+        head += list(model.scale_mlp.parameters())
+    for p in head:
         p.requires_grad = True
-    return [p for p in model.decoder.parameters() if p.requires_grad]
+    return [p for p in head if p.requires_grad]
+
+
+def _adapt_state_dict(
+    state: Dict[str, Any], model: _DepthHead
+) -> Tuple[Dict[str, Any], list]:
+    """Fit a plain-``_DepthHead`` state dict into a motion/scale-factorized net.
+
+    Returns ``(adapted_state, notes)``. Two surgeries, both function-preserving
+    at step 0 so a warm start reproduces the source checkpoint's AbsRel exactly:
+
+    * first conv: the new frame-difference input channels are appended with
+      **zero** weight, so the extra input cannot change the output until
+      training moves it;
+    * ``scale_mlp``: absent from the source, kept at its zero init → ``exp(0)=1``.
+
+    Anything else that mismatches is left alone for ``load_state_dict`` to
+    reject — this is a targeted adapter, not a shape coercer.
+    """
+    tgt = model.state_dict()
+    adapted = dict(state)
+    notes: list = []
+    for key, want in tgt.items():
+        if key.startswith("scale_mlp."):
+            if key not in adapted:
+                adapted[key] = want.clone()
+                notes.append(f"{key}: fresh zero-init (scale_factorized)")
+            continue
+        have = adapted.get(key)
+        if have is None or have.shape == want.shape:
+            continue
+        # Only the stem conv legitimately grows, and only along input channels.
+        if (
+            have.dim() == 4
+            and want.dim() == 4
+            and have.shape[0] == want.shape[0]
+            and have.shape[2:] == want.shape[2:]
+            and want.shape[1] > have.shape[1]
+        ):
+            grown = want.new_zeros(want.shape)
+            grown[:, : have.shape[1]] = have
+            adapted[key] = grown
+            notes.append(
+                f"{key}: in_ch {have.shape[1]}→{want.shape[1]} (new channels zeroed)"
+            )
+    return adapted, notes
 
 
 def _refuse_bad_corpus(root: Path, allow: bool) -> None:
@@ -294,6 +352,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Override yaml lr (finetune often uses 3e-5)",
     )
     p.add_argument(
+        "--motion-channels",
+        action="store_true",
+        help="Feed the n_frames-1 frame differences alongside RGB. Changes the "
+             "stem conv shape; combine with --adapt-init to warm-start from a "
+             "plain checkpoint.",
+    )
+    p.add_argument(
+        "--scale-factorized",
+        action="store_true",
+        help="Predict a scalar log-scale per call and multiply the depth map by "
+             "it, giving the Δ objective one low-variance DOF.",
+    )
+    p.add_argument(
+        "--adapt-init",
+        action="store_true",
+        help="Allow --init-ckpt from a plain checkpoint into a motion/scale-"
+             "factorized net: new stem input channels are zeroed and scale_mlp "
+             "starts at exp(0)=1, so step 0 reproduces the source exactly.",
+    )
+    p.add_argument(
         "--delta-weight",
         type=float,
         default=None,
@@ -344,6 +422,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     root = args.dataset
     _refuse_bad_corpus(root, args.allow_v0_desync)
     dh_cfg = _load_depth_cfg(args.config)
+    if args.motion_channels:
+        dh_cfg["motion_channels"] = True
+    if args.scale_factorized:
+        dh_cfg["scale_factorized"] = True
     if args.delta_weight is not None:
         print(f"[depth-train] NOTE: --delta-weight {args.delta_weight} overrides "
               f"yaml delta_weight={dh_cfg.get('delta_weight')}", file=sys.stderr)
@@ -405,6 +487,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         image_size=int(dh_cfg["image_size"]),
         n_frames=int(dh_cfg["n_frames"]),
         base=int(dh_cfg["base"]),
+        motion_channels=bool(dh_cfg["motion_channels"]),
+        scale_factorized=bool(dh_cfg["scale_factorized"]),
     ).to(device)
     if args.init_ckpt is not None:
         ckpt_path = Path(args.init_ckpt)
@@ -415,12 +499,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         # image_size). On mismatch load_state_dict raises — there is no
         # (missing, unexpected) tuple to report (that only comes back non-empty
         # with strict=False), so surface a clean, actionable FAIL instead.
+        if args.adapt_init:
+            state, notes = _adapt_state_dict(state, model)
+            for note in notes:
+                print(f"[depth-train] adapt-init {note}")
+            if not notes:
+                print("[depth-train] adapt-init: nothing to adapt (arch already matches)")
         try:
             model.load_state_dict(state, strict=True)
         except RuntimeError as e:
             print(f"[depth-train] FAIL: --init-ckpt {ckpt_path} arch mismatch vs "
                   f"configured DepthHead (n_frames={dh_cfg['n_frames']} "
-                  f"base={dh_cfg['base']} image_size={dh_cfg['image_size']}): {e}",
+                  f"base={dh_cfg['base']} image_size={dh_cfg['image_size']} "
+                  f"motion_channels={dh_cfg['motion_channels']} "
+                  f"scale_factorized={dh_cfg['scale_factorized']}): {e}",
                   file=sys.stderr)
             return 1
         prior = blob.get("holdout_absrel") if isinstance(blob, dict) else None
@@ -487,6 +579,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"delta_min_gt_m={dh_cfg.get('delta_min_gt_m')} "
         f"approach_oversample={dh_cfg.get('approach_oversample')} "
         f"freeze_encoder={freeze_enc} "
+        f"motion_channels={dh_cfg['motion_channels']} "
+        f"scale_factorized={dh_cfg['scale_factorized']} "
         f"ckpt_dir={ckpt_dir}"
     )
 
@@ -620,6 +714,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "n_frames": int(dh_cfg["n_frames"]),
                 "image_size": int(dh_cfg["image_size"]),
                 "base": int(dh_cfg["base"]),
+                # Architecture flags must round-trip: _DepthHead.from_payload is
+                # what the gate and DepthMinPredictor rebuild from.
+                "motion_channels": bool(dh_cfg["motion_channels"]),
+                "scale_factorized": bool(dh_cfg["scale_factorized"]),
                 "holdout_absrel": holdout,
                 "depth_cfg": dh_cfg,
                 "init_ckpt": str(args.init_ckpt) if args.init_ckpt else None,

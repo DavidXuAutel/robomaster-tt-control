@@ -18,11 +18,98 @@ from experiments.aerial.rl.dynamics_torch import (
 )
 from experiments.aerial.rl.env.obs import Observation
 from experiments.aerial.rl.train_depth_head import (
+    _adapt_state_dict,
     _apply_freeze_encoder,
     _load_depth_cfg,
     _sample_approach_biased_windows,
     main as train_depth_main,
 )
+
+
+def test_motion_channels_widen_stem_and_carry_frame_differences():
+    plain = _DepthHead(image_size=16, n_frames=3, base=8)
+    moving = _DepthHead(image_size=16, n_frames=3, base=8, motion_channels=True)
+    assert plain.encoder[0].in_channels == 3 * 3
+    assert moving.encoder[0].in_channels == 3 * 3 + 2 * 3
+
+    rgb = torch.randint(0, 256, (2, 3, 16, 16, 3), dtype=torch.uint8)
+    packed = _DepthHead.pack_rgb_nhwc(rgb, 3, motion_channels=True)
+    assert packed.shape == (2, 15, 16, 16)
+    frames = rgb.float().div(255.0).permute(0, 1, 4, 2, 3)
+    expected = (frames[:, 1:] - frames[:, :-1]).reshape(2, 6, 16, 16)
+    torch.testing.assert_close(packed[:, 9:], expected)
+
+    depth, log_sigma = moving.predict_from_window(rgb)
+    assert depth.shape == (2, 16, 16) and log_sigma.shape == (2, 16, 16)
+    assert torch.all(depth > 0)
+
+
+def test_scale_factorized_starts_as_identity_and_scales_whole_map():
+    model = _DepthHead(image_size=16, n_frames=2, base=8, scale_factorized=True)
+    plain = _DepthHead(image_size=16, n_frames=2, base=8)
+    plain.load_state_dict(
+        {k: v for k, v in model.state_dict().items() if not k.startswith("scale_mlp.")}
+    )
+    rgb = torch.randint(0, 256, (2, 2, 16, 16, 3), dtype=torch.uint8)
+    with torch.no_grad():
+        scaled, _ = model.predict_from_window(rgb)
+        base, _ = plain.predict_from_window(rgb)
+    # Zero-init scale_mlp → exp(0) = 1, so a fresh scale-factorized net is the
+    # plain net. Without this, warm starts would silently shift the depth level.
+    torch.testing.assert_close(scaled, base)
+
+    with torch.no_grad():
+        model.scale_mlp[-1].bias.fill_(float(np.log(2.0)))
+        doubled, _ = model.predict_from_window(rgb)
+    torch.testing.assert_close(doubled, base * 2.0, rtol=1e-4, atol=1e-4)
+
+
+def test_adapt_init_preserves_predictions_of_plain_checkpoint():
+    torch.manual_seed(0)
+    plain = _DepthHead(image_size=16, n_frames=3, base=8)
+    upgraded = _DepthHead(
+        image_size=16, n_frames=3, base=8, motion_channels=True, scale_factorized=True
+    )
+    adapted, notes = _adapt_state_dict(plain.state_dict(), upgraded)
+    upgraded.load_state_dict(adapted, strict=True)
+    assert any("in_ch 9→15" in n for n in notes)
+    assert any("scale_mlp" in n for n in notes)
+
+    rgb = torch.randint(0, 256, (2, 3, 16, 16, 3), dtype=torch.uint8)
+    with torch.no_grad():
+        before, _ = plain.predict_from_window(rgb)
+        after, _ = upgraded.predict_from_window(rgb)
+    # The point of the adapter: step 0 of an upgraded run reproduces the source
+    # checkpoint exactly, so the AbsRel already paid for is not thrown away.
+    torch.testing.assert_close(before, after)
+
+
+def test_freeze_encoder_keeps_scale_mlp_trainable():
+    model = _DepthHead(image_size=16, n_frames=2, base=8, scale_factorized=True)
+    trainable = _apply_freeze_encoder(model, True)
+    ids = {id(p) for p in trainable}
+    assert all(id(p) in ids for p in model.scale_mlp.parameters())
+    assert not any(p.requires_grad for p in model.encoder.parameters())
+
+
+def test_from_payload_rebuilds_architecture_flags():
+    model = _DepthHead(
+        image_size=16, n_frames=3, base=8, motion_channels=True, scale_factorized=True
+    )
+    payload = {
+        "model": model.state_dict(),
+        "image_size": 16,
+        "n_frames": 3,
+        "base": 8,
+        "motion_channels": True,
+        "scale_factorized": True,
+    }
+    rebuilt = _DepthHead.from_payload(payload)
+    rebuilt.load_state_dict(payload["model"], strict=True)
+    assert rebuilt.motion_channels and rebuilt.scale_factorized
+
+    legacy = _DepthHead.from_payload({"image_size": 16, "n_frames": 3, "base": 8})
+    assert not legacy.motion_channels and not legacy.scale_factorized
 
 
 def test_depth_head_forward_shapes():

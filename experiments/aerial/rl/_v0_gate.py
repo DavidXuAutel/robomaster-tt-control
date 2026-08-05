@@ -457,11 +457,7 @@ def _predict_depth_over_windows(
     from experiments.aerial.rl.perception_data import windows_to_perception_arrays
 
     payload = torch.load(str(ckpt_path), map_location="cpu")
-    model = _DepthHead(
-        image_size=int(payload.get("image_size", 224)),
-        n_frames=int(payload.get("n_frames", 4)),
-        base=int(payload.get("base", 32)),
-    )
+    model = _DepthHead.from_payload(payload)
     model.load_state_dict(payload["model"], strict=True)
     model.eval().to(device)
 

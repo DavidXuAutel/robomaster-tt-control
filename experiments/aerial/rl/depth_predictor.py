@@ -41,9 +41,7 @@ class DepthMinPredictor:
 
         payload = torch.load(str(path), map_location="cpu")
         n_frames = int(payload.get("n_frames", 4))
-        image_size = int(payload.get("image_size", 224))
-        base = int(payload.get("base", 32))
-        model = _DepthHead(image_size=image_size, n_frames=n_frames, base=base)
+        model = _DepthHead.from_payload(payload)
         model.load_state_dict(payload["model"], strict=True)
         model.to(device)
         model.eval()

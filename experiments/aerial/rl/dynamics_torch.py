@@ -231,6 +231,8 @@ class _DepthHead(nn.Module):
         image_size: int = 224,
         n_frames: int = 4,
         base: int = 32,
+        motion_channels: bool = False,
+        scale_factorized: bool = False,
     ) -> None:
         super().__init__()
         if int(n_frames) < 1:
@@ -241,7 +243,11 @@ class _DepthHead(nn.Module):
             )
         self.image_size = int(image_size)
         self.n_frames = int(n_frames)
+        self.motion_channels = bool(motion_channels)
+        self.scale_factorized = bool(scale_factorized)
         in_ch = self.n_frames * 3
+        if self.motion_channels and self.n_frames > 1:
+            in_ch += (self.n_frames - 1) * 3
         chs = [base, base * 2, base * 4, base * 8]
         enc: list[nn.Module] = []
         c_in = in_ch
@@ -257,13 +263,52 @@ class _DepthHead(nn.Module):
         dec += [nn.ConvTranspose2d(c_in, base, 4, stride=2, padding=1), nn.SiLU()]
         dec += [nn.Conv2d(base, 2, kernel_size=3, padding=1)]  # depth + log_sigma
         self.decoder = nn.Sequential(*dec)
+        if self.scale_factorized:
+            # One scalar log-scale per call, from pooled encoder features. ③ is a
+            # statement about a single DOF (band depth level), so giving the Δ
+            # objective one low-variance knob beats asking it to move H*W pixels
+            # that AbsRel simultaneously pins down.
+            self.scale_mlp = nn.Sequential(
+                nn.Linear(chs[-1], chs[-1]), nn.SiLU(), nn.Linear(chs[-1], 1)
+            )
+            # Start at exp(0)=1 so a fresh scale-factorized net matches the plain
+            # one and warm-starting from a plain ckpt is a no-op at step 0.
+            nn.init.zeros_(self.scale_mlp[-1].weight)
+            nn.init.zeros_(self.scale_mlp[-1].bias)
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "_DepthHead":
+        """Rebuild the architecture recorded in a ``train_depth_head`` checkpoint.
+
+        Loaders must go through here: ``motion_channels`` / ``scale_factorized``
+        change parameter shapes, and a loader that ignores them fails a
+        ``strict=True`` load (or, worse, silently builds the wrong net).
+        """
+        return cls(
+            image_size=int(payload.get("image_size", 224)),
+            n_frames=int(payload.get("n_frames", 4)),
+            base=int(payload.get("base", 32)),
+            motion_channels=bool(payload.get("motion_channels", False)),
+            scale_factorized=bool(payload.get("scale_factorized", False)),
+        )
 
     @staticmethod
-    def pack_rgb_nhwc(rgb: torch.Tensor, n_frames: int) -> torch.Tensor:
-        """``rgb [B,L,H,W,3]`` uint8/float → ``[B, n_frames*3, H, W]`` in [0,1].
+    def pack_rgb_nhwc(
+        rgb: torch.Tensor, n_frames: int, *, motion_channels: bool = False
+    ) -> torch.Tensor:
+        """``rgb [B,L,H,W,3]`` uint8/float → ``[B, C, H, W]`` in [0,1].
 
         Uses the **last** ``n_frames`` of the window (left-pad by repeating frame 0
         when ``L < n_frames``) so a short window still yields a fixed channel count.
+
+        ``motion_channels`` appends the ``n_frames-1`` consecutive frame
+        differences, so ``C = n*3 + (n-1)*3``. Scale change over a window is a
+        looming/expansion cue: it lives in the *difference* between frames, and a
+        plain conv stack over concatenated RGB has to rediscover subtraction
+        before it can see it. Handing it the differences is what lets the net
+        estimate Δ-depth at all rather than re-guessing an absolute depth per
+        call and differencing two independent guesses (2026-08-05 diagnose:
+        pred-Δ vs GT-Δ Pearson ≈ 0).
         """
         if rgb.dim() != 5 or rgb.shape[-1] != 3:
             raise ValueError(f"rgb must be [B,L,H,W,3], got {tuple(rgb.shape)}")
@@ -277,7 +322,12 @@ class _DepthHead(nn.Module):
         if sl.dtype == torch.uint8:
             sl = sl.float() / 255.0
         # [B, n, H, W, 3] -> [B, n*3, H, W]
-        return sl.permute(0, 1, 4, 2, 3).reshape(B, n * 3, H, W)
+        packed = sl.permute(0, 1, 4, 2, 3).reshape(B, n * 3, H, W)
+        if not motion_channels or n < 2:
+            return packed
+        frames = sl.permute(0, 1, 4, 2, 3)  # [B, n, 3, H, W]
+        diffs = (frames[:, 1:] - frames[:, :-1]).reshape(B, (n - 1) * 3, H, W)
+        return torch.cat([packed, diffs], dim=1)
 
     def forward(self, rgb_stack: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """``rgb_stack [B, n_frames*3, H, W]`` → ``(D̂, log_σ)`` each ``[B, H, W]``."""
@@ -291,11 +341,21 @@ class _DepthHead(nn.Module):
         # Softplus keeps D̂ > 0; log_σ is unconstrained.
         depth = F.softplus(out[:, 0]) + 1e-3
         log_sigma = out[:, 1]
+        if self.scale_factorized:
+            pooled = h.mean(dim=(-2, -1))
+            # Clamp keeps a bad step from driving the whole map off the [1,40] m
+            # navigational band, which would zero out ③'s support test.
+            log_scale = self.scale_mlp(pooled).squeeze(-1).clamp(-2.0, 2.0)
+            depth = depth * torch.exp(log_scale)[:, None, None]
         return depth, log_sigma
 
     def predict_from_window(self, rgb_nhwc: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Convenience: window RGB → ``(D̂, log_σ)`` for the **last** frame."""
-        return self.forward(self.pack_rgb_nhwc(rgb_nhwc, self.n_frames))
+        return self.forward(
+            self.pack_rgb_nhwc(
+                rgb_nhwc, self.n_frames, motion_channels=self.motion_channels
+            )
+        )
 
 
 def depth_head_loss(
