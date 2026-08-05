@@ -412,10 +412,21 @@ def _score_1d_holdout(
             "reason": "no held-out episodes for ①d (need ≥2 usable depth episodes)",
         }
     payload = torch.load(str(ckpt_path), map_location="cpu")
-    model = _DepthHead(
-        image_size=int(payload.get("image_size", dh_cfg.get("image_size", 224))),
-        n_frames=int(payload.get("n_frames", dh_cfg.get("n_frames", 4))),
-        base=int(payload.get("base", dh_cfg.get("base", 32))),
+    # Payload wins, yaml is the fallback for checkpoints predating a given key.
+    # Must go through from_payload: ①d and ③ load the SAME checkpoint, so a
+    # loader that forgets an architecture flag crashes ①d on any net the other
+    # loader can read.
+    model = _DepthHead.from_payload(
+        {
+            key: payload.get(key, dh_cfg.get(key, default))
+            for key, default in (
+                ("image_size", 224),
+                ("n_frames", 4),
+                ("base", 32),
+                ("motion_channels", False),
+                ("scale_factorized", False),
+            )
+        }
     )
     model.load_state_dict(payload["model"], strict=True)
     model.eval().to(device)

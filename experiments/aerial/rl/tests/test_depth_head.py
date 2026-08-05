@@ -112,6 +112,27 @@ def test_from_payload_rebuilds_architecture_flags():
     assert not legacy.motion_channels and not legacy.scale_factorized
 
 
+def test_every_depth_head_loader_goes_through_from_payload():
+    """①d and ③ read the same ckpt; a loader that forgets a flag crashes one.
+
+    Guards the 2026-08-06 miss where ``_score_1d_holdout`` still built a plain
+    ``_DepthHead`` and the gate died on a motion-channel checkpoint's stem.
+    """
+    import re
+    from pathlib import Path
+
+    rl_dir = Path(__file__).resolve().parents[1]
+    offenders = []
+    for path in (rl_dir / "_v0_gate.py", rl_dir / "depth_predictor.py"):
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            if re.search(r"_DepthHead\(", line):
+                offenders.append(f"{path.name}:{n}: {line.strip()}")
+    assert not offenders, (
+        "construct via _DepthHead.from_payload so architecture flags round-trip: "
+        + "; ".join(offenders)
+    )
+
+
 def test_depth_head_forward_shapes():
     model = _DepthHead(image_size=16, n_frames=2, base=8)
     rgb = torch.randint(0, 256, (2, 3, 16, 16, 3), dtype=torch.uint8)
