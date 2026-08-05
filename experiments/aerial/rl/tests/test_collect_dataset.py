@@ -78,6 +78,12 @@ def test_flood_of_crashes_fails_the_run(monkeypatch, tmp_path):
     assert _run(monkeypatch, tmp_path, eps) == 1
 
 
+def test_empty_collection_fails(monkeypatch, tmp_path):
+    # Every reset skipped on spawn-collision → 0 episodes. Must FAIL, not ship an
+    # empty dataset with a spurious "OK: 0/0" exit 0.
+    assert _run(monkeypatch, tmp_path, []) == 1
+
+
 def test_hard_failure_always_fails(monkeypatch, tmp_path):
     # a frozen-renderer episode (identical frames, no motion) is a hard fail
     # regardless of quarantine fraction.

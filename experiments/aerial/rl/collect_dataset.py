@@ -163,7 +163,20 @@ def main(argv: "list[str] | None" = None) -> int:
               f"({quar_frac:.0%}, within tolerance) — excluded from usable set",
               file=sys.stderr)
 
+    # A run that produced no episodes at all (every reset skipped on spawn
+    # collision, or zero episodes requested) is a failure, not a success —
+    # otherwise we ship an empty dataset that only fails later at load time.
+    if n == 0:
+        print("[collect] FAIL: 0 episodes collected "
+              f"(skipped {stats.skipped} spawn-collision at reset) — "
+              "start-pose distribution or map likely broken", file=sys.stderr)
+        return 1
+
     usable = n - len(quarantined)
+    if usable == 0:
+        print(f"[collect] FAIL: 0/{n} usable episodes (all quarantined) in {out_dir}",
+              file=sys.stderr)
+        return 1
     print(f"[collect] OK: {usable}/{n} usable episodes in {out_dir}")
     return 0
 
