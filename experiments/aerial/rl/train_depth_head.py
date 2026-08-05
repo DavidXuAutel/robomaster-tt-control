@@ -487,8 +487,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         image_size=int(dh_cfg["image_size"]),
         n_frames=int(dh_cfg["n_frames"]),
         base=int(dh_cfg["base"]),
-        motion_channels=bool(dh_cfg["motion_channels"]),
-        scale_factorized=bool(dh_cfg["scale_factorized"]),
+        motion_channels=bool(dh_cfg.get("motion_channels", False)),
+        scale_factorized=bool(dh_cfg.get("scale_factorized", False)),
     ).to(device)
     if args.init_ckpt is not None:
         ckpt_path = Path(args.init_ckpt)
@@ -511,8 +511,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"[depth-train] FAIL: --init-ckpt {ckpt_path} arch mismatch vs "
                   f"configured DepthHead (n_frames={dh_cfg['n_frames']} "
                   f"base={dh_cfg['base']} image_size={dh_cfg['image_size']} "
-                  f"motion_channels={dh_cfg['motion_channels']} "
-                  f"scale_factorized={dh_cfg['scale_factorized']}): {e}",
+                  f"motion_channels={dh_cfg.get('motion_channels', False)} "
+                  f"scale_factorized={dh_cfg.get('scale_factorized', False)}): {e}",
                   file=sys.stderr)
             return 1
         prior = blob.get("holdout_absrel") if isinstance(blob, dict) else None
@@ -579,8 +579,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"delta_min_gt_m={dh_cfg.get('delta_min_gt_m')} "
         f"approach_oversample={dh_cfg.get('approach_oversample')} "
         f"freeze_encoder={freeze_enc} "
-        f"motion_channels={dh_cfg['motion_channels']} "
-        f"scale_factorized={dh_cfg['scale_factorized']} "
+        f"motion_channels={dh_cfg.get('motion_channels', False)} "
+        f"scale_factorized={dh_cfg.get('scale_factorized', False)} "
         f"ckpt_dir={ckpt_dir}"
     )
 
@@ -716,8 +716,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "base": int(dh_cfg["base"]),
                 # Architecture flags must round-trip: _DepthHead.from_payload is
                 # what the gate and DepthMinPredictor rebuild from.
-                "motion_channels": bool(dh_cfg["motion_channels"]),
-                "scale_factorized": bool(dh_cfg["scale_factorized"]),
+                "motion_channels": bool(dh_cfg.get("motion_channels", False)),
+                "scale_factorized": bool(dh_cfg.get("scale_factorized", False)),
                 "holdout_absrel": holdout,
                 "depth_cfg": dh_cfg,
                 "init_ckpt": str(args.init_ckpt) if args.init_ckpt else None,
