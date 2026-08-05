@@ -289,6 +289,7 @@ def _sample_scale_windows(
     scale_depth_min_m: float = 1.0,
     scale_depth_max_m: float = 40.0,
     min_band_frac: float = 0.05,
+    support_ratio: float = 0.5,
 ) -> List[Any]:
     """Non-overlapping windows with RGB context prefix for full-context D̂ at t0.
 
@@ -297,26 +298,34 @@ def _sample_scale_windows(
     the first scored frame (no left-pad), so ``ŝ_D = |d_last − d_first|`` is not
     inflated by a single-frame warmup prediction.
 
-    Dated §4.1 revision 2026-08-05 filters:
-      - heading-aligned forwardness ≥ ``min_forward_frac`` (default = ``fwd_cos_min``)
+    Dated §4.1 revision 2026-08-05 filters (GT used only to select physical
+    situations — never as the scored ŝ_D for the gate):
+      - heading-aligned forwardness ≥ ``min_forward_frac``
       - GT navigational-band content ≥ ``min_band_frac`` on first & last scored
-        frames (drops open-horizon windows where the band median is undefined)
-    Approach-support (``ŝ_D ≥ support_ratio · motion``) is applied later on the
-    depth under test inside ``check_scale_consistency``.
+      - GT approach support: |Δ band-median| ≥ ``support_ratio · ‖Δp‖``
+        (drops wall-parallel / open-horizon dead-proxy windows)
     """
+    from experiments.aerial.rl import vio as vio_lib
+
     episodes = ds.load_dataset(root, skip_quarantined=True)
     need = int(n_context) + int(window)
     windows: List[Any] = []
     lo, hi = float(scale_depth_min_m), float(scale_depth_max_m)
+    # Prefer denser stride when episodes are long so approach windows are not
+    # starved by early wall-parallel segments (OpenFly outdoor corpus).
+    stride = max(1, int(window) // 2)
     for ep in episodes:
         if len(ep) < need:
             continue
-        for start in range(0, len(ep) - need + 1, int(window)):
+        for start in range(0, len(ep) - need + 1, stride):
             chunk = ep[start : start + need]
             scored = chunk[int(n_context) :]
-            p0 = np.asarray(scored[0].obs.position, dtype=np.float64).reshape(3)
-            p1 = np.asarray(scored[-1].obs.position, dtype=np.float64).reshape(3)
-            motion = float(np.linalg.norm(p1 - p0))
+            pos = np.asarray(
+                [np.asarray(t.obs.position, dtype=np.float64).reshape(3) for t in scored],
+                dtype=np.float64,
+            )
+            dvec = pos[-1] - pos[0]
+            motion = float(np.linalg.norm(dvec))
             if motion < float(min_motion_m):
                 continue
             if _window_forward_frac(scored) < float(min_forward_frac):
@@ -329,6 +338,15 @@ def _sample_scale_windows(
                 _nav_band_frac(d0, lo=lo, hi=hi) < float(min_band_frac)
                 or _nav_band_frac(d1, lo=lo, hi=hi) < float(min_band_frac)
             ):
+                continue
+            # GT approach-support gate for window *selection* only.
+            stack = np.stack(
+                [np.asarray(d0, dtype=np.float32), np.asarray(d1, dtype=np.float32)],
+                axis=0,
+            )[None, ...]
+            d_med = vio_lib.depth_median(stack, max_depth_m=hi, min_depth_m=lo)
+            s_d = float(vio_lib.scale_from_depth_change(d_med)[0])
+            if not np.isfinite(s_d) or s_d < float(support_ratio) * motion:
                 continue
             windows.append(chunk)
             if len(windows) >= max_windows:
@@ -577,10 +595,11 @@ def _run_signal3_diagnose(
         min_motion_m=thr.min_motion_m,
         scale_depth_min_m=float(thr.scale_depth_min_m),
         scale_depth_max_m=float(thr.scale_depth_max_m),
+        support_ratio=float(thr.scale_support_ratio),
     )
     if not windows:
         print(
-            "[v0-gate] ③-diagnose: no heading-forward + nav-band windows — "
+            "[v0-gate] ③-diagnose: no approach-support windows — "
             "corpus lacks approach geometry; recollect before concluding.",
             file=sys.stderr,
         )
@@ -831,10 +850,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 min_motion_m=thr.min_motion_m,
                 scale_depth_min_m=float(thr.scale_depth_min_m),
                 scale_depth_max_m=float(thr.scale_depth_max_m),
+                support_ratio=float(thr.scale_support_ratio),
             )
             if not windows:
                 print(
-                    "[v0-gate] WARN: no forward-motion windows for ③; "
+                    "[v0-gate] WARN: no approach-support windows for ③; "
                     "falling back to prefix sampler (proxy may be invalid).",
                     file=sys.stderr,
                 )
