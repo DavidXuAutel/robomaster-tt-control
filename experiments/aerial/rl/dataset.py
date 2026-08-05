@@ -136,7 +136,7 @@ def load_episode(path: Path) -> List[Transition]:
     if n == 0:
         raise ValueError(f"empty episode file: {path}")
 
-    def _obs_at(i: int) -> Observation:
+    def _obs_at(i: int, collided_flag: bool) -> Observation:
         x, y, z, yaw = (float(v) for v in proprio[i])
         # v2: recover the velocity triple; v1: pad zeros (documented lossy path).
         if vel is not None:
@@ -162,22 +162,29 @@ def load_episode(path: Path) -> List[Transition]:
         return Observation(
             rgb=np.asarray(rgb[i], dtype=np.uint8),
             state=state,
-            collided=bool(collided[i]),
+            collided=bool(collided_flag),
             depth=d,
             imu=imu,
             t=t,
         )
 
+    # ``collided[i]`` is a POST-step flag (written as next_obs[i].collided): the
+    # contact results from action i and lives on the frame AFTER it. So frame i's
+    # PRE-step collided state is the previous step's post flag (collided[i-1]),
+    # and False on the first frame. Assigning collided[i] to obs[i] (the old
+    # reload) smeared the terminal post-step contact onto the pre-step obs.
     transitions: List[Transition] = []
     for i in range(n):
-        obs = _obs_at(i)
-        next_obs = _obs_at(i + 1) if i + 1 < n else obs
-        # On the terminal frame, fold the stored post-step collision into next_obs
-        # so quarantine_reasons sees the crash (legacy npz may only flag collided[i]).
-        if bool(collided[i]):
-            next_obs.collided = True
-            if i + 1 >= n:
-                obs.collided = True
+        pre = bool(collided[i - 1]) if i >= 1 else False
+        obs = _obs_at(i, pre)
+        if i + 1 < n:
+            # next_obs is the following frame, whose pre-step state == collided[i].
+            next_obs = _obs_at(i + 1, bool(collided[i]))
+        else:
+            # Terminal: no stored frame n+1 — synthesize a distinct post-step obs
+            # carrying collided[i] so quarantine_reasons / ④ still see the crash,
+            # without marking the terminal pre-step obs as collided.
+            next_obs = _obs_at(i, bool(collided[i]))
         transitions.append(
             Transition(
                 obs=obs,

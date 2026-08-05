@@ -165,7 +165,10 @@ def _sample_approach_biased_windows(
     if oversample <= 1 or n_cand == batch:
         return candidates[:batch]
     arrays = windows_to_perception_arrays(candidates)
-    if "depth" not in arrays:
+    # Approach-bias needs both GT depth (to score |Δ|) and position (to gate on
+    # motion). If either is absent, fall back to a uniform sample so AbsRel still
+    # trains rather than KeyError-ing on the missing field.
+    if "depth" not in arrays or "position" not in arrays:
         return candidates[:batch]
     depth = arrays["depth"]
     # Align with Δ-loss: pred_first = predict(rgb[:, :n_f]) → GT [:, n_f-1] vs [:, -1].
@@ -174,7 +177,9 @@ def _sample_approach_biased_windows(
     g1 = _band_mean_np(depth[:, -1], min_depth_m=min_depth_m, max_depth_m=max_depth_m)
     s_gt = np.abs(g1.astype(np.float64) - g0.astype(np.float64))
     pos = arrays["position"]
-    motion = np.linalg.norm(pos[:, -1] - pos[:, 0], axis=-1).astype(np.float64)
+    # Match the Δ-loss motion interval [n_f-1, -1] (not the full window) so the
+    # sampler's support gate agrees with depth_delta_scale_loss's.
+    motion = np.linalg.norm(pos[:, -1] - pos[:, n_f - 1], axis=-1).astype(np.float64)
     alive = np.isfinite(s_gt) & (s_gt >= float(min_gt_delta_m))
     if float(support_ratio) > 0.0:
         alive &= np.isfinite(motion) & (s_gt >= float(support_ratio) * motion)
@@ -278,9 +283,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     _refuse_bad_corpus(root, args.allow_v0_desync)
     dh_cfg = _load_depth_cfg(args.config)
     if args.delta_weight is not None:
+        print(f"[depth-train] NOTE: --delta-weight {args.delta_weight} overrides "
+              f"yaml delta_weight={dh_cfg.get('delta_weight')}", file=sys.stderr)
         dh_cfg["delta_weight"] = float(args.delta_weight)
     if args.lr is not None:
+        print(f"[depth-train] NOTE: --lr {args.lr} overrides yaml lr={dh_cfg.get('lr')}",
+              file=sys.stderr)
         dh_cfg["lr"] = float(args.lr)
+    # The Δ term needs window STRICTLY > n_frames to have a non-degenerate Δ
+    # interval. A finetune whose whole purpose is ③/Δ must not silently run for
+    # hours with the term disabled — fail fast at setup instead.
+    if float(dh_cfg.get("delta_weight", 0.0)) > 0.0 and int(args.window) <= int(dh_cfg["n_frames"]):
+        print(f"[depth-train] FAIL: delta_weight>0 needs --window > n_frames "
+              f"(got window={args.window}, n_frames={dh_cfg['n_frames']}); at "
+              "window==n_frames the Δ interval collapses to a single frame (Δ≡0)",
+              file=sys.stderr)
+        return 1
     if bool(dh_cfg.get("enable")):
         print(
             "[depth-train] NOTE: world_model.depth_head.enable is true in yaml; "
@@ -315,12 +333,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         ckpt_path = Path(args.init_ckpt)
         blob = torch.load(ckpt_path, map_location=device, weights_only=False)
         state = blob["model"] if isinstance(blob, dict) and "model" in blob else blob
-        missing, unexpected = model.load_state_dict(state, strict=True)
-        print(
-            f"[depth-train] init from {ckpt_path} "
-            f"(missing={len(missing)} unexpected={len(unexpected)} "
-            f"prior_holdout={blob.get('holdout_absrel') if isinstance(blob, dict) else None})"
-        )
+        # strict=True is deliberate: refuse to finetune from a checkpoint whose
+        # architecture doesn't match the configured DepthHead (n_frames / base /
+        # image_size). On mismatch load_state_dict raises — there is no
+        # (missing, unexpected) tuple to report (that only comes back non-empty
+        # with strict=False), so surface a clean, actionable FAIL instead.
+        try:
+            model.load_state_dict(state, strict=True)
+        except RuntimeError as e:
+            print(f"[depth-train] FAIL: --init-ckpt {ckpt_path} arch mismatch vs "
+                  f"configured DepthHead (n_frames={dh_cfg['n_frames']} "
+                  f"base={dh_cfg['base']} image_size={dh_cfg['image_size']}): {e}",
+                  file=sys.stderr)
+            return 1
+        prior = blob.get("holdout_absrel") if isinstance(blob, dict) else None
+        print(f"[depth-train] init from {ckpt_path} (prior_holdout={prior})")
     opt = torch.optim.AdamW(model.parameters(), lr=float(dh_cfg["lr"]), betas=(0.9, 0.95))
     grad_clip = float(dh_cfg["grad_clip"])
 
@@ -389,14 +416,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             max_depth_m=float(dh_cfg["max_depth_m"]),
         )
         # Temporal / Δ-depth: predict the first frame of the window with full
-        # n_frames context (requires window >= n_frames) and match |Δ band-mean|
-        # to GT on approach-alive rows — teaches ③ without drowning AbsRel.
+        # n_frames context and match |Δ band-mean| to GT on approach-alive rows
+        # — teaches ③ without drowning AbsRel. Requires window STRICTLY > n_frames:
+        # at window == n_frames, gt[:, n_f-1] and gt[:, -1] are the same frame, so
+        # Δ is identically 0 and the loss is a degenerate no-op. Also needs
+        # position (motion gate); skip the term for a batch that lacks it.
         delta_w = float(dh_cfg.get("delta_weight", 0.0))
-        if delta_w > 0.0 and int(args.window) >= int(dh_cfg["n_frames"]):
+        if (delta_w > 0.0 and int(args.window) > int(dh_cfg["n_frames"])
+                and "position" in arrays):
             n_f = int(dh_cfg["n_frames"])
             pred_first, _ = model.predict_from_window(rgb[:, :n_f])
             pos = torch.from_numpy(np.ascontiguousarray(arrays["position"])).to(device)
-            motion_m = torch.linalg.norm(pos[:, -1] - pos[:, 0], dim=-1)
+            # Motion must span the SAME interval as the depth Δ: pred_first/gt
+            # are at frame n_f-1, pred_last/gt at frame -1. Using full-window
+            # motion pos[-1]-pos[0] overstates ‖Δp‖ and makes the support gate
+            # (s_gt ≥ support_ratio·‖Δp‖) reject valid approach windows.
+            motion_m = torch.linalg.norm(pos[:, -1] - pos[:, n_f - 1], dim=-1)
             d_loss, d_stats = depth_delta_scale_loss(
                 pred_first,
                 pred,

@@ -121,6 +121,23 @@ def test_load_dataset_skips_quarantined(tmp_path):
     assert len(allofthem) == 3
 
 
+def test_terminal_collision_reloads_on_next_obs_not_pre_step(tmp_path):
+    """``collided`` is a POST-step event. On reload the terminal pre-step obs
+    must stay clean and the contact must land on next_obs — the old reload
+    smeared it onto obs, which would corrupt any pre-step collision read."""
+    ep = _moving_episode(n=4)
+    ep[-1].next_obs.collided = True  # contact results from the last action
+    path = ds.write_episode(tmp_path, 0, ep)
+    loaded = ds.load_episode(path)
+    assert loaded[-1].obs.collided is False, "terminal pre-step obs must be clean"
+    assert loaded[-1].next_obs.collided is True, "contact belongs on next_obs"
+    assert all(t.obs.collided is False for t in loaded), "no pre-step obs collided"
+    # round-trip: re-serialized collided mask is unchanged (post-step semantics).
+    np.testing.assert_array_equal(
+        ds.episode_arrays(loaded)["collided"], ds.episode_arrays(ep)["collided"]
+    )
+
+
 # --- quality gate ------------------------------------------------------------
 
 def test_moving_episode_is_nontrivial():

@@ -327,7 +327,11 @@ def depth_head_loss(
     absrel = (torch.abs(p - g) / g).mean()
     # Scale-invariant log (Eigen et al.) — stabilises large outdoor depth range.
     diff = torch.log(p.clamp_min(1e-3)) - torch.log(g.clamp_min(1e-3))
-    silog = torch.sqrt((diff ** 2).mean() - (diff.mean() ** 2).clamp_min(0.0) + 1e-8)
+    # Variance = E[diff²] − E[diff]²; clamp the VARIANCE (not E[diff]², which is
+    # already ≥0) to ≥0 before sqrt — float error can push it slightly negative
+    # and produce a NaN loss. The old clamp on E[diff]² was a no-op.
+    silog_var = ((diff ** 2).mean() - diff.mean() ** 2).clamp_min(0.0)
+    silog = torch.sqrt(silog_var + 1e-8)
     ls_c = ls.clamp(-8.0, 8.0)
     inv_var = torch.exp(-2.0 * ls_c)
     nll = (0.5 * ((p - g) ** 2 * inv_var + 2.0 * ls_c)).mean()
