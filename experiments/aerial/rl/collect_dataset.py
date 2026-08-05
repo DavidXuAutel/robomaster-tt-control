@@ -14,20 +14,63 @@ fails loudly instead of producing unusable training data.
         --episodes 20 --max-steps 200 --step-hz 8 \
         --out experiments/aerial/rl/artifacts/dataset_v0
 
+    # approach-biased depth collect (frozen §4.1 ③): nearer heading-aligned goals
+    # so |Δ band-median depth| is alive for scale supervision / diagnose:
+    python -m experiments.aerial.rl.collect_dataset --backend airsim \
+        --grab-depth --step-hz 5.0 --episodes 20 --approach-bias \
+        --approach-dist-m 25 --out experiments/aerial/rl/artifacts/dataset_v0_approach
+
 Hydra-free (builds via ``build_from_config``). Exits non-zero if any episode
 trips ``assert_nontrivial`` — a dataset you shouldn't hand to WM training.
 """
 from __future__ import annotations
 
 import argparse
+import copy
 import logging
+import math
 import sys
 from pathlib import Path
+from typing import List
+
+import numpy as np
 
 from experiments.aerial.rl import dataset as ds
 from experiments.aerial.rl.train_rl import build_from_config
 
 logger = logging.getLogger(__name__)
+
+
+def approach_bias_episodes(
+    episodes: List[dict],
+    dist_m: float = 25.0,
+) -> List[dict]:
+    """Rewrite goals to ``start + dist · heading`` for heading-forward approach.
+
+    OpenFly annotations often put goals 75–135 m away. At ``max_steps=200`` /
+    ``step_hz=5`` the heuristic covers ~30 m and rarely produces the nav-band
+    |Δ median D| that frozen §4.1 ③ / ``--signal3-diagnose`` needs. Placing a
+    nearer goal along the *start yaw* (camera forward) biases rollouts toward
+    surfaces in the FOV while keeping |cos∠(Δp, heading)| high.
+    """
+    dist = float(dist_m)
+    if dist <= 0:
+        raise ValueError(f"approach_dist_m must be > 0, got {dist_m}")
+    out: List[dict] = []
+    for ep in episodes:
+        e = copy.deepcopy(ep)
+        pos = np.asarray(e["pos"], dtype=np.float64).reshape(-1, 3)
+        yaws = np.asarray(e["yaw"], dtype=np.float64).reshape(-1)
+        start = pos[0]
+        yaw0 = float(yaws[0])
+        goal = start + dist * np.array(
+            [math.cos(yaw0), math.sin(yaw0), 0.0], dtype=np.float64
+        )
+        e["pos"] = [start.tolist(), goal.tolist()]
+        e["yaw"] = [yaw0, yaw0]
+        e["approach_bias"] = {"dist_m": dist, "orig_goal": pos[-1].tolist()}
+        out.append(e)
+    return out
 
 
 def _build_cfg(args: argparse.Namespace) -> dict:
@@ -77,6 +120,10 @@ def main(argv: "list[str] | None" = None) -> int:
     p.add_argument("--grab-depth", action="store_true")
     p.add_argument("--annotation", default=None,
                    help="OpenFly annotation JSON of start/goal episodes (real collection)")
+    p.add_argument("--approach-bias", action="store_true",
+                   help="rewrite goals to start+dist along start yaw (③ approach windows)")
+    p.add_argument("--approach-dist-m", type=float, default=25.0,
+                   help="goal distance along start heading when --approach-bias (metres)")
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="[collect] %(message)s")
@@ -118,6 +165,17 @@ def main(argv: "list[str] | None" = None) -> int:
         loop.episodes = [_mock_goal_episode()]
         logger.info("mock backend: injected a synthetic start→goal episode")
 
+    if args.approach_bias and loop.episodes is not None:
+        loop.episodes = approach_bias_episodes(
+            loop.episodes, dist_m=float(args.approach_dist_m),
+        )
+        logger.info(
+            "approach-bias ON: goals -> start + %.1f m along start yaw (%d eps)",
+            float(args.approach_dist_m), len(loop.episodes),
+        )
+    elif args.approach_bias:
+        logger.warning("approach-bias requested but no annotation episodes to rewrite")
+
     # Collect N episodes in ONE collector.collect call so episode indexing
     # advances (i % len(episodes)). Routing through SerialCorrectorLoop with
     # iterations=N / episodes_per_iter=1 would restart i at 0 every iter and
@@ -134,6 +192,8 @@ def main(argv: "list[str] | None" = None) -> int:
     ds.write_manifest(out_dir, manifest, meta={
         "backend": args.backend, "step_hz": args.step_hz,
         "max_steps": args.max_steps, "grab_depth": bool(args.grab_depth),
+        "approach_bias": bool(args.approach_bias),
+        "approach_dist_m": float(args.approach_dist_m) if args.approach_bias else None,
         "skipped_reset_collision": stats.skipped,
         "quarantined": len(quarantined),
         "quarantine_fraction": round(quar_frac, 3),

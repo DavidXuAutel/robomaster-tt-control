@@ -5,7 +5,10 @@ the whole run when their fraction exceeds ``MAX_QUARANTINE_FRACTION``. This driv
 ``main`` with a fake collector so the gate arithmetic is exercised without a
 renderer.
 """
+import math
+
 import numpy as np
+import pytest
 
 from experiments.aerial.rl import collect_dataset as cd
 from experiments.aerial.rl.buffer import Transition
@@ -91,3 +94,20 @@ def test_hard_failure_always_fails(monkeypatch, tmp_path):
                          reward=0.0, done=(i == 3)) for i in range(4)]
     eps = [_healthy() for _ in range(9)] + [frozen]
     assert _run(monkeypatch, tmp_path, eps) == 1
+
+
+def test_approach_bias_episodes_places_goal_along_start_yaw():
+    yaw0 = math.pi / 2  # +Y
+    eps = cd.approach_bias_episodes(
+        [{"pos": [[10.0, 20.0, 5.0], [999.0, 999.0, 5.0]], "yaw": [yaw0, 0.0]}],
+        dist_m=25.0,
+    )
+    assert len(eps) == 1
+    start, goal = eps[0]["pos"]
+    assert start == [10.0, 20.0, 5.0]
+    assert goal[0] == pytest.approx(10.0, abs=1e-6)
+    assert goal[1] == pytest.approx(45.0, abs=1e-6)
+    assert goal[2] == pytest.approx(5.0, abs=1e-6)
+    assert eps[0]["yaw"] == [yaw0, yaw0]
+    assert eps[0]["approach_bias"]["dist_m"] == 25.0
+    assert eps[0]["approach_bias"]["orig_goal"] == [999.0, 999.0, 5.0]
