@@ -289,7 +289,7 @@ def _sample_scale_windows(
     scale_depth_min_m: float = 1.0,
     scale_depth_max_m: float = 40.0,
     min_band_frac: float = 0.05,
-    support_ratio: float = 0.5,
+    support_ratio: float = 0.6,
 ) -> List[Any]:
     """Non-overlapping windows with RGB context prefix for full-context D̂ at t0.
 

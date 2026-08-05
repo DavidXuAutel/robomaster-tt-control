@@ -36,7 +36,7 @@ class V0GateThresholds:
     # ŝ_D=|Δ median| dead; score only windows where the proxy is alive.
     scale_depth_min_m: float = 1.0
     scale_depth_max_m: float = 40.0
-    scale_support_ratio: float = 0.5
+    scale_support_ratio: float = 0.6
     fwd_cos_min: float = 0.7
     min_scale_windows: int = 8
     # ④ near-collision / shield
