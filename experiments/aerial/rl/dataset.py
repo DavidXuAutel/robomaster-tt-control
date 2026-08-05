@@ -19,6 +19,7 @@ writer runs anywhere the collector does.
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -128,6 +129,16 @@ def load_episode(path: Path) -> List[Transition]:
     collided = raw["collided"]
     depth = raw["depth"] if "depth" in raw.files else None
     vel = raw["vel"] if "vel" in raw.files else None
+    if vel is None:
+        # Legacy v1 npz: velocity was not stored, so state[3:6] is zero-FILLED,
+        # not zero-MEASURED. A VIO / perception consumer must not read these
+        # zeros as ground-truth motion. v2 always writes 'vel'; a v2 file missing
+        # it is corrupt. Surface the lossy path instead of failing silently.
+        warnings.warn(
+            f"{path.name}: no 'vel' field (legacy v1); velocity is zero-filled, "
+            "not measured — do not train VIO/scale on it",
+            stacklevel=2,
+        )
     imu_ang_vel = raw["imu_ang_vel"] if "imu_ang_vel" in raw.files else None
     imu_lin_acc = raw["imu_lin_acc"] if "imu_lin_acc" in raw.files else None
     imu_present = raw["imu_present"] if "imu_present" in raw.files else None

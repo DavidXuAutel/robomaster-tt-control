@@ -688,6 +688,11 @@ def _run_signal3_diagnose(
 
     dhat_fwd_med, dhat_fwd_n = _median_over(rel_p, valid_p & fwd)
     lines.append("  ─ interpretation ─")
+    # rc mirrors the D̂ verdict so the diagnostic is scriptable: 0 only when D̂
+    # passes on approach-support windows, 1 for any not-green outcome (matching
+    # the run-failure exits above). It still never touches the authoritative
+    # verdict or yaml — it just lets a wrapper branch on the conclusion.
+    rc = 1
     if dhat_fwd_n < int(thr.min_scale_windows) and (
         gt is None or gt_fwd_n < int(thr.min_scale_windows)
     ):
@@ -723,8 +728,11 @@ def _run_signal3_diagnose(
             "re-run the authoritative `_v0_gate --signals 1,3` (and later ②/④) before "
             "flipping yaml flags."
         )
+        rc = 0
+    lines.append(f"  (exit {rc}: 0=D̂ passes diagnostic, 1=not green; read-only — "
+                 "verdict/yaml unaffected)")
     print("\n".join(lines))
-    return 0
+    return rc
 
 
 def _self_check(thr: metrics.V0GateThresholds) -> int:
@@ -960,6 +968,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --- assemble: full run = authoritative gate; subset = partial ----------- #
     if req == set(_ALL_SIGNALS):
         verdict = metrics.aggregate_v0_verdict(signals)
+        # aggregate_v0_verdict records DEFAULT_THRESHOLDS; overwrite with the
+        # EFFECTIVE thresholds so a --n-eval-episodes override is faithfully
+        # recorded (②/④ actually ran with thr_eff.n_eval_episodes).
+        verdict["thresholds"] = asdict(thr_eff)
         _emit(verdict, args.emit)
         print(f"[v0-gate] {'PASS' if verdict['ok'] else 'FAIL'}")
         return 0 if verdict["ok"] else 1
@@ -972,7 +984,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "requested": sorted(req),
         "all_requested_ok": all_ok,
         "signals": signals,
-        "thresholds": asdict(thr),
+        "thresholds": asdict(thr_eff),  # effective (reflects --n-eval-episodes)
     }
     _emit(partial, args.emit)
     print(f"[v0-gate] PARTIAL {sorted(req)}: {'PASS' if all_ok else 'FAIL'} "
