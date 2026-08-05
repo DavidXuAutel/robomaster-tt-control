@@ -5,15 +5,19 @@ so it still runs on GPU-less hosts.
 """
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
 
+from experiments.aerial.rl.buffer import ReplayBuffer, Transition
 from experiments.aerial.rl.dynamics_torch import (
     _DepthHead,
     depth_delta_scale_loss,
     depth_head_loss,
 )
+from experiments.aerial.rl.env.obs import Observation
+from experiments.aerial.rl.train_depth_head import _sample_approach_biased_windows
 
 
 def test_depth_head_forward_shapes():
@@ -102,3 +106,54 @@ def test_delta_scale_loss_respects_motion_support_ratio():
     )
     assert stats2["n_delta"] == B
     assert torch.isfinite(loss2)
+
+
+def _const_depth_window(
+    depths_m: list[float], *, hw: int = 4, dx: float = 1.0
+) -> list[Transition]:
+    """Build a length-L window with constant per-frame depth and forward motion."""
+    out: list[Transition] = []
+    for i, d in enumerate(depths_m):
+        depth = np.full((hw, hw), float(d), dtype=np.float32)
+        rgb = np.zeros((hw, hw, 3), dtype=np.uint8)
+        state = np.array([i * dx, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        obs = Observation(rgb=rgb, state=state, depth=depth)
+        out.append(
+            Transition(obs=obs, action=np.zeros(4, np.float32), reward=0.0, done=False)
+        )
+    return out
+
+
+def test_approach_sampler_scores_loss_interval_not_window_start():
+    """With n_f>1, rank on depth[:, n_f-1] vs [:, -1] (Δ-loss endpoints), not [0, -1].
+
+    Window A: large |Δ| on [0, L-1] but flat on [n_f-1, L-1] → must lose.
+    Window B: approach alive on [n_f-1, L-1] → must win.
+    """
+    L, n_f = 8, 4
+    # A: early approach then flat from frame 3..7 → |Δ[0,7]|=20, |Δ[3,7]|=0
+    win_a = _const_depth_window([30.0, 20.0, 15.0, 10.0, 10.0, 10.0, 10.0, 10.0])
+    # B: flat until n_f-1, then approach → |Δ[0,7]|=10, |Δ[3,7]|=10
+    win_b = _const_depth_window([20.0, 20.0, 20.0, 20.0, 17.0, 14.0, 12.0, 10.0])
+    buf = ReplayBuffer(capacity_episodes=2, seed=0)
+    # sample_windows is stubbed below; episodes only need to exist.
+    buf.add_episode(win_a)
+    buf.add_episode(win_b)
+
+    candidates = [win_a, win_b, win_a, win_b]  # oversample=4, batch=1 → n_cand=4
+    buf.sample_windows = lambda n, length: candidates[: int(n)]  # type: ignore[method-assign]
+
+    picked = _sample_approach_biased_windows(
+        buf,
+        batch=1,
+        window=L,
+        oversample=4,
+        min_depth_m=1.0,
+        max_depth_m=40.0,
+        min_gt_delta_m=0.5,
+        support_ratio=0.0,
+        n_frames=n_f,
+    )
+    assert len(picked) == 1
+    # Identify by first-frame depth: A starts at 30, B at 20.
+    assert float(picked[0][0].obs.depth.mean()) == pytest.approx(20.0)

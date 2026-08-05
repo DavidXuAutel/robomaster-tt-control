@@ -146,6 +146,7 @@ def _sample_approach_biased_windows(
     max_depth_m: float,
     min_gt_delta_m: float,
     support_ratio: float,
+    n_frames: int = 1,
 ) -> List[Any]:
     """Prefer windows with alive GT ŝ_D (approach geometry for Δ-depth).
 
@@ -153,6 +154,9 @@ def _sample_approach_biased_windows(
     keeps the top ``batch`` that pass the approach gate when possible. Falls
     back to uniform sampling when the pool has no approach-alive windows so
     AbsRel training never stalls.
+
+    Scoring uses the same depth endpoints as ``depth_delta_scale_loss`` in the
+    train loop: ``depth[:, n_frames-1]`` vs ``depth[:, -1]`` (not ``[:, 0]``).
     """
     batch = int(batch)
     oversample = max(1, int(oversample))
@@ -164,8 +168,9 @@ def _sample_approach_biased_windows(
     if "depth" not in arrays:
         return candidates[:batch]
     depth = arrays["depth"]
-    # Score on window endpoints (same |Δ| order as train-loop first/last frames).
-    g0 = _band_mean_np(depth[:, 0], min_depth_m=min_depth_m, max_depth_m=max_depth_m)
+    # Align with Δ-loss: pred_first = predict(rgb[:, :n_f]) → GT [:, n_f-1] vs [:, -1].
+    n_f = max(1, min(int(n_frames), int(window)))
+    g0 = _band_mean_np(depth[:, n_f - 1], min_depth_m=min_depth_m, max_depth_m=max_depth_m)
     g1 = _band_mean_np(depth[:, -1], min_depth_m=min_depth_m, max_depth_m=max_depth_m)
     s_gt = np.abs(g1.astype(np.float64) - g0.astype(np.float64))
     pos = arrays["position"]
@@ -337,6 +342,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             max_depth_m=float(dh_cfg["scale_depth_max_m"]),
             min_gt_delta_m=float(dh_cfg.get("delta_min_gt_m", 0.5)),
             support_ratio=float(dh_cfg.get("delta_support_ratio", 0.0)),
+            n_frames=int(dh_cfg["n_frames"]),
         )
         arrays = windows_to_perception_arrays(windows)
         if "depth" not in arrays:
