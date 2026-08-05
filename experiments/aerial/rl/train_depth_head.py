@@ -265,6 +265,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help="Override yaml delta_weight for this run",
     )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Permit overwriting an existing ckpt / clobbering depth_train.jsonl "
+             "in the target dir. Off by default so a finetune run cannot silently "
+             "replace the canonical AbsRel-PASS checkpoint.",
+    )
     args = p.parse_args(argv)
 
     root = args.dataset
@@ -320,7 +327,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     ckpt_dir = Path(str(args.checkpoint_dir or dh_cfg["checkpoint_dir"]))
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     log_path = ckpt_dir / "depth_train.jsonl"
+    # Finetune runs default their save dir to the canonical checkpoint_dir. A
+    # naive save + blind log-unlink would silently replace the AbsRel-PASS
+    # canonical ckpt (and destroy its training record) with an unvalidated run.
+    # Give finetune runs a distinct '_ft' stem and refuse to clobber anything
+    # pre-existing unless --overwrite is explicit; point re-runs at a fresh
+    # --checkpoint-dir instead.
+    stem = f"depth_step_{args.steps}" + ("_ft" if args.init_ckpt else "")
+    save_path = ckpt_dir / f"{stem}.pt"
+    if args.save_ckpt:
+        if args.init_ckpt is not None and save_path.resolve() == Path(args.init_ckpt).resolve():
+            print(f"[depth-train] FAIL: save path {save_path} == --init-ckpt source; "
+                  "refusing to overwrite the checkpoint being finetuned from",
+                  file=sys.stderr)
+            return 1
+        if save_path.exists() and not args.overwrite:
+            print(f"[depth-train] FAIL: {save_path} already exists; pass --overwrite "
+                  "or a fresh --checkpoint-dir (won't clobber a canonical ckpt)",
+                  file=sys.stderr)
+            return 1
     if log_path.exists():
+        if not args.overwrite:
+            print(f"[depth-train] FAIL: {log_path} already exists; pass --overwrite "
+                  "or a fresh --checkpoint-dir (won't destroy an existing train log)",
+                  file=sys.stderr)
+            return 1
         log_path.unlink()
     print(
         f"[depth-train] recipe: lr={dh_cfg['lr']} delta_weight={dh_cfg['delta_weight']} "
@@ -415,7 +446,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
 
     if args.save_ckpt:
-        path = ckpt_dir / f"depth_step_{args.steps}.pt"
+        path = save_path
         torch.save(
             {
                 "model": model.state_dict(),
