@@ -537,6 +537,15 @@ def _signals_2_4_from_rollouts(
         near_collision_depth_m=thr.near_collision_depth_m,
         max_steps=int(max_steps), reward_cfg=reward_cfg,
     )
+    # ④'s near-collision rate is GT-depth-driven. If no episode carried a usable
+    # depth field (grab_depth=false), every near mask is all-False and the ratio
+    # would be nan/degenerate — fail closed with a clear reason instead of
+    # leaning on rate_off<=0 inside the scorer (which reads as an opaque nan).
+    if int(masks.get("depth_steps", 0)) == 0:
+        s4 = {"ok": False,
+              "reason": "④ has no GT depth in any rollout (grab_depth=false?); "
+                        "cannot score near-collision rate — depth pillar enforced"}
+        return s2, s4
     s4 = metrics.check_shield_effectiveness(
         interventions_on=masks["interventions_on"],
         collided_on=masks["collided_on"],

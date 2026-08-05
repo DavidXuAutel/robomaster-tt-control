@@ -163,6 +163,7 @@ def _episode_masks(
     every episode and silently vacuous the ④ intervention-before-contact check.
     """
     interv, coll, near = [], [], []
+    depth_steps = 0
     for tr in ep:
         interv.append(bool(tr.info.get("intervention", False)))
         post = tr.next_obs if tr.next_obs is not None else tr.obs
@@ -174,8 +175,15 @@ def _episode_masks(
             continue
         d = np.asarray(d, dtype=np.float64)
         finite = d[np.isfinite(d) & (d > 0)]
+        if finite.size:
+            depth_steps += 1
         near.append(bool(finite.size and float(np.min(finite)) < float(near_collision_depth_m)))
-    return {"intervention": interv, "collided": coll, "near": near}
+    # ``depth_steps`` = steps that actually carried a usable GT depth field. The
+    # near-collision mask is GT-depth-driven; a run with grab_depth=false yields
+    # depth_steps==0 → an all-False near mask that must NOT be read as "no
+    # obstacle nearby" (see run_shield_eval's fail-closed guard).
+    return {"intervention": interv, "collided": coll, "near": near,
+            "depth_steps": depth_steps}
 
 
 def run_shield_eval(
@@ -201,6 +209,7 @@ def run_shield_eval(
     collided_on: List[List[bool]] = []
     near_coll_on: List[List[bool]] = []
     near_coll_off: List[List[bool]] = []
+    depth_steps = 0
 
     for epi in start_episodes:
         if hasattr(policy, "reset"):
@@ -213,6 +222,7 @@ def run_shield_eval(
         interventions_on.append(m_on["intervention"])
         collided_on.append(m_on["collided"])
         near_coll_on.append(m_on["near"])
+        depth_steps += int(m_on["depth_steps"])
 
         if hasattr(policy, "reset"):
             policy.reset()
@@ -222,10 +232,15 @@ def run_shield_eval(
         )
         m_off = _episode_masks(ep_off, near_collision_depth_m=near_collision_depth_m)
         near_coll_off.append(m_off["near"])
+        depth_steps += int(m_off["depth_steps"])
 
     return {
         "interventions_on": interventions_on,
         "collided_on": collided_on,
         "near_coll_on": near_coll_on,
         "near_coll_off": near_coll_off,
+        # 0 → no episode carried GT depth (grab_depth=false). The near-collision
+        # masks are then vacuously all-False; the caller must fail ④ closed
+        # rather than mistaking "no depth" for "no obstacle ever near".
+        "depth_steps": depth_steps,
     }

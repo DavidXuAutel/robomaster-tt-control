@@ -177,6 +177,34 @@ def test_episode_masks_collided_reads_post_step_obs():
     assert s4["intervention_before_contact_frac"] == 1.0, s4
 
 
+class _NoDepthEnv(_WallEnv):
+    """Wall kinematics but obs never carries depth (grab_depth=false case)."""
+
+    def _observe(self) -> Observation:
+        collided = bool(self._pos[0] >= self._wall_x)
+        state = np.array([self._pos[0], self._pos[1], self._pos[2], 0, 0, 0, 0],
+                         dtype=np.float32)
+        return Observation(rgb=np.zeros((self._size, self._size, 3), dtype=np.uint8),
+                           state=state, depth=None, collided=collided, info={})
+
+
+def test_shield_eval_reports_zero_depth_steps_without_depth():
+    """④'s near-collision mask is GT-depth-driven. When the env yields no depth
+    (grab_depth=false), run_shield_eval must report depth_steps==0 so the gate
+    can fail ④ closed instead of reading the all-False near mask as 'safe'."""
+    env = _NoDepthEnv(wall_x=10.0, step_hz=5.0)
+    starts = rollout.make_start_episodes(4, seed=0)
+    policy = HeuristicPolicy(goal_getter=lambda: env.goal)
+    predictor = _PessimisticGTDepthPredictor(margin=1.6)
+    masks = rollout.run_shield_eval(
+        env, policy, predictor, starts, near_collision_depth_m=1.5, max_steps=20,
+    )
+    assert masks["depth_steps"] == 0, masks["depth_steps"]
+    # every near mask entry is False (no depth to threshold)
+    assert not any(any(e) for e in masks["near_coll_on"])
+    assert not any(any(e) for e in masks["near_coll_off"])
+
+
 def test_signal4_degenerate_on_obstacle_free_mock():
     """Mock has no obstacles (depth ramp min ≈ 1.0 always < 1.5) → ④ must NOT
     spuriously pass: on/off near-rates are ~equal so the ratio fails."""
