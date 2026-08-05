@@ -678,9 +678,13 @@ def _run_signal3_diagnose(
             "support) → corpus geometry lacks enough approach windows, or the proxy needs "
             "another dated §4.1 revision. Do NOT retrain the depth head yet."
         )
-    elif np.isfinite(dhat_fwd_med) and (
-        dhat_fwd_n < int(thr.min_scale_windows) or dhat_fwd_med > thr.scale_rel_err_max
-    ):
+    elif (not np.isfinite(dhat_fwd_med)) or dhat_fwd_n < int(thr.min_scale_windows):
+        lines.append(
+            f"  GT passes but D̂ has no approach-support windows (n={dhat_fwd_n}) — "
+            "predicted ŝ_D is dead on GT-selected approach geometry. Retrain with a "
+            "stronger temporal / Δ-depth term (and/or approach-biased sampling)."
+        )
+    elif dhat_fwd_med > thr.scale_rel_err_max:
         lines.append(
             "  GT passes but D̂ fails on approach-support windows → model under-standardizes "
             "scale change. Retrain the depth head with a temporal / Δ-depth consistency term "
