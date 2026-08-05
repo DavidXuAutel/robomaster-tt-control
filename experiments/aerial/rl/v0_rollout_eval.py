@@ -155,12 +155,19 @@ def _episode_masks(
     ``intervention`` comes from the stored transition info; ``collided`` and the
     GT-depth near-collision flag come from the (supervision-only) full obs — GT
     depth never entered the policy graph, it is read here only to score.
+
+    ``collided`` is a *post-step* event: the vehicle contacts an obstacle as a
+    result of the action, so it only ever appears on ``next_obs`` (and, because
+    the collector breaks the episode on ``done``, only on the terminal step).
+    Reading the pre-step ``tr.obs`` here would make ``collided`` all-False for
+    every episode and silently vacuous the ④ intervention-before-contact check.
     """
     interv, coll, near = [], [], []
     for tr in ep:
         interv.append(bool(tr.info.get("intervention", False)))
+        post = tr.next_obs if tr.next_obs is not None else tr.obs
+        coll.append(bool(getattr(post, "collided", False)))
         obs = tr.obs
-        coll.append(bool(getattr(obs, "collided", False)))
         d = getattr(obs, "depth", None)
         if d is None:
             near.append(False)

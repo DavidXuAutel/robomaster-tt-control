@@ -138,6 +138,45 @@ def test_signal4_shield_reduces_near_collision_on_wall():
     assert s4["near_coll_rate_on"] < s4["near_coll_rate_off"]
 
 
+def test_episode_masks_collided_reads_post_step_obs():
+    """④ ``collided`` is a post-step event: it lands on ``next_obs`` of the
+    terminal transition, never on any ``obs``. Reading pre-step ``tr.obs`` (the
+    old bug) made the mask all-False and vacuously passed intervention-before-
+    contact. The mask must be True exactly on the terminal step."""
+    from experiments.aerial.rl.buffer import Transition
+
+    def _obs(collided: bool) -> Observation:
+        return Observation(
+            rgb=np.zeros((2, 2, 3), dtype=np.uint8),
+            state=np.zeros(7, dtype=np.float32),
+            depth=np.full((2, 2), 5.0, dtype=np.float32),
+            collided=collided,
+            info={},
+        )
+
+    # 3 steps; contact happens on the last step (only next_obs carries it).
+    ep = [
+        Transition(obs=_obs(False), action=np.zeros(3), reward=0.0, done=False,
+                   next_obs=_obs(False), info={"intervention": True}),
+        Transition(obs=_obs(False), action=np.zeros(3), reward=0.0, done=False,
+                   next_obs=_obs(False), info={"intervention": True}),
+        Transition(obs=_obs(False), action=np.zeros(3), reward=0.0, done=True,
+                   next_obs=_obs(True), info={"intervention": False}),
+    ]
+    masks = rollout._episode_masks(ep, near_collision_depth_m=1.5)
+    assert masks["collided"] == [False, False, True], masks["collided"]
+    # With a real contact on step 2 and interventions on steps 0-1, the ④
+    # intervention-before-contact sub-metric is now exercised (not vacuous).
+    s4 = metrics.check_shield_effectiveness(
+        interventions_on=[masks["intervention"]],
+        collided_on=[masks["collided"]],
+        near_coll_on=[masks["near"]],
+        near_coll_off=[masks["near"]],
+    )
+    assert s4["n_contact_episodes"] == 1, s4
+    assert s4["intervention_before_contact_frac"] == 1.0, s4
+
+
 def test_signal4_degenerate_on_obstacle_free_mock():
     """Mock has no obstacles (depth ramp min ≈ 1.0 always < 1.5) → ④ must NOT
     spuriously pass: on/off near-rates are ~equal so the ratio fails."""
