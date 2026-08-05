@@ -54,6 +54,10 @@ def _load_depth_cfg(config_path: Path) -> Dict[str, Any]:
     dh.setdefault("max_depth_m", 200.0)
     dh.setdefault("scale_depth_min_m", 1.0)
     dh.setdefault("scale_depth_max_m", 40.0)
+    # Decoder-only / freeze-encoder Δ-finetune: keep AbsRel-good encoder features
+    # fixed; train decoder (depth head) only so scale can move without AbsRel
+    # regression. CLI --freeze-encoder overrides; yaml default stays false.
+    dh.setdefault("freeze_encoder", False)
     dh.setdefault("image_size", int((cfg.get("env") or {}).get("width", 224)))
     dh.setdefault(
         "checkpoint_dir",
@@ -61,6 +65,24 @@ def _load_depth_cfg(config_path: Path) -> Dict[str, Any]:
     )
     dh.setdefault("enable", False)
     return dh
+
+
+def _apply_freeze_encoder(model: _DepthHead, freeze: bool) -> list:
+    """Freeze ``model.encoder`` and return the AdamW param list.
+
+    When ``freeze`` is True, encoder ``requires_grad=False`` and only
+    ``model.decoder`` params are returned (structurally blocks encoder AbsRel
+    drift). When False, all parameters remain trainable and are returned.
+    """
+    if not freeze:
+        for p in model.parameters():
+            p.requires_grad = True
+        return list(model.parameters())
+    for p in model.encoder.parameters():
+        p.requires_grad = False
+    for p in model.decoder.parameters():
+        p.requires_grad = True
+    return [p for p in model.decoder.parameters() if p.requires_grad]
 
 
 def _refuse_bad_corpus(root: Path, allow: bool) -> None:
@@ -277,6 +299,18 @@ def main(argv: Optional[List[str]] = None) -> int:
              "in the target dir. Off by default so a finetune run cannot silently "
              "replace the canonical AbsRel-PASS checkpoint.",
     )
+    p.add_argument(
+        "--freeze-encoder",
+        action="store_true",
+        default=None,
+        help="Freeze encoder; AdamW only on decoder (depth head). Preserves "
+             "AbsRel-good features while Δ-finetuning scale. Overrides yaml.",
+    )
+    p.add_argument(
+        "--no-freeze-encoder",
+        action="store_true",
+        help="Force full-model finetune even if yaml freeze_encoder=true.",
+    )
     args = p.parse_args(argv)
 
     root = args.dataset
@@ -290,6 +324,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[depth-train] NOTE: --lr {args.lr} overrides yaml lr={dh_cfg.get('lr')}",
               file=sys.stderr)
         dh_cfg["lr"] = float(args.lr)
+    if args.no_freeze_encoder:
+        dh_cfg["freeze_encoder"] = False
+    elif args.freeze_encoder:
+        dh_cfg["freeze_encoder"] = True
     # The Δ term needs window STRICTLY > n_frames to have a non-degenerate Δ
     # interval. A finetune whose whole purpose is ③/Δ must not silently run for
     # hours with the term disabled — fail fast at setup instead.
@@ -348,7 +386,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         prior = blob.get("holdout_absrel") if isinstance(blob, dict) else None
         print(f"[depth-train] init from {ckpt_path} (prior_holdout={prior})")
-    opt = torch.optim.AdamW(model.parameters(), lr=float(dh_cfg["lr"]), betas=(0.9, 0.95))
+    freeze_enc = bool(dh_cfg.get("freeze_encoder", False))
+    trainable = _apply_freeze_encoder(model, freeze_enc)
+    if not trainable:
+        print("[depth-train] FAIL: no trainable params after freeze_encoder",
+              file=sys.stderr)
+        return 1
+    n_enc = sum(p.numel() for p in model.encoder.parameters())
+    n_train = sum(p.numel() for p in trainable)
+    n_all = sum(p.numel() for p in model.parameters())
+    print(
+        f"[depth-train] freeze_encoder={freeze_enc}: "
+        f"trainable={n_train}/{n_all} params "
+        f"(encoder={n_enc} frozen={freeze_enc})"
+    )
+    opt = torch.optim.AdamW(trainable, lr=float(dh_cfg["lr"]), betas=(0.9, 0.95))
     grad_clip = float(dh_cfg["grad_clip"])
 
     ckpt_dir = Path(str(args.checkpoint_dir or dh_cfg["checkpoint_dir"]))
@@ -360,7 +412,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Give finetune runs a distinct '_ft' stem and refuse to clobber anything
     # pre-existing unless --overwrite is explicit; point re-runs at a fresh
     # --checkpoint-dir instead.
-    stem = f"depth_step_{args.steps}" + ("_ft" if args.init_ckpt else "")
+    stem = f"depth_step_{args.steps}"
+    if args.init_ckpt:
+        stem += "_ft"
+    if freeze_enc:
+        stem += "_head"  # decoder-only / freeze-encoder run
     save_path = ckpt_dir / f"{stem}.pt"
     if args.save_ckpt:
         if args.init_ckpt is not None and save_path.resolve() == Path(args.init_ckpt).resolve():
@@ -384,6 +440,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"[depth-train] recipe: lr={dh_cfg['lr']} delta_weight={dh_cfg['delta_weight']} "
         f"delta_min_gt_m={dh_cfg.get('delta_min_gt_m')} "
         f"approach_oversample={dh_cfg.get('approach_oversample')} "
+        f"freeze_encoder={freeze_enc} "
         f"ckpt_dir={ckpt_dir}"
     )
 
@@ -449,7 +506,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             stats = {**stats, "delta_rel": float("nan"), "n_delta": 0}
         opt.zero_grad(set_to_none=True)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        torch.nn.utils.clip_grad_norm_(trainable, grad_clip)
         opt.step()
 
         losses.append(float(stats["loss"]))
@@ -492,6 +549,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "holdout_absrel": holdout,
                 "depth_cfg": dh_cfg,
                 "init_ckpt": str(args.init_ckpt) if args.init_ckpt else None,
+                "freeze_encoder": freeze_enc,
             },
             path,
         )

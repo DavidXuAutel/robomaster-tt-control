@@ -104,6 +104,9 @@ world_model:
     max_depth_m: 200.0       # outdoor AirSim: exclude sky/far-plane from AbsRel
     scale_depth_min_m: 1.0   # ③ navigational band (must match V0GateThresholds)
     scale_depth_max_m: 40.0
+    # Decoder-only Δ-finetune (CLI --freeze-encoder). Keep false in yaml until a
+    # head-only run is intentional; enable via CLI for AbsRel-preserving FT.
+    freeze_encoder: false
     checkpoint_dir: experiments/aerial/rl/artifacts/depth_ckpt
 
 imagination:

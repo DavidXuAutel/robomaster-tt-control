@@ -17,7 +17,10 @@ from experiments.aerial.rl.dynamics_torch import (
     depth_head_loss,
 )
 from experiments.aerial.rl.env.obs import Observation
-from experiments.aerial.rl.train_depth_head import _sample_approach_biased_windows
+from experiments.aerial.rl.train_depth_head import (
+    _apply_freeze_encoder,
+    _sample_approach_biased_windows,
+)
 
 
 def test_depth_head_forward_shapes():
@@ -157,3 +160,38 @@ def test_approach_sampler_scores_loss_interval_not_window_start():
     assert len(picked) == 1
     # Identify by first-frame depth: A starts at 30, B at 20.
     assert float(picked[0][0].obs.depth.mean()) == pytest.approx(20.0)
+
+
+def test_freeze_encoder_no_grad_and_optimizer_excludes_encoder():
+    """Decoder-only FT: encoder requires_grad=False and absent from AdamW."""
+    model = _DepthHead(image_size=16, n_frames=2, base=8)
+    trainable = _apply_freeze_encoder(model, freeze=True)
+    assert trainable, "decoder must still expose trainable params"
+    for p in model.encoder.parameters():
+        assert p.requires_grad is False
+    for p in model.decoder.parameters():
+        assert p.requires_grad is True
+    train_ids = {id(p) for p in trainable}
+    for p in model.encoder.parameters():
+        assert id(p) not in train_ids
+    for p in model.decoder.parameters():
+        assert id(p) in train_ids
+    opt = torch.optim.AdamW(trainable, lr=1e-4)
+    opt_ids = {id(p) for g in opt.param_groups for p in g["params"]}
+    assert opt_ids == train_ids
+    # Gradients must not accumulate on frozen encoder after a backward.
+    rgb = torch.rand(1, 2, 16, 16, 3)
+    pred, log_sigma = model.predict_from_window(rgb)
+    loss = pred.mean() + log_sigma.mean()
+    loss.backward()
+    for p in model.encoder.parameters():
+        assert p.grad is None
+    assert any(p.grad is not None for p in model.decoder.parameters())
+
+
+def test_unfreeze_encoder_restores_full_trainable_set():
+    model = _DepthHead(image_size=16, n_frames=2, base=8)
+    _apply_freeze_encoder(model, freeze=True)
+    trainable = _apply_freeze_encoder(model, freeze=False)
+    assert all(p.requires_grad for p in model.parameters())
+    assert {id(p) for p in trainable} == {id(p) for p in model.parameters()}
