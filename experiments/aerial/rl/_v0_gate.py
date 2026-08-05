@@ -955,7 +955,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[v0-gate] {'PASS' if verdict['ok'] else 'FAIL'}")
         return 0 if verdict["ok"] else 1
 
-    all_ok = bool(signals) and all(bool(v.get("ok")) for v in signals.values())
+    # Strict ``is True`` (never bool(v.get("ok"))): a partial deserialized with
+    # ok="false" must not coerce to a pass. Mirrors aggregate_v0_verdict.
+    all_ok = bool(signals) and all(v.get("ok") is True for v in signals.values())
     partial = {
         "partial": True,
         "requested": sorted(req),

@@ -246,6 +246,20 @@ def test_merge_missing_signal_is_not_a_pass(tmp_path):
     assert not verdict["ok"], verdict  # ②/④ absent → cannot pass
 
 
+def test_aggregate_rejects_non_bool_ok():
+    """``bool("false")`` is True. aggregate_v0_verdict must not coerce a
+    string/int 'ok' into a pass — a partial round-tripped through a hand-edited
+    JSON with ok="false" would otherwise flip a failing signal green."""
+    all_true = {k: {"ok": True} for k in ("1", "2", "3", "4")}
+    assert metrics.aggregate_v0_verdict(all_true)["ok"] is True
+
+    with_string = dict(all_true)
+    with_string["3"] = {"ok": "false"}  # truthy string
+    v = metrics.aggregate_v0_verdict(with_string)
+    assert v["ok"] is False, v
+    assert "non-bool" in v["reason"], v
+
+
 def test_parse_signals_subset_and_default():
     from experiments.aerial.rl import _v0_gate as gate
 

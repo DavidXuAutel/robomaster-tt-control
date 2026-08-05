@@ -283,7 +283,16 @@ def aggregate_v0_verdict(
     missing = [k for k in keys if k not in results]
     if missing:
         return {"ok": False, "passed": {}, "reason": f"missing signals {missing}"}
-    passed = {k: bool(results[k].get("ok")) for k in keys}
+    # ``ok`` must be a genuine bool. A signal dict deserialized from JSON could
+    # carry ok="false" or ok=1; ``bool("false")`` is True, which would flip a
+    # failing signal to a pass. Require ``is True`` — anything else (string,
+    # int, None, missing) is a non-pass, and a non-bool is a hard, reasoned fail.
+    bad_type = [k for k in keys if not isinstance(results[k].get("ok"), bool)]
+    if bad_type:
+        return {"ok": False, "passed": {}, "details": dict(results),
+                "reason": f"signals {bad_type} have a non-bool 'ok' "
+                          "(refusing to coerce a truthy value into a pass)"}
+    passed = {k: results[k].get("ok") is True for k in keys}
     return {
         "ok": all(passed.values()),
         "passed": passed,
