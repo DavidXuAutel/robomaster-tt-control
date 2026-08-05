@@ -19,7 +19,9 @@ from experiments.aerial.rl.dynamics_torch import (
 from experiments.aerial.rl.env.obs import Observation
 from experiments.aerial.rl.train_depth_head import (
     _apply_freeze_encoder,
+    _load_depth_cfg,
     _sample_approach_biased_windows,
+    main as train_depth_main,
 )
 
 
@@ -195,3 +197,48 @@ def test_unfreeze_encoder_restores_full_trainable_set():
     trainable = _apply_freeze_encoder(model, freeze=False)
     assert all(p.requires_grad for p in model.parameters())
     assert {id(p) for p in trainable} == {id(p) for p in model.parameters()}
+
+
+def test_depth_cfg_defaults_to_effective_grad_clip(tmp_path):
+    config = tmp_path / "minimal.yaml"
+    config.write_text("world_model:\n  depth_head: {}\n")
+    assert _load_depth_cfg(config)["grad_clip"] == pytest.approx(5.0)
+
+
+def test_approach_oversample_cli_wins_over_yaml(monkeypatch, tmp_path):
+    cfg = {
+        "n_frames": 4,
+        "delta_weight": 0.0,
+        "approach_oversample": 4,
+        "enable": False,
+    }
+    monkeypatch.setattr(
+        "experiments.aerial.rl.train_depth_head._refuse_bad_corpus",
+        lambda root, allow: None,
+    )
+    monkeypatch.setattr(
+        "experiments.aerial.rl.train_depth_head._load_depth_cfg",
+        lambda path: cfg,
+    )
+
+    def stop_after_overrides(root, window):
+        assert cfg["approach_oversample"] == 1
+        raise RuntimeError("override observed")
+
+    monkeypatch.setattr(
+        "experiments.aerial.rl.train_depth_head._usable_episodes",
+        stop_after_overrides,
+    )
+    with pytest.raises(RuntimeError, match="override observed"):
+        train_depth_main(
+            [
+                "--dataset",
+                str(tmp_path),
+                "--device",
+                "cpu",
+                "--approach-oversample",
+                "1",
+                "--eval-every",
+                "50",
+            ]
+        )

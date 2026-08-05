@@ -92,7 +92,7 @@ world_model:
     n_frames: 4
     base: 32
     lr: 1.0e-4
-    grad_clip: 1000.0
+    grad_clip: 5.0           # real clipping; protects AbsRel from outlier batches
     absrel_weight: 1.0
     nll_weight: 0.1
     # Δ-depth for V0 ③: keep << AbsRel (1.0 from-scratch → AbsRel 0.98/0.70 FAIL).

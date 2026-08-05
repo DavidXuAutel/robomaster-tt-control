@@ -42,7 +42,7 @@ def _load_depth_cfg(config_path: Path) -> Dict[str, Any]:
     dh.setdefault("n_frames", 4)
     dh.setdefault("base", 32)
     dh.setdefault("lr", 1.0e-4)
-    dh.setdefault("grad_clip", 1000.0)
+    dh.setdefault("grad_clip", 5.0)
     dh.setdefault("absrel_weight", 1.0)
     dh.setdefault("nll_weight", 0.1)
     # Keep delta << AbsRel/SILog: delta_weight=1.0 from-scratch collapsed AbsRel
@@ -266,6 +266,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--save-ckpt", action="store_true")
     p.add_argument("--allow-v0-desync", action="store_true")
     p.add_argument("--log-every", type=int, default=50)
+    p.add_argument(
+        "--eval-every",
+        type=int,
+        default=0,
+        help="Compute and log holdout_absrel every N train steps (0 disables). "
+             "Uses the same deterministic _holdout_absrel scorer as gate ①d.",
+    )
     p.add_argument("--holdout-frac", type=float, default=0.2, help="episode fraction reserved for ①d AbsRel")
     p.add_argument("--split-seed", type=int, default=0)
     p.add_argument(
@@ -293,6 +300,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Override yaml delta_weight for this run",
     )
     p.add_argument(
+        "--approach-oversample",
+        type=int,
+        default=None,
+        help="Override yaml approach_oversample. OS>1 ranks batch candidates by "
+             "GT |Δ band-mean| (approach bias) for the Δ term, but the SAME biased "
+             "batch also feeds the AbsRel/SILog loss — set OS=1 to train AbsRel on "
+             "the natural (un-oversampled) distribution.",
+    )
+    p.add_argument(
         "--overwrite",
         action="store_true",
         help="Permit overwriting an existing ckpt / clobbering depth_train.jsonl "
@@ -312,6 +328,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Force full-model finetune even if yaml freeze_encoder=true.",
     )
     args = p.parse_args(argv)
+    if args.eval_every < 0:
+        p.error("--eval-every must be >= 0")
+    if args.approach_oversample is not None and args.approach_oversample < 1:
+        p.error("--approach-oversample must be >= 1")
 
     root = args.dataset
     _refuse_bad_corpus(root, args.allow_v0_desync)
@@ -320,6 +340,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[depth-train] NOTE: --delta-weight {args.delta_weight} overrides "
               f"yaml delta_weight={dh_cfg.get('delta_weight')}", file=sys.stderr)
         dh_cfg["delta_weight"] = float(args.delta_weight)
+    if args.approach_oversample is not None:
+        print(f"[depth-train] NOTE: --approach-oversample {args.approach_oversample} "
+              f"overrides yaml approach_oversample={dh_cfg.get('approach_oversample')}",
+              file=sys.stderr)
+        dh_cfg["approach_oversample"] = int(args.approach_oversample)
     if args.lr is not None:
         print(f"[depth-train] NOTE: --lr {args.lr} overrides yaml lr={dh_cfg.get('lr')}",
               file=sys.stderr)
@@ -438,6 +463,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         log_path.unlink()
     print(
         f"[depth-train] recipe: lr={dh_cfg['lr']} delta_weight={dh_cfg['delta_weight']} "
+        f"grad_clip={grad_clip} "
         f"delta_min_gt_m={dh_cfg.get('delta_min_gt_m')} "
         f"approach_oversample={dh_cfg.get('approach_oversample')} "
         f"freeze_encoder={freeze_enc} "
@@ -446,6 +472,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     absrels: List[float] = []
     losses: List[float] = []
+    last_holdout: Optional[float] = None
     model.train()
     for step in range(1, int(args.steps) + 1):
         windows = _sample_approach_biased_windows(
@@ -510,22 +537,49 @@ def main(argv: Optional[List[str]] = None) -> int:
         opt.step()
 
         losses.append(float(stats["loss"]))
-        absrels.append(float(stats["absrel"]))
-        row = {"step": step, **stats}
+        train_batch_absrel = float(stats.pop("absrel"))
+        absrels.append(train_batch_absrel)
+        row = {"step": step, **stats, "train_batch_absrel": train_batch_absrel}
+        if int(args.eval_every) > 0 and step % int(args.eval_every) == 0:
+            last_holdout = _holdout_absrel(
+                model,
+                holdout_eps,
+                wm_batch=int(args.wm_batch),
+                window=int(args.window),
+                device=device,
+                max_depth_m=float(dh_cfg["max_depth_m"]),
+            )
+            row["holdout_absrel"] = last_holdout
+            print(
+                f"[depth-train] step {step}/{args.steps} "
+                f"holdout_absrel={last_holdout:.4f} (gate ①d ≤ "
+                f"{DEFAULT_THRESHOLDS.depth_absrel_max})"
+            )
+            model.train()
         with log_path.open("a") as f:
             f.write(json.dumps(row) + "\n")
         if step % int(args.log_every) == 0 or step == 1:
             print(
                 f"[depth-train] step {step}/{args.steps} "
-                f"loss={stats['loss']:.4f} absrel={stats['absrel']:.4f} "
+                f"loss={stats['loss']:.4f} "
+                f"train_batch_absrel={train_batch_absrel:.4f} "
                 f"delta_rel={stats.get('delta_rel', float('nan'))} "
                 f"n_delta={stats.get('n_delta', 0)} "
                 f"n_valid={stats['n_valid']}"
             )
 
-    holdout = _holdout_absrel(
-        model, holdout_eps, wm_batch=int(args.wm_batch), window=int(args.window),
-        device=device, max_depth_m=float(dh_cfg["max_depth_m"]),
+    final_step_was_evaluated = (
+        int(args.eval_every) > 0
+        and int(args.steps) > 0
+        and int(args.steps) % int(args.eval_every) == 0
+    )
+    holdout = last_holdout if final_step_was_evaluated else _holdout_absrel(
+        model,
+        holdout_eps,
+        wm_batch=int(args.wm_batch),
+        window=int(args.window),
+        device=device,
+        max_depth_m=float(dh_cfg["max_depth_m"]),
     )
     thr = DEFAULT_THRESHOLDS.depth_absrel_max
     print(f"[depth-train] holdout median AbsRel={holdout:.4f} (gate ①d ≤ {thr})")
