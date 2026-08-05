@@ -341,31 +341,31 @@ def depth_head_loss(
     }
 
 
-def _band_spatial_median(
+def _band_spatial_mean(
     depth: torch.Tensor,
     *,
     min_depth_m: float,
     max_depth_m: float,
 ) -> torch.Tensor:
-    """Per-batch median over H×W inside the navigational band → ``[B]``."""
-    # depth: [B, H, W]
+    """Differentiable per-batch mean over H×W inside the navigational band → ``[B]``.
+
+    Median is used at gate time; mean is the training surrogate (nanmedian has
+    fragile / non-smooth grads that collapsed AbsRel in the 2026-08-05 delta
+    retrain). Empty-band rows return NaN so the caller can mask them out.
+    """
     flat = depth.reshape(depth.shape[0], -1)
     lo, hi = float(min_depth_m), float(max_depth_m)
     valid = torch.isfinite(flat) & (flat >= lo) & (flat <= hi)
-    # Replace invalid with +inf so nanmedian-equivalent via masked fill + median
-    # on a sentinel; if a row is empty, return NaN for that batch element.
-    filled = flat.clone()
-    filled = torch.where(valid, filled, torch.full_like(filled, float("nan")))
-    # torch.nanmedian exists on recent torch; fall back to masked median.
-    try:
-        med = torch.nanmedian(filled, dim=-1).values
-    except (AttributeError, RuntimeError):
-        med = []
-        for b in range(flat.shape[0]):
-            v = flat[b][valid[b]]
-            med.append(v.median() if v.numel() else flat.new_tensor(float("nan")))
-        med = torch.stack(med)
-    return med
+    counts = valid.sum(dim=-1).clamp_min(0)
+    # Zero invalid contributions; divide only where count > 0.
+    masked = torch.where(valid, flat, torch.zeros_like(flat))
+    sums = masked.sum(dim=-1)
+    means = torch.where(
+        counts > 0,
+        sums / counts.clamp_min(1).to(dtype=flat.dtype),
+        torch.full_like(sums, float("nan")),
+    )
+    return means
 
 
 def depth_delta_scale_loss(
@@ -378,17 +378,17 @@ def depth_delta_scale_loss(
     max_depth_m: float = 40.0,
     eps: float = 1e-3,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
-    """Temporal / Δ-depth consistency for V0 ③ (ŝ_D = |Δ band-median|).
+    """Temporal / Δ-depth consistency for V0 ③ (ŝ_D ≈ |Δ band-mean| in train).
 
-    Supervises the predicted navigational-band median change against the GT
+    Supervises the predicted navigational-band depth change against the GT
     change (same band as frozen §4.1 ③c). Single-frame AbsRel alone does not
     teach metric scale-change — this term does. Relative form
     ``|ŝ_pred − ŝ_gt| / max(ŝ_gt, ε)`` matches the gate's relative-error spirit.
     """
-    p0 = _band_spatial_median(pred_first, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
-    p1 = _band_spatial_median(pred_last, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
-    g0 = _band_spatial_median(gt_first, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
-    g1 = _band_spatial_median(gt_last, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
+    p0 = _band_spatial_mean(pred_first, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
+    p1 = _band_spatial_mean(pred_last, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
+    g0 = _band_spatial_mean(gt_first, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
+    g1 = _band_spatial_mean(gt_last, min_depth_m=min_depth_m, max_depth_m=max_depth_m)
     s_pred = torch.abs(p1 - p0)
     s_gt = torch.abs(g1 - g0)
     ok = torch.isfinite(s_pred) & torch.isfinite(s_gt) & (s_gt >= float(eps))
