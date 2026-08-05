@@ -781,6 +781,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--split-seed", type=int, default=0,
                    help="①d holdout split seed (must match train_depth_head)")
     p.add_argument("--allow-incomplete", action="store_true")
+    p.add_argument("--allow-mock-rollout", action="store_true",
+                   help="permit ②/④ on a non-airsim (mock/analytic) env — dev only; "
+                        "the resulting ②/④ are NON-authoritative and must not gate flag flips")
     p.add_argument("--self-check", action="store_true")
     p.add_argument("--signal3-diagnose", action="store_true",
                    help="read-only: D̂-vs-GT ③ rel on all-motion vs forward-only windows (never affects verdict)")
@@ -894,14 +897,34 @@ def main(argv: Optional[List[str]] = None) -> int:
         signals["3"] = _signal3(pred_depth, vel, timestamps, thr)
 
     if need_rollout and ({"2", "4"} & req):
-        s2, s4 = _signals_2_4_from_rollouts(
-            Path(args.config), thr_eff,
-            depth_ckpt=Path(args.depth_ckpt) if args.depth_ckpt else None,
-            device=args.device,
-            n_episodes=thr_eff.n_eval_episodes,
-            max_steps=int(args.max_steps),
-            seed=int(args.seed),
-        )
+        import yaml as _yaml
+
+        env_cfg = (_yaml.safe_load(Path(args.config).read_text()) or {}).get("env", {}) or {}
+        backend = str(env_cfg.get("backend", "mock")).lower()
+        if backend != "airsim" and not args.allow_mock_rollout:
+            # Fail-CLOSED: a mock/analytic env cannot authoritatively pass ②/④.
+            # The goal-seeking baseline trivially out-progresses random on an
+            # analytic env, and there are no real obstacles to exercise the
+            # shield — scoring ②/④ here reproduces the class of false pass that
+            # invalidated the single-pillar checkpoint. The real pass runs on
+            # the 4090 renderer (env.backend=airsim). --allow-mock-rollout
+            # yields NON-authoritative numbers for a dev smoke only.
+            reason = (
+                f"②/④ require env.backend='airsim' (got '{backend}'); a mock/analytic "
+                "env cannot authoritatively pass them. Run on the 4090 renderer, or "
+                "pass --allow-mock-rollout for a non-authoritative dev check."
+            )
+            s2 = {"ok": False, "reason": reason, "backend": backend}
+            s4 = {"ok": False, "reason": reason, "backend": backend}
+        else:
+            s2, s4 = _signals_2_4_from_rollouts(
+                Path(args.config), thr_eff,
+                depth_ckpt=Path(args.depth_ckpt) if args.depth_ckpt else None,
+                device=args.device,
+                n_episodes=thr_eff.n_eval_episodes,
+                max_steps=int(args.max_steps),
+                seed=int(args.seed),
+            )
         if "2" in req:
             signals["2"] = s2
         if "4" in req:

@@ -262,6 +262,26 @@ def test_merge_cli_exits_nonzero_when_incomplete(tmp_path):
     assert gate.main(["--merge", str(p)]) == 1
 
 
+def test_rollout_signals_fail_closed_on_non_airsim_backend(tmp_path):
+    """②/④ must not be scored authoritatively on a mock/analytic env: the
+    goal-seeker trivially beats random and there are no real obstacles, which is
+    the false-pass class that invalidated the single-pillar checkpoint. Default
+    config ships backend:mock → ②/④ come back FAIL with an 'airsim' reason and
+    the CLI exits non-zero, without ever building the env."""
+    from experiments.aerial.rl import _v0_gate as gate
+
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("env:\n  backend: mock\n")
+    out = tmp_path / "part2.json"
+    rc = gate.main(["--signals", "2", "--config", str(cfg), "--emit", str(out)])
+    assert rc == 1
+    blob = json.loads(out.read_text())
+    s2 = blob["signals"]["2"]
+    assert s2["ok"] is False
+    assert "airsim" in s2["reason"]
+    assert s2["backend"] == "mock"
+
+
 # --------------------------------------------------------------------------- #
 # ③ diagnostic: forward-motion window selection (pure math)                     #
 # --------------------------------------------------------------------------- #
