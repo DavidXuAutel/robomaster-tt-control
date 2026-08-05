@@ -269,6 +269,81 @@ def test_base_cli_wins_over_yaml(monkeypatch, tmp_path):
         )
 
 
+def test_init_ckpt_base32_refuses_base64(tmp_path, monkeypatch, capsys):
+    """Strict load must FAIL clearly — never silently partial-load base-32 → 64."""
+    narrow = _DepthHead(image_size=16, n_frames=2, base=32)
+    ckpt = tmp_path / "depth_step_1.pt"
+    torch.save(
+        {
+            "model": narrow.state_dict(),
+            "n_frames": 2,
+            "image_size": 16,
+            "base": 32,
+        },
+        ckpt,
+    )
+    cfg = {
+        "n_frames": 2,
+        "base": 64,
+        "delta_weight": 0.0,
+        "approach_oversample": 1,
+        "enable": False,
+        "image_size": 16,
+        "lr": 1.0e-4,
+        "grad_clip": 5.0,
+        "absrel_weight": 1.0,
+        "nll_weight": 0.1,
+        "max_depth_m": 200.0,
+        "scale_depth_min_m": 1.0,
+        "scale_depth_max_m": 40.0,
+        "freeze_encoder": False,
+        "checkpoint_dir": str(tmp_path / "out"),
+    }
+    monkeypatch.setattr(
+        "experiments.aerial.rl.train_depth_head._refuse_bad_corpus",
+        lambda root, allow: None,
+    )
+    monkeypatch.setattr(
+        "experiments.aerial.rl.train_depth_head._load_depth_cfg",
+        lambda path: cfg,
+    )
+    monkeypatch.setattr(
+        "experiments.aerial.rl.train_depth_head._usable_episodes",
+        lambda root, window: [tmp_path / "ep0"],
+    )
+    monkeypatch.setattr(
+        "experiments.aerial.rl.train_depth_head._split_train_holdout",
+        lambda eps, holdout_frac, seed: (eps, eps),
+    )
+
+    class _FakeBuf:
+        def __len__(self):
+            return 1
+
+    monkeypatch.setattr(
+        "experiments.aerial.rl.train_depth_head._buffer_from",
+        lambda eps, tag, window: _FakeBuf(),
+    )
+    rc = train_depth_main(
+        [
+            "--dataset",
+            str(tmp_path),
+            "--device",
+            "cpu",
+            "--base",
+            "64",
+            "--init-ckpt",
+            str(ckpt),
+            "--steps",
+            "1",
+        ]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "arch mismatch" in err
+    assert "base=64" in err
+
+
 def test_approach_oversample_cli_wins_over_yaml(monkeypatch, tmp_path):
     cfg = {
         "n_frames": 4,

@@ -452,6 +452,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # pre-existing unless --overwrite is explicit; point re-runs at a fresh
     # --checkpoint-dir instead.
     stem = f"depth_step_{args.steps}"
+    # Capacity-lift / non-canonical width: keep base-32 canonical stem untouched
+    # (depth_step_N.pt) and park wider ckpts under an explicit _base{N} suffix.
+    base_w = int(dh_cfg["base"])
+    if base_w != 32:
+        stem += f"_base{base_w}"
     if args.init_ckpt:
         stem += "_ft"
     if freeze_enc:

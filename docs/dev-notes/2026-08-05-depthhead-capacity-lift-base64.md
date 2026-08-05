@@ -22,9 +22,14 @@ So teacher distill cannot run without a download. Fallback per task brief: **wid
 - Architecture already parameterized: `_DepthHead(..., base=)`.
 - Canonical AbsRel-PASS `depth_step_5000.pt` is **base=32** (~holdout AbsRel 0.281 on merge).
 - Capacity lift: CLI `--base 64` (yaml default stays **32** so init-ckpt from canonical still matches).
+- Wide ckpts save as `depth_step_*_base64.pt` (stem suffix when `base≠32`) — never overwrite base-32 canonical.
+- Loading base-32 weights into base-64 refuses with a clear `arch mismatch` FAIL (`strict=True`).
 - Train from scratch on `/tmp/dataset_v0_merged_local_approach` with clean recipe:
-  OS=1, `grad_clip=5`, `delta_weight=0` (no δ fiddling), `--eval-every`, CUDA≠0, artifacts under `/tmp`.
+  OS=1, `grad_clip=5`, `delta_weight=0` Stage A, lr≈1e-4, `--eval-every 100`,
+  `--split-seed 0 --holdout-frac 0.2 --window 8`, CUDA≠0, artifacts under `/tmp`.
+- Optional Stage B (δ=0.05 OS=1 low lr) only if Stage A AbsRel≤0.30.
+- Gate `--signals 1,3`; promote only AbsRel≤0.30 **and** D̂≤0.25; `enable` stays false.
 
 ## Promote rule (unchanged)
 
-Overwrite canonical only if AbsRel≤0.30 **and** D̂≤0.25. Else keep candidate under `/tmp` / dated artifact dir; `depth_head.enable` remains false.
+Overwrite canonical only if AbsRel≤0.30 **and** D̂≤0.25. Else keep candidate under `/tmp` / dated artifact dir; `depth_head.enable` remains false. Keep old base-32 canonical as archive.
