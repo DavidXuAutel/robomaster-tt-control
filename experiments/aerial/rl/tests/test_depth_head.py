@@ -26,11 +26,14 @@ from experiments.aerial.rl.train_depth_head import (
 )
 
 
-def test_motion_channels_widen_stem_and_carry_frame_differences():
+def test_motion_channels_use_a_separate_stem_and_carry_frame_differences():
     plain = _DepthHead(image_size=16, n_frames=3, base=8)
     moving = _DepthHead(image_size=16, n_frames=3, base=8, motion_channels=True)
+    # The RGB stem keeps its pretrained shape; the differences get their own.
     assert plain.encoder[0].in_channels == 3 * 3
-    assert moving.encoder[0].in_channels == 3 * 3 + 2 * 3
+    assert moving.encoder[0].in_channels == 3 * 3
+    assert moving.stem_motion.in_channels == 2 * 3
+    assert plain.stem_motion is None
 
     rgb = torch.randint(0, 256, (2, 3, 16, 16, 3), dtype=torch.uint8)
     packed = _DepthHead.pack_rgb_nhwc(rgb, 3, motion_channels=True)
@@ -72,7 +75,7 @@ def test_adapt_init_preserves_predictions_of_plain_checkpoint():
     )
     adapted, notes = _adapt_state_dict(plain.state_dict(), upgraded)
     upgraded.load_state_dict(adapted, strict=True)
-    assert any("in_ch 9→15" in n for n in notes)
+    assert any("stem_motion" in n for n in notes)
     assert any("scale_mlp" in n for n in notes)
 
     rgb = torch.randint(0, 256, (2, 3, 16, 16, 3), dtype=torch.uint8)
@@ -84,12 +87,32 @@ def test_adapt_init_preserves_predictions_of_plain_checkpoint():
     torch.testing.assert_close(before, after)
 
 
-def test_freeze_encoder_keeps_scale_mlp_trainable():
-    model = _DepthHead(image_size=16, n_frames=2, base=8, scale_factorized=True)
+def test_freeze_encoder_keeps_delta_scale_pathway_trainable():
+    model = _DepthHead(
+        image_size=16, n_frames=3, base=8, motion_channels=True, scale_factorized=True
+    )
     trainable = _apply_freeze_encoder(model, True)
     ids = {id(p) for p in trainable}
-    assert all(id(p) in ids for p in model.scale_mlp.parameters())
+    # stem_motion sits at the input but is head, not encoder: freezing it would
+    # make decoder-only Δ finetuning a no-op for ③.
+    assert all(id(p) in ids for p in model.new_pathway_parameters())
     assert not any(p.requires_grad for p in model.encoder.parameters())
+
+
+def test_new_pathway_starts_at_zero_and_is_separable_for_the_optimizer():
+    model = _DepthHead(
+        image_size=16, n_frames=3, base=8, motion_channels=True, scale_factorized=True
+    )
+    new = model.new_pathway_parameters()
+    assert new, "motion/scale nets must expose a Δ-scale pathway"
+    assert all(float(p.detach().abs().sum()) == 0.0 for p in model.stem_motion.parameters())
+    # Separate tensors, not a slice of a shared weight: Adam normalises per
+    # parameter, so only distinct tensors can carry a distinct lr.
+    trunk = [p for p in model.parameters() if not any(p is q for q in new)]
+    assert trunk and len(trunk) + len(new) == len(list(model.parameters()))
+
+    plain = _DepthHead(image_size=16, n_frames=3, base=8)
+    assert plain.new_pathway_parameters() == []
 
 
 def test_from_payload_rebuilds_architecture_flags():

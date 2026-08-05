@@ -246,8 +246,6 @@ class _DepthHead(nn.Module):
         self.motion_channels = bool(motion_channels)
         self.scale_factorized = bool(scale_factorized)
         in_ch = self.n_frames * 3
-        if self.motion_channels and self.n_frames > 1:
-            in_ch += (self.n_frames - 1) * 3
         chs = [base, base * 2, base * 4, base * 8]
         enc: list[nn.Module] = []
         c_in = in_ch
@@ -255,6 +253,23 @@ class _DepthHead(nn.Module):
             enc += [nn.Conv2d(c_in, c, 4, stride=2, padding=1), nn.SiLU()]
             c_in = c
         self.encoder = nn.Sequential(*enc)
+        self.stem_motion: Optional[nn.Module] = None
+        if self.motion_channels and self.n_frames > 1:
+            # A SEPARATE stem for the frame differences, summed with the RGB stem
+            # — arithmetically the same as one conv over concatenated input, but
+            # it keeps the pretrained RGB stem's shape untouched and makes the
+            # new pathway its own parameter tensor. That matters: Adam normalises
+            # per-parameter, so a gradient-scaling hook cannot give one slice of
+            # a shared weight its own step size. Only a separate tensor can go in
+            # its own optimizer group, and 2026-08-06 showed why that is needed —
+            # one uniform lr either leaves the new channels at their zero init
+            # (lr 1e-5) or destroys the pretrained ones (lr 1e-4 broke ①d by
+            # step 100).
+            self.stem_motion = nn.Conv2d(
+                (self.n_frames - 1) * 3, chs[0], 4, stride=2, padding=1
+            )
+            nn.init.zeros_(self.stem_motion.weight)
+            nn.init.zeros_(self.stem_motion.bias)
         # Mirror decoder: 4× upsample back to image_size.
         dec: list[nn.Module] = []
         for c in reversed(chs[:-1]):
@@ -330,8 +345,19 @@ class _DepthHead(nn.Module):
         return torch.cat([packed, diffs], dim=1)
 
     def forward(self, rgb_stack: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """``rgb_stack [B, n_frames*3, H, W]`` → ``(D̂, log_σ)`` each ``[B, H, W]``."""
-        h = self.encoder(rgb_stack)
+        """``rgb_stack [B, C, H, W]`` → ``(D̂, log_σ)`` each ``[B, H, W]``.
+
+        ``C = n_frames*3``, or ``n_frames*3 + (n_frames-1)*3`` when
+        ``motion_channels`` is on (the trailing block is the frame differences,
+        which go through their own stem).
+        """
+        if self.stem_motion is not None:
+            split = self.n_frames * 3
+            h = self.encoder[0](rgb_stack[:, :split])
+            h = h + self.stem_motion(rgb_stack[:, split:])
+            h = self.encoder[1:](h)
+        else:
+            h = self.encoder(rgb_stack)
         out = self.decoder(h)
         if out.shape[-2:] != (self.image_size, self.image_size):
             out = F.interpolate(
@@ -348,6 +374,20 @@ class _DepthHead(nn.Module):
             log_scale = self.scale_mlp(pooled).squeeze(-1).clamp(-2.0, 2.0)
             depth = depth * torch.exp(log_scale)[:, None, None]
         return depth, log_sigma
+
+    def new_pathway_parameters(self) -> list:
+        """Params that ``--adapt-init`` starts at zero: the Δ-scale pathway.
+
+        These need their own optimizer group. They begin with no contribution by
+        construction, so the lr that suits the pretrained weights leaves them
+        parked at zero, and the lr that moves them wrecks the pretrained ones.
+        """
+        params: list = []
+        if self.stem_motion is not None:
+            params += list(self.stem_motion.parameters())
+        if self.scale_factorized:
+            params += list(self.scale_mlp.parameters())
+        return params
 
     def predict_from_window(self, rgb_nhwc: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Convenience: window RGB → ``(D̂, log_σ)`` for the **last** frame."""

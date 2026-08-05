@@ -64,6 +64,7 @@ def _load_depth_cfg(config_path: Path) -> Dict[str, Any]:
     # from a plain ckpt with strict=True.
     dh.setdefault("motion_channels", False)
     dh.setdefault("scale_factorized", False)
+    dh.setdefault("new_param_lr", None)  # None → same lr as the trunk
     dh.setdefault("image_size", int((cfg.get("env") or {}).get("width", 224)))
     dh.setdefault(
         "checkpoint_dir",
@@ -80,9 +81,10 @@ def _apply_freeze_encoder(model: _DepthHead, freeze: bool) -> list:
     ``model.decoder`` params are returned (structurally blocks encoder AbsRel
     drift). When False, all parameters remain trainable and are returned.
 
-    ``scale_mlp`` (scale-factorized nets) counts as head, not encoder: it is the
-    single DOF the Δ objective is meant to move, so freezing it would make
-    decoder-only Δ finetuning a no-op for ③.
+    The Δ-scale pathway (``stem_motion`` / ``scale_mlp``) counts as head, not
+    encoder — even though ``stem_motion`` sits at the input. Freezing it would
+    make decoder-only Δ finetuning a no-op for ③, which is the one thing that
+    mode exists to do.
     """
     if not freeze:
         for p in model.parameters():
@@ -90,9 +92,7 @@ def _apply_freeze_encoder(model: _DepthHead, freeze: bool) -> list:
         return list(model.parameters())
     for p in model.encoder.parameters():
         p.requires_grad = False
-    head = list(model.decoder.parameters())
-    if getattr(model, "scale_factorized", False):
-        head += list(model.scale_mlp.parameters())
+    head = list(model.decoder.parameters()) + model.new_pathway_parameters()
     for p in head:
         p.requires_grad = True
     return [p for p in head if p.requires_grad]
@@ -103,43 +103,24 @@ def _adapt_state_dict(
 ) -> Tuple[Dict[str, Any], list]:
     """Fit a plain-``_DepthHead`` state dict into a motion/scale-factorized net.
 
-    Returns ``(adapted_state, notes)``. Two surgeries, both function-preserving
-    at step 0 so a warm start reproduces the source checkpoint's AbsRel exactly:
+    Returns ``(adapted_state, notes)``. The shared trunk is copied verbatim —
+    the motion pathway is its own stem, so the pretrained RGB stem keeps its
+    shape — and only the zero-initialised new tensors (``stem_motion``,
+    ``scale_mlp``) are filled in from the fresh model. Both contribute nothing
+    at step 0, so a warm start reproduces the source checkpoint exactly.
 
-    * first conv: the new frame-difference input channels are appended with
-      **zero** weight, so the extra input cannot change the output until
-      training moves it;
-    * ``scale_mlp``: absent from the source, kept at its zero init → ``exp(0)=1``.
-
-    Anything else that mismatches is left alone for ``load_state_dict`` to
-    reject — this is a targeted adapter, not a shape coercer.
+    Any *other* missing or mismatched key is left for ``load_state_dict`` to
+    reject: this is a targeted adapter, not a shape coercer.
     """
     tgt = model.state_dict()
     adapted = dict(state)
     notes: list = []
     for key, want in tgt.items():
-        if key.startswith("scale_mlp."):
-            if key not in adapted:
-                adapted[key] = want.clone()
-                notes.append(f"{key}: fresh zero-init (scale_factorized)")
+        if not (key.startswith("scale_mlp.") or key.startswith("stem_motion.")):
             continue
-        have = adapted.get(key)
-        if have is None or have.shape == want.shape:
-            continue
-        # Only the stem conv legitimately grows, and only along input channels.
-        if (
-            have.dim() == 4
-            and want.dim() == 4
-            and have.shape[0] == want.shape[0]
-            and have.shape[2:] == want.shape[2:]
-            and want.shape[1] > have.shape[1]
-        ):
-            grown = want.new_zeros(want.shape)
-            grown[:, : have.shape[1]] = have
-            adapted[key] = grown
-            notes.append(
-                f"{key}: in_ch {have.shape[1]}→{want.shape[1]} (new channels zeroed)"
-            )
+        if key not in adapted:
+            adapted[key] = want.clone()
+            notes.append(f"{key}: fresh zero-init (contributes nothing at step 0)")
     return adapted, notes
 
 
@@ -365,6 +346,14 @@ def main(argv: Optional[List[str]] = None) -> int:
              "it, giving the Δ objective one low-variance DOF.",
     )
     p.add_argument(
+        "--new-param-lr",
+        type=float,
+        default=None,
+        help="Separate lr for the zero-init Δ-scale pathway (stem_motion / "
+             "scale_mlp). They start at zero, so the trunk's lr leaves them "
+             "there while a uniform larger lr destroys the trunk's AbsRel.",
+    )
+    p.add_argument(
         "--adapt-init",
         action="store_true",
         help="Allow --init-ckpt from a plain checkpoint into a motion/scale-"
@@ -422,6 +411,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     root = args.dataset
     _refuse_bad_corpus(root, args.allow_v0_desync)
     dh_cfg = _load_depth_cfg(args.config)
+    if args.new_param_lr is not None:
+        dh_cfg["new_param_lr"] = float(args.new_param_lr)
     if args.motion_channels:
         dh_cfg["motion_channels"] = True
     if args.scale_factorized:
@@ -531,7 +522,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"trainable={n_train}/{n_all} params "
         f"(encoder={n_enc} frozen={freeze_enc})"
     )
-    opt = torch.optim.AdamW(trainable, lr=float(dh_cfg["lr"]), betas=(0.9, 0.95))
+    base_lr = float(dh_cfg["lr"])
+    new_lr = float(dh_cfg.get("new_param_lr") or base_lr)
+    new_params = [p for p in model.new_pathway_parameters() if p.requires_grad]
+    new_ids = {id(p) for p in new_params}
+    if new_params and new_lr != base_lr:
+        groups = [
+            {"params": [p for p in trainable if id(p) not in new_ids], "lr": base_lr},
+            {"params": new_params, "lr": new_lr},
+        ]
+        print(
+            f"[depth-train] param groups: trunk lr={base_lr} "
+            f"({sum(p.numel() for p in trainable if id(p) not in new_ids)} params), "
+            f"Δ-scale pathway lr={new_lr} "
+            f"({sum(p.numel() for p in new_params)} params)"
+        )
+    else:
+        groups = [{"params": trainable, "lr": base_lr}]
+    opt = torch.optim.AdamW(groups, lr=base_lr, betas=(0.9, 0.95))
     grad_clip = float(dh_cfg["grad_clip"])
 
     ckpt_dir = Path(str(args.checkpoint_dir or dh_cfg["checkpoint_dir"]))
@@ -581,6 +589,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"freeze_encoder={freeze_enc} "
         f"motion_channels={dh_cfg.get('motion_channels', False)} "
         f"scale_factorized={dh_cfg.get('scale_factorized', False)} "
+        f"new_param_lr={dh_cfg.get('new_param_lr')} "
         f"ckpt_dir={ckpt_dir}"
     )
 
@@ -695,6 +704,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         device=device,
         max_depth_m=float(dh_cfg["max_depth_m"]),
     )
+    new_params_end = model.new_pathway_parameters()
+    if new_params_end:
+        # Zero-init means "no contribution": if these norms are still ~0 the run
+        # never tested the Δ-scale pathway, whatever ③ ends up reporting.
+        norms = " ".join(
+            f"{name}={p.detach().norm().item():.3e}"
+            for name, p in model.named_parameters()
+            if any(p is q for q in new_params_end)
+        )
+        print(f"[depth-train] Δ-scale pathway norms (0 ⇒ never trained): {norms}")
     thr = DEFAULT_THRESHOLDS.depth_absrel_max
     print(f"[depth-train] holdout median AbsRel={holdout:.4f} (gate ①d ≤ {thr})")
     ok_1d = bool(np.isfinite(holdout) and holdout <= thr)
