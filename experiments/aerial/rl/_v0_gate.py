@@ -168,14 +168,32 @@ def _signal1abc_from_log(
     losses: List[float] = []
     recons: List[float] = []
     ents: List[float] = []
+    recon_missing = ent_missing = False
     for line in path.read_text().splitlines():
         line = line.strip()
         if not line:
             continue
         row = json.loads(line)
         losses.append(float(row["loss"]))
-        recons.append(float(row.get("recon_err", row.get("recon", 0.0))))
-        ents.append(float(row.get("post_entropy_frac", row.get("ent", 1.0))))
+        if "recon_err" in row or "recon" in row:
+            recons.append(float(row.get("recon_err", row.get("recon"))))
+        else:
+            recon_missing = True
+        if "post_entropy_frac" in row or "ent" in row:
+            ents.append(float(row.get("post_entropy_frac", row.get("ent"))))
+        else:
+            ent_missing = True
+    # ①a–c is recon-monotonicity ∧ no-posterior-collapse ∧ loss-drop. A log that
+    # lacks recon/entropy cannot evidence the first two — fail rather than let
+    # pass-safe defaults (recon 0, ent 1) green-light on the loss drop alone.
+    if recon_missing or ent_missing:
+        miss = [k for k, m in (("recon_err/recon", recon_missing),
+                               ("post_entropy_frac/ent", ent_missing)) if m]
+        return {
+            "ok": False,
+            "reason": f"learning-log missing {miss}; ①a–c cannot evidence "
+                      "recon-monotonicity / posterior-collapse without them",
+        }
     return metrics.check_learning_curves(losses, recons, ents, thr=thr)
 
 

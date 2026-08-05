@@ -282,6 +282,32 @@ def test_rollout_signals_fail_closed_on_non_airsim_backend(tmp_path):
     assert s2["backend"] == "mock"
 
 
+def test_signal1abc_fails_on_missing_recon_ent_keys(tmp_path):
+    """①a–c is recon-monotonicity ∧ no-collapse ∧ loss-drop. A learning log with
+    only ``loss`` (recon/entropy keys absent) must FAIL — the old pass-safe
+    defaults (recon 0, ent 1) let a WM green-light ①a–c on the loss drop alone,
+    the exact single-pillar shortcut that invalidated wm_step_5000."""
+    from experiments.aerial.rl import _v0_gate as gate
+
+    log = tmp_path / "loss_only.jsonl"
+    log.write_text("\n".join(
+        json.dumps({"loss": 1.0 - 0.05 * i}) for i in range(20)
+    ))
+    res = gate._signal1abc_from_log(log, metrics.DEFAULT_THRESHOLDS)
+    assert res["ok"] is False, res
+    assert "missing" in res["reason"], res
+
+    # Full log (loss + recon + ent) still evaluates on the real curves.
+    full = tmp_path / "full.jsonl"
+    full.write_text("\n".join(
+        json.dumps({"loss": 1.0 - 0.04 * i, "recon_err": 1.0 - 0.03 * i,
+                    "post_entropy_frac": 0.9})
+        for i in range(20)
+    ))
+    ok = gate._signal1abc_from_log(full, metrics.DEFAULT_THRESHOLDS)
+    assert "missing" not in ok.get("reason", ""), ok
+
+
 # --------------------------------------------------------------------------- #
 # ③ diagnostic: forward-motion window selection (pure math)                     #
 # --------------------------------------------------------------------------- #
