@@ -1,0 +1,49 @@
+IMPORTANT: Do NOT read or execute any files under ~/.claude/, ~/.agents/, .claude/skills/, or agents/. These are Claude Code skill definitions meant for a different AI system. Do NOT modify agents/openai.yaml. Stay focused on repository code only.
+
+You are a brutally honest technical reviewer for a Unitree B2 + Topsee (拓普视) inspection platform integration.
+
+CONTEXT — our architecture (authoritative docs in repo):
+- docs/design/2026-08-05-dog-deployment-loop-plan.md (v3.3, currently authorizes D0 only)
+- docs/design/2026-08-03-dog-integration-plan.md (v2 facts F*/G*; dual-channel: Topsee slow nav + Unitree DDS fast Move)
+- Core bet: MissionBrain uses Topsee HTTP for point navigation; WAM closed-loop uses unitree_sdk2 DDS /sportmodestate subscribe + SportClient.Move during WAM_ACTIVE (Arbiter I3/I4 forbids Move during MISSION_NAV)
+- G1 open: does sendNavigate create a queryable task via getCurrentByRobotId?
+- G10 open: platform continuous velocity / "本体遥控" API unknown
+- G11 / E4: DDS authority is a kill-line — must prove Move works after platform releases control
+- D0 software done; DDS 10min field test BLOCKED (artifacts/d0_dds_blocked.md)
+
+VENDOR SUPPORT REPLIES (WeChat, 2026-08-06) to our 4 questions:
+
+Q1 Local SSH: we saw Unitree OTA at 192.168.124.248 with SSH open; ask gateway/IP/account/password for user-PC login.
+→ Janny: Clarify — do you mean Unitree dog body SSH, or our upper computer (上位机)? Upper computer usually has a maintenance page for logs.
+
+Q2 Third-party DDS: can we use unitree_sdk2 subscribe /sportmodestate and SportClient.Move? How coexist with inspection nav stack? Need release control / switch to manual first?
+→ Janny: Do NOT recommend third-party subscribe to Unitree DDS. Concurrent operation causes conflicting motion commands / abnormal behavior. Use our "status forwarding" (转发状态) to monitor, and our "operation control interface" (运控接口) to control. Tagged @Owen.
+
+Q3 Network topology: segments for dog / user PC / platform IPC / cameras? Wired vs Wi-Fi for DDS?
+→ Janny: Currently upper computer and Unitree dog are on the SAME segment. All other devices are on DIFFERENT segments to prevent network storms that cause motion abnormality. (Did NOT answer wired vs Wi-Fi for DDS.)
+
+Q4 After point/sendNavigate, how to query progress / arrival? (we guessed getCurrentByRobotId)
+→ 名字真难取: Use MQ service_robot_task_result.[robotNum]. Contains progress and arrival. When arrived, instruction.complete == true.
+
+YOUR TASK (consult, not code changes):
+1. List what is STILL UNCLEAR or DANGEROUSLY AMBIGUOUS in these vendor answers relative to our plan. Be specific (which gap number G*/E*, which assumption breaks).
+2. Draft a SHORT follow-up question list (WeChat-ready, Chinese OK) — only questions that unblock architecture. Rank must-ask vs nice-to-have. If you believe NO further vendor questions are needed before we can refresh the plan, say so explicitly and why.
+3. Propose a PLAN REFRESH: what must change in v3.3 / dual-channel architecture if we take vendor advice seriously. Cover:
+   - DDS subscribe-only (telemetry) vs DDS Move (command) — can they be split?
+   - Fallback if DDS Move is permanently forbidden: does G10 "运控接口" become the fast channel? What do we need to learn?
+   - Arrival detection: MQ vs getCurrentByRobotId vs DDS pose distance — recommended primary/fallback
+   - Network: where should our process run (i7 user machine)? Impact on D0 DDS field test
+   - What D0/D1/D7 items become BLOCKED, deferred, or redesigned
+4. Give a clear recommendation: "ask more first" OR "refresh plan now with X assumptions" — pick one primary path.
+
+Read these files before answering:
+- docs/design/2026-08-05-dog-deployment-loop-plan.md
+- docs/design/2026-08-03-dog-integration-plan.md (sections on G1/G10/G11, dual channel, E1/E4)
+- artifacts/d0_dds_blocked.md
+- artifacts/d0_software_gate.md
+
+Be direct. No compliments. Structure:
+## Still unclear
+## Follow-up questions (must / nice)
+## Plan refresh proposal
+## Recommendation
