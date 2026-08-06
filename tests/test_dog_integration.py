@@ -99,6 +99,7 @@ class Stack:
             perception=self.perception,
             gas=self.gas,
             calibration_max_age_s=10 ** 9,
+            arbiter=self.arbiter,
         )
 
     def inspect_cmd(self):
@@ -265,8 +266,8 @@ def test_abort_path_stops_both_channels(srv):
     st = Stack(srv)
     st.start_mission()
     st.platform_task("行进中")
+    # D0：dog.abort 必须自行 force_release，不再依赖调用方二次释放
     st.dog.abort("mission_abort")
-    st.arbiter.force_release("mission_abort", now=st.now)
     assert ROBOT in srv.state.stop_calls
     assert st.arbiter.no_owner
     assert st.unitree.last_cmd == (0.0, 0.0, 0.0)

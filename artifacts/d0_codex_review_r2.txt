@@ -1,0 +1,5 @@
+Reviewed the current D0 diff across DDS, runtime wiring, abort release, confidence audit, battery gating, probe alignment, tests, config, and BLOCKED artifacts. `main.py` is unchanged. Static syntax validation passed; tests were not rerun in the read-only environment.
+[P2] `adapters/dog_sdk.py:165` — Supplying `on_abort` bypasses an injected Arbiter entirely, even if the callback does not call `force_release()`. Production wiring passes the Arbiter directly and therefore meets D0, but the optional API can weaken the invariant.
+[P2] `tests/test_dog_unitree.py:149` — The DDS test injects samples directly into `_latest` and never exercises `connect()`, subscriber construction, or `Init()` callback registration. The implementation and accepted BLOCKED artifact meet D0, but the real SDK integration boundary lacks automated coverage.
+[P2] `runtime/dog_runtime.py:258` — `health_check()` claims not to raise, but record-directory creation and `disk_usage()` errors are uncaught and the disk ratio is measured twice. The tested D0 path meets acceptance, though production health should convert filesystem failures into a fail-closed result.
+VERDICT: PASS

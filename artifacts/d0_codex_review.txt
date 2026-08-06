@@ -1,0 +1,13 @@
+Reviewed the D0 implementation, authoritative §2/§3 requirements, configuration, and added tests. The Unitree/SDK hook subset passed locally (32 tests); write-dependent tests could not run in the read-only review sandbox.
+
+[P1] `adapters/dog_unitree.py:305-389`, `runtime/dog_runtime.py:211-226` — DDS mode initializes `SportClient` and exposes `Move`, `StopMove`, `Damp`, and other real commands. Runtime close/abort can consequently send commands. This violates D0’s explicit ban on attaching a real command sink.
+
+[P1] `artifacts/d0_dds_blocked.md` — Missing from the diff and workspace; there is also no 10-minute real-DDS read artifact. Tests exercise `_ingest()` directly and Loopback only, so real-hardware continuous readability is neither verified nor explicitly BLOCKED as D0 requires.
+
+[P1] `tools/topsee_probe.py:309-331` — The header was corrected, but the required gap-label correction was not: E7/E9/E10 remain `G13`/`G12`/`G6`. These conflict with their §2 subjects—G13 is coordinate alignment and G6 is mode switching—so checklist item 6 remains unmet.
+
+[P1] `runtime/dog_runtime.py:80-317` — This is an assembly class, not a production process entry: there is no `main()`/run loop, signal lifecycle, or periodic `dog.tick()`/`arbiter.tick()`/health execution, while pollers default off. Additionally, `health_check()["ok"]` ignores `dds_stale`, allowing a dead DDS stream to report healthy. This does not adequately provide the required sole production orchestration and health wiring.
+
+[P2] `adapters/dog_arbiter.py:228-253` — Confidence state is updated before the audit append. If directory creation or writing fails, the call raises but leaves an unpersisted acknowledgement usable in memory; audit persistence should succeed before committing the acknowledgement or roll it back.
+
+VERDICT: FAIL

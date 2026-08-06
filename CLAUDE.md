@@ -37,7 +37,7 @@ RoboMaster TT 视觉避障项目的 Agent 入口文档。每次新 Agent 进入�
 
 1. **深度服务必须受管启动**：用 `--start-depth-service`（或省略 `--depth-service`，main 会自动启用）。退出 UI / `X` / Ctrl-C 后由 atexit 停子进程。
 2. **禁止** 自行 `da_v2_service.py &` 再 `--depth-service http://127.0.0.1:8890/...` 做本地真机测试——外挂进程不会随 main 退出，易 residual 占 GPU/内存。
-3. 仅当主人明确要求连远端/已有常驻服务时，才许用 `--depth-service URL`；结束测试后必须确认对应端口已释放。
+3. 仅当项目负责人明确要求连接远端或已有常驻服务时，才可使用 `--depth-service URL`；结束测试后必须确认对应端口已释放。
 4. 测试结束自检：`lsof -nP -iTCP:8899,8890 -sTCP:LISTEN` 应无本项目深度服务。
 
 ## 环绕（Orbit）模块修改守则（必须遵守）
@@ -132,8 +132,21 @@ server/
 - 训练主机 `:31126`（1 机 2×H100，从头训），评测 `:30682`（1×H100 + AirSim）。
 - Artifacts：`artifacts/b1_seen20_metrics_*.json`、`artifacts/b1_loss_history_through_2400.json`、`artifacts/loss_curve_b1_*.png`。
 
-## Prior Cursor history
+## 历史决策检索
 
-本项目从 Cursor 迁移到 Claude Code 的历史对话（306 conversations / 17493 messages / 8.1 MB）在
-`~/.cursor-history/robomaster-tt-control/cursor-history.md`。需要过往决策上下文时先 grep 该文件。
-近期话题："WAM drone navigation cases"、"B0→B1 编排实现"、"推理仿真烟测"、"Update FT host to H100"。
+项目历史决策只以本仓库内的设计文档、交接文档和 Git 记录为依据。公开仓库文档不得引用私人对话档案、本机私人目录或仓库外规划系统。
+
+## 公开仓库脱敏准则（强制）
+
+本仓库会上传 GitHub，对公众与合作方可见。**事情可以做，文档与元数据不得暴露仓库外的私人规划意图。**
+
+1. 文档只写本项目的工程目标、事实、约束、决策、风险与验收标准；不写个人生活策略、职业意图、私人优先级或外部规划代号。
+2. 禁止出现私人目录、用户名、本机历史档案、私人知识库、战略台账及其文件名或链接；引用依据必须位于本仓库或经批准的公开来源。
+3. 代码注释只解释机制、安全约束和必要取舍，不记录个人动机或与本项目无关的计划。
+4. Commit / PR / Issue / 评审记录使用工程语言，不出现「练兵、作品集、保个人项目、离开准备」等私人目的表述。
+5. 文件名、artifact 名与报告元数据用功能/阶段/日期/版本命名，不嵌入私人项目代号、姓名、主机用户名或规划体系编号。
+6. 配置只提交脱敏示例；不得提交凭据、真实账号、私人绝对路径、未经批准的内部地址。
+7. 本仓库资产不得流入无关仓库、个人设备或未经批准的外部系统；外部资产须有来源、许可与审批记录。
+8. 发布前扫描私人代号、绝对路径、凭据与敏感元数据，并核对 Markdown / HTML 等派生版本口径一致。
+
+狗侧当前开发权威：`docs/design/2026-08-05-dog-deployment-loop-plan.md`（当前只授权 D0；见该文 §0.3 / §0.4 / §3.0）。

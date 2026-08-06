@@ -146,6 +146,61 @@ def test_dds_transport_missing_sdk_raises_not_silently_faked():
         pytest.skip("本机装了 unitree_sdk2py")
 
 
+def test_dds_sample_cache_and_stale_detection():
+    """D0 Q1：subscriber 写入带 t_mono 的样本；>500ms → dds_stale。"""
+    import time
+
+    from adapters.dog_unitree import (
+        DDS_STALE_S,
+        TOPIC_LOW_STATE,
+        TOPIC_SPORT_STATE,
+        DdsTransport,
+        low_state_to_dict,
+        sport_state_to_dict,
+    )
+
+    t = DdsTransport(interface="eth0")
+    # 不走 connect（无 SDK）；直接测缓存契约
+    t._ingest(
+        TOPIC_SPORT_STATE,
+        sport_state_to_dict(
+            {
+                "position": [1.0, 2.0, 0.3],
+                "velocity": [0.1, 0.0, 0.0],
+                "yaw_speed": 0.05,
+                "imu_state": {"rpy": [0.0, 0.0, 1.2]},
+            }
+        ),
+    )
+    t._ingest(TOPIC_LOW_STATE, low_state_to_dict({"bms_state": {"soc": 77}}))
+    msg = t.read(TOPIC_SPORT_STATE)
+    assert msg is not None and msg["position"][0] == 1.0
+    assert "t_mono" in msg
+    assert t.sample_age_s(TOPIC_SPORT_STATE) is not None
+    assert t.sample_age_s(TOPIC_SPORT_STATE) < DDS_STALE_S
+
+    # 伪造过期样本
+    old = dict(msg)
+    old["t_mono"] = time.monotonic() - 0.8
+    t._latest[TOPIC_SPORT_STATE] = old
+    assert t.sample_age_s(TOPIC_SPORT_STATE) > DDS_STALE_S
+
+    u = UnitreeSportClient(t)
+    u._connected = True  # 跳过 transport.connect
+    assert u.is_dds_stale() is True
+    assert u.get_low_state()["bms_state"]["soc"] == 77.0
+
+
+def test_loopback_not_stale_when_state_available():
+    u, _ = _client()
+    assert u.is_dds_stale() is False
+
+
+def test_loopback_stale_when_state_unavailable():
+    u, _ = _client(state_available=False)
+    assert u.is_dds_stale() is True
+
+
 def test_body_and_gait_commands_forwarded():
     u, t = _client()
     u.stand_up()

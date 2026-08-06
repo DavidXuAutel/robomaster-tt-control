@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""拓普视平台只读探针 + E1–E9 验证实验（方案 §11、M6）。
+"""拓普视平台只读探针 + E0/E2/E5–E10 验证实验（v3.1 §2；M6）。
 
-**默认严格只读**。会让机器人动起来或改变平台状态的实验（E1/E4）必须显式加
-`--allow-motion`，且脚本会要求在命令行里再确认一次现场安全。这不是形式主义：
-E1 的动作就是让狗真的走去一个点位。
+**默认严格只读**。会让机器人动起来的实验（E1）必须显式加 `--allow-motion`，
+且脚本会要求在命令行里再确认一次现场安全。这不是形式主义：E1 的动作就是让
+狗真的走去一个点位。
+
+实验编号以 `docs/design/2026-08-05-dog-deployment-loop-plan.md` §2 为准
+（v2 §8 编号作废）。E3/E4 为人工/真机项，见 MANUAL_ONLY。
 
 用法：
 
@@ -14,7 +17,7 @@ E1 的动作就是让狗真的走去一个点位。
 
 密码从 `TOPSEE_PASSWORD` 环境变量读，避免进 shell 历史。
 
-产物是一份 JSON 报告，直接回填方案 §2.2 的 16 个待验证缺口。
+产物是一份 JSON 报告，六项回填写入 `configs/dog/topsee.json`。
 """
 
 from __future__ import annotations
@@ -306,8 +309,8 @@ EXPERIMENTS: Dict[str, Dict[str, Any]] = {
     "E7": {
         "fn": Probe.e7_stream_url,
         "motion": False,
-        "question": "取流地址响应结构",
-        "gap": "G13",
+        "question": "取流地址响应结构（≠深度可用；深度协议见 G12/D2b）",
+        "gap": "G12",
     },
     "E8": {
         "fn": Probe.e8_session_lifetime,
@@ -319,22 +322,26 @@ EXPERIMENTS: Dict[str, Dict[str, Any]] = {
         "fn": Probe.e9_alarm_structure,
         "motion": False,
         "question": "告警列表字段结构",
-        "gap": "G12",
+        "gap": "alarm-schema",
     },
     "E10": {
         "fn": Probe.e10_state_data,
         "motion": False,
         "question": "实时状态字段名（电量等）",
-        "gap": "G6",
+        "gap": "battery-field",
     },
 }
 
 READ_ONLY = [k for k, v in EXPERIMENTS.items() if not v["motion"]]
 
-# 只能靠抓包/人工的实验，脚本做不了，但必须出现在报告里以免被遗忘
+# 只能靠抓包/真机的实验，脚本做不了，但必须出现在报告里以免被遗忘（v3.1 §2）
 MANUAL_ONLY = {
-    "E3": "手动/自动巡检模式切换接口（F14：275 个接口里没有，须抓 Web 前端）",
-    "E4": "DDS 命令是否被边缘侧独占（G11：需在狗侧网络实机验证）",
+    "E3": "手动/自动巡检模式切换（F14：无 HTTP 接口，须抓 Web 前端；人工切完 ack_human_mode_switch）",
+    "E4": (
+        "DDS 运动权限四步协议（G11）：①/sportmodestate 持续可读；"
+        "②释放平台控制后极小幅 Move + 速度回读；③停发≥2s deadman 归零；"
+        "④平台侧同时活动时是否抢权"
+    ),
 }
 
 

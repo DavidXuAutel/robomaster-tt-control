@@ -16,11 +16,14 @@ Arbiter 必须停在等待人工态，绝不许假装切换成功后直接下发
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import time
 import uuid
 from enum import Enum
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
 from adapters.dog_unitree import UnitreeError, UnitreeSportClient
 from adapters.topsee_client import TopseeBusyError, TopseeClient, TopseeError
@@ -53,6 +56,7 @@ class ArbiterRejected(RuntimeError):
 PREFLIGHT_CONFIDENCE_UNAVAILABLE = "confidence_unavailable"
 PREFLIGHT_CONFIDENCE_LOW = "confidence_below_gate"
 PREFLIGHT_BATTERY_LOW = "battery_low"
+PREFLIGHT_BATTERY_UNKNOWN = "battery_unknown"
 PREFLIGHT_CONTROLLER_BUSY = "controller_busy"
 PREFLIGHT_PLATFORM_ERROR = "platform_error"
 
@@ -88,6 +92,7 @@ class DogControlArbiter:
         battery_provider: Optional[Callable[[], Optional[float]]] = None,
         controller_state: Optional[str] = None,
         controller_force: Optional[str] = None,
+        audit_dir: Union[str, Path] = "logs/audit",
     ) -> None:
         """
         min_battery_pct: 手册电量分层（F29）是「格」，25% 约等于「低于两格」。
@@ -95,6 +100,7 @@ class DogControlArbiter:
             （手册 §5.6），所以确认不能一劳永逸。
         controller_state / controller_force: `updateControllerUser` 的取值待
             抓包确认（G7）；未配置时抢占步骤会被跳过并记警告，不会假装成功。
+        audit_dir: ack_confidence 审计 jsonl 目录（D0 Q3）。
         """
         self.topsee = topsee
         self.unitree = unitree
@@ -108,6 +114,7 @@ class DogControlArbiter:
         self._battery_provider = battery_provider
         self._controller_state = controller_state
         self._controller_force = controller_force
+        self.audit_dir = Path(audit_dir)
 
         self._state = ArbiterState.IDLE
         self._owner = LeaseOwner.NONE
@@ -118,6 +125,7 @@ class DogControlArbiter:
         self._confidence_ack: Optional[float] = None
         self._confidence_ack_at: float = 0.0
         self._confidence_ack_by: str = ""
+        self._confidence_ack_expiry: float = 0.0
         self._preflight_ok = False
         self._last_reject: Optional[str] = None
 
@@ -125,6 +133,7 @@ class DogControlArbiter:
         self.lease_log: List[Dict[str, Any]] = []
         self.illegal_transitions = 0
         self.watchdog_trips = 0
+        self.confidence_audit_path: Optional[Path] = None
 
     # ---------- 只读视图 ----------
 
@@ -207,13 +216,42 @@ class DogControlArbiter:
         """人工录入定位置信度（G4：平台无接口）。
 
         必须带确认人，因为这是绕过程序化门禁的唯一入口，要能审计。
+        D0 Q3：校验 [0,1] 有限数，并持久化 who/value/expiry 到 audit jsonl。
         """
         if not by:
             raise ValueError("ack_confidence 必须提供确认人（by）")
-        self._confidence_ack = float(value)
-        self._confidence_ack_at = time.time()
+        try:
+            v = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ack_confidence 值必须是 [0,1] 有限数") from exc
+        if not math.isfinite(v) or v < 0.0 or v > 1.0:
+            raise ValueError("ack_confidence 值必须是 [0,1] 有限数")
+        now = time.time()
+        expiry = now + self.confidence_ack_ttl_s
+        # 先落盘再改内存：审计失败不得留下可用的未审计确认
+        self._persist_confidence_audit(v, by=str(by), expiry=expiry)
+        self._confidence_ack = v
+        self._confidence_ack_at = now
         self._confidence_ack_by = str(by)
-        logger.info("置信度人工确认: %.3f by=%s", value, by)
+        self._confidence_ack_expiry = expiry
+        logger.info("置信度人工确认: %.3f by=%s expiry=%.0f", v, by, expiry)
+
+    def _persist_confidence_audit(self, value: float, *, by: str, expiry: float) -> None:
+        self.audit_dir.mkdir(parents=True, exist_ok=True)
+        path = self.audit_dir / (
+            f"confidence_{time.strftime('%Y%m%d', time.localtime())}.jsonl"
+        )
+        row = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "who": by,
+            "value": value,
+            "expiry": expiry,
+            "robot_id": self.robot_id,
+            "ttl_s": self.confidence_ack_ttl_s,
+        }
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        self.confidence_audit_path = path
 
     def acquire_for_mission(self, mission_id: str, *, now: Optional[float] = None) -> None:
         """IDLE → PREFLIGHT → MISSION_NAV 的准备段。
@@ -249,18 +287,32 @@ class DogControlArbiter:
             conf = self.confidence_ack(now=t)
             if conf < 0:
                 self._reject(PREFLIGHT_CONFIDENCE_UNAVAILABLE)
-        if float(conf) < self.min_confidence:
+        try:
+            conf_f = float(conf)
+        except (TypeError, ValueError):
+            self._reject(PREFLIGHT_CONFIDENCE_UNAVAILABLE)
+            return  # pragma: no cover — _reject 恒抛
+        if not math.isfinite(conf_f):
+            self._reject(PREFLIGHT_CONFIDENCE_UNAVAILABLE)
+        if conf_f < self.min_confidence:
             self._reject(PREFLIGHT_CONFIDENCE_LOW)
 
-        # 2) 电量分层（F29）
-        if self._battery_provider is not None:
-            try:
-                bat = self._battery_provider()
-            except Exception:  # noqa: BLE001
-                logger.exception("battery_provider 失败")
-                bat = None
-            if bat is not None and float(bat) < self.min_battery_pct:
-                self._reject(PREFLIGHT_BATTERY_LOW)
+        # 2) 电量分层（F29）—— D0 Q4 fail-closed：缺失 / None / NaN 一律拒绝
+        if self._battery_provider is None:
+            self._reject(PREFLIGHT_BATTERY_UNKNOWN)
+        try:
+            bat = self._battery_provider()
+        except Exception:  # noqa: BLE001
+            logger.exception("battery_provider 失败")
+            bat = None
+        try:
+            bat_f = float(bat) if bat is not None else float("nan")
+        except (TypeError, ValueError):
+            bat_f = float("nan")
+        if not math.isfinite(bat_f):
+            self._reject(PREFLIGHT_BATTERY_UNKNOWN)
+        if bat_f < self.min_battery_pct:
+            self._reject(PREFLIGHT_BATTERY_LOW)
 
         if self.topsee is None:
             return

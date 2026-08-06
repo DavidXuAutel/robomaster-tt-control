@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, replace
-from typing import Any, Dict, Mapping, Optional, Protocol, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,76 @@ API_MOVE_TO_POS = 1036
 
 TOPIC_SPORT_STATE = "rt/sportmodestate"
 TOPIC_LOW_STATE = "rt/lowstate"
+
+# D0 / v3.1 §3-D0：>500ms 无样本 → dds_stale
+DDS_STALE_S = 0.5
+
+
+def _as_float_list(value: Any, *, n: int) -> List[float]:
+    if value is None:
+        return [0.0] * n
+    if isinstance(value, (list, tuple)):
+        out = [float(x) for x in value[:n]]
+    else:
+        try:
+            out = [float(x) for x in list(value)[:n]]
+        except TypeError:
+            out = [float(value)]
+    while len(out) < n:
+        out.append(0.0)
+    return out
+
+
+def sport_state_to_dict(msg: Any, *, t_mono: Optional[float] = None) -> Dict[str, Any]:
+    """把 SportModeState IDL / Mapping 归一成 read() 契约字典。"""
+    if isinstance(msg, Mapping):
+        pos = _as_float_list(msg.get("position"), n=3)
+        vel = _as_float_list(msg.get("velocity"), n=3)
+        yaw_speed = float(msg.get("yaw_speed", 0.0))
+        imu = msg.get("imu_state") or {}
+        rpy = _as_float_list(
+            imu.get("rpy") if isinstance(imu, Mapping) else getattr(imu, "rpy", None),
+            n=3,
+        )
+    else:
+        pos = _as_float_list(getattr(msg, "position", None), n=3)
+        vel = _as_float_list(getattr(msg, "velocity", None), n=3)
+        yaw_speed = float(getattr(msg, "yaw_speed", 0.0) or 0.0)
+        imu = getattr(msg, "imu_state", None)
+        rpy = _as_float_list(getattr(imu, "rpy", None) if imu is not None else None, n=3)
+    return {
+        "position": pos,
+        "velocity": vel,
+        "yaw_speed": yaw_speed,
+        "imu_state": {"rpy": rpy},
+        "t_mono": float(t_mono if t_mono is not None else time.monotonic()),
+    }
+
+
+def low_state_to_dict(msg: Any, *, t_mono: Optional[float] = None) -> Dict[str, Any]:
+    """把 LowState IDL / Mapping 归一成 read() 契约字典。"""
+    if isinstance(msg, Mapping):
+        bms = msg.get("bms_state") or {}
+        soc = bms.get("soc") if isinstance(bms, Mapping) else getattr(bms, "soc", None)
+        motor = msg.get("motor_state")
+    else:
+        bms = getattr(msg, "bms_state", None)
+        soc = getattr(bms, "soc", None) if bms is not None else None
+        motor = getattr(msg, "motor_state", None)
+    motor_out: List[Dict[str, float]] = []
+    if motor is not None:
+        for m in list(motor)[:12]:
+            if isinstance(m, Mapping):
+                motor_out.append({"q": float(m.get("q", 0.0))})
+            else:
+                motor_out.append({"q": float(getattr(m, "q", 0.0) or 0.0)})
+    while len(motor_out) < 12:
+        motor_out.append({"q": 0.0})
+    return {
+        "bms_state": {"soc": float(soc) if soc is not None else 0.0},
+        "motor_state": motor_out,
+        "t_mono": float(t_mono if t_mono is not None else time.monotonic()),
+    }
 
 
 class UnitreeError(Exception):
@@ -106,6 +176,8 @@ class SportTransport(Protocol):
 
     def read(self, topic: str) -> Optional[Mapping[str, Any]]: ...
 
+    def sample_age_s(self, topic: str) -> Optional[float]: ...
+
 
 class LoopbackTransport:
     """无硬件的传输层：记录命令、按命令积分出一个可信的假位姿。
@@ -173,6 +245,7 @@ class LoopbackTransport:
     def read(self, topic: str) -> Optional[Mapping[str, Any]]:
         if not self.connected or not self.state_available:
             return None
+        now = time.monotonic()
         if topic == TOPIC_SPORT_STATE:
             p = self._pose
             return {
@@ -180,14 +253,27 @@ class LoopbackTransport:
                 "velocity": [p.vx, p.vy, 0.0],
                 "yaw_speed": p.vyaw,
                 "imu_state": {"rpy": [0.0, 0.0, p.yaw]},
+                "t_mono": now if p.t_mono == 0.0 else float(p.t_mono),
             }
         if topic == TOPIC_LOW_STATE:
-            return {"bms_state": {"soc": 88}, "motor_state": [{"q": 0.0}] * 12}
+            return {
+                "bms_state": {"soc": 88},
+                "motor_state": [{"q": 0.0}] * 12,
+                "t_mono": now,
+            }
         return None
+
+    def sample_age_s(self, topic: str) -> Optional[float]:
+        msg = self.read(topic)
+        if msg is None:
+            return None
+        return max(0.0, time.monotonic() - float(msg["t_mono"]))
 
     # 测试辅助
     def teleport(self, x: float, y: float, yaw: float = 0.0) -> None:
-        self._pose = replace(self._pose, x=float(x), y=float(y), yaw=float(yaw))
+        self._pose = replace(
+            self._pose, x=float(x), y=float(y), yaw=float(yaw), t_mono=time.monotonic()
+        )
 
     def calls_of(self, api_id: int) -> list[Dict[str, Any]]:
         return [p for a, p in self.calls if a == api_id]
@@ -196,19 +282,39 @@ class LoopbackTransport:
 class DdsTransport:
     """真机 DDS 传输层。依赖 `unitree_sdk2py`，导入失败时如实报错。
 
+    D0（v3.1）：订阅 `/sportmodestate` 与 `/lowstate`；`read()` 返回带单调钟
+    `t_mono` 的最新样本；`sample_age_s > 0.5` → 上层判 `dds_stale`。
+
     这里刻意不做「装不上就退化成 loopback」的兜底：那会让真机跑在假数据上。
     """
 
-    def __init__(self, *, interface: str, domain_id: int = 0) -> None:
+    def __init__(
+        self,
+        *,
+        interface: str,
+        domain_id: int = 0,
+        subscriber_factory: Optional[Callable[[str, Any], Any]] = None,
+    ) -> None:
         self.interface = interface
         self.domain_id = int(domain_id)
+        self._subscriber_factory = subscriber_factory
         self._sport: Any = None
         self._subs: Dict[str, Any] = {}
+        self._latest: Dict[str, Dict[str, Any]] = {}
 
     def connect(self) -> None:
         try:
-            from unitree_sdk2py.core.channel import ChannelFactoryInitialize
-            from unitree_sdk2py.go2.sport.sport_client import SportClient
+            from unitree_sdk2py.core.channel import (  # type: ignore[import-not-found]
+                ChannelFactoryInitialize,
+                ChannelSubscriber,
+            )
+            from unitree_sdk2py.go2.sport.sport_client import (  # type: ignore[import-not-found]
+                SportClient,
+            )
+            from unitree_sdk2py.idl.unitree_go.msg.dds_ import (  # type: ignore[import-not-found]
+                LowState_,
+                SportModeState_,
+            )
         except ImportError as exc:  # pragma: no cover — 无 SDK 环境
             raise UnitreeNotConnected(
                 "缺少 unitree_sdk2py。真机联调前先在狗侧网络的机器上安装官方 SDK，"
@@ -217,11 +323,46 @@ class DdsTransport:
         ChannelFactoryInitialize(self.domain_id, self.interface)
         self._sport = SportClient()
         self._sport.Init()
-        logger.info("DDS 已连接 interface=%s domain=%s", self.interface, self.domain_id)
+        factory = self._subscriber_factory or (
+            lambda topic, msg_type: ChannelSubscriber(topic, msg_type)
+        )
+        self._start_subscriber(TOPIC_SPORT_STATE, SportModeState_, sport_state_to_dict, factory)
+        self._start_subscriber(TOPIC_LOW_STATE, LowState_, low_state_to_dict, factory)
+        logger.info(
+            "DDS 已连接 interface=%s domain=%s topics=%s",
+            self.interface,
+            self.domain_id,
+            sorted(self._subs),
+        )
 
-    def close(self) -> None:  # pragma: no cover — 无 SDK 环境
+    def _start_subscriber(
+        self,
+        topic: str,
+        msg_type: Any,
+        converter: Callable[..., Dict[str, Any]],
+        factory: Callable[[str, Any], Any],
+    ) -> None:
+        sub = factory(topic, msg_type)
+
+        def _handler(msg: Any) -> None:
+            self._ingest(topic, converter(msg))
+
+        # unitree_sdk2py: Init(handler, queue_len)；测试桩可无 Init
+        init = getattr(sub, "Init", None)
+        if callable(init):
+            init(_handler, 10)
+        self._subs[topic] = sub
+
+    def _ingest(self, topic: str, sample: Mapping[str, Any]) -> None:
+        """回调与单测共用：写入带 t_mono 的最新样本。"""
+        data = dict(sample)
+        data.setdefault("t_mono", time.monotonic())
+        self._latest[topic] = data
+
+    def close(self) -> None:
         self._sport = None
         self._subs.clear()
+        self._latest.clear()
 
     def call(self, api_id: int, payload: Mapping[str, Any]) -> Any:  # pragma: no cover
         if self._sport is None:
@@ -247,12 +388,15 @@ class DdsTransport:
             return sport.MoveToPos(payload["x"], payload["y"], payload["yaw"])
         raise UnitreeError(f"未支持的 api_id={api_id}")
 
-    def read(self, topic: str) -> Optional[Mapping[str, Any]]:  # pragma: no cover
-        sub = self._subs.get(topic)
-        if sub is None:
+    def read(self, topic: str) -> Optional[Mapping[str, Any]]:
+        sample = self._latest.get(topic)
+        return None if sample is None else dict(sample)
+
+    def sample_age_s(self, topic: str) -> Optional[float]:
+        sample = self._latest.get(topic)
+        if sample is None:
             return None
-        msg = sub.Read()
-        return msg if isinstance(msg, Mapping) else None
+        return max(0.0, time.monotonic() - float(sample["t_mono"]))
 
 
 class UnitreeSportClient:
@@ -301,7 +445,7 @@ class UnitreeSportClient:
     # ---------- 状态 ----------
 
     def get_sport_state(self) -> Optional[SportPose]:
-        """读一帧 `/sportmodestate`。无样本返回 None。"""
+        """读一帧 `/sportmodestate`。无样本返回 None。`t_mono` 取样本时间戳。"""
         self._require_connected()
         msg = self.transport.read(TOPIC_SPORT_STATE)
         if not isinstance(msg, Mapping):
@@ -309,6 +453,7 @@ class UnitreeSportClient:
         pos = msg.get("position") or [0.0, 0.0, 0.0]
         vel = msg.get("velocity") or [0.0, 0.0, 0.0]
         rpy = ((msg.get("imu_state") or {}).get("rpy")) or [0.0, 0.0, 0.0]
+        t_mono = float(msg["t_mono"]) if msg.get("t_mono") is not None else time.monotonic()
         return SportPose(
             x=float(pos[0]),
             y=float(pos[1]),
@@ -317,13 +462,33 @@ class UnitreeSportClient:
             vx=float(vel[0]),
             vy=float(vel[1]),
             vyaw=float(msg.get("yaw_speed", 0.0)),
-            t_mono=time.monotonic(),
+            t_mono=t_mono,
         )
 
     def get_low_state(self) -> Optional[Mapping[str, Any]]:
         """读 `/lowstate`（≈500 Hz）。调用方须自限频率，勿逐 tick 拉。"""
         self._require_connected()
         return self.transport.read(TOPIC_LOW_STATE)
+
+    def sample_age_s(self, topic: str = TOPIC_SPORT_STATE) -> Optional[float]:
+        """最新样本年龄（秒）。无样本返回 None。"""
+        self._require_connected()
+        age_fn = getattr(self.transport, "sample_age_s", None)
+        if callable(age_fn):
+            return age_fn(topic)
+        msg = self.transport.read(topic)
+        if not isinstance(msg, Mapping) or msg.get("t_mono") is None:
+            return None
+        return max(0.0, time.monotonic() - float(msg["t_mono"]))
+
+    def is_dds_stale(
+        self, topic: str = TOPIC_SPORT_STATE, *, max_age_s: float = DDS_STALE_S
+    ) -> bool:
+        """>max_age_s 无新鲜样本 → True（含从未收到）。"""
+        age = self.sample_age_s(topic)
+        if age is None:
+            return True
+        return age > float(max_age_s)
 
     def pose_xy_yaw(self) -> Optional[Tuple[float, float, float]]:
         """便捷读数，供 TopseeNav 的距离到点判据用（odom 系）。"""

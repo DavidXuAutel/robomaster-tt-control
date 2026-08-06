@@ -66,6 +66,8 @@ class DogSdkAdapter(DogAdapter):
         gas: Optional[GasBackend] = None,
         stub: Optional[DogStubAdapter] = None,
         calibration_max_age_s: float = 7 * 24 * 3600,
+        arbiter: Any = None,
+        on_abort: Any = None,
     ) -> None:
         super().__init__(emit, source=self.name)
         if mode not in ("stub", "backend"):
@@ -75,6 +77,9 @@ class DogSdkAdapter(DogAdapter):
         self.perception = perception
         self.gas = gas
         self.calibration_max_age_s = calibration_max_age_s
+        # D0：可选注入；abort 时触发 Arbiter.force_release（Protocol 签名不变）
+        self._arbiter = arbiter
+        self._on_abort = on_abort
         self._use_stub = mode == "stub"
         if mode == "backend":
             missing = [
@@ -154,7 +159,28 @@ class DogSdkAdapter(DogAdapter):
                 self.nav.cancel()
             except Exception:  # noqa: BLE001 — latch already set
                 logger.exception("nav.cancel failed; abort latch kept")
+        self._release_arbiter(reason)
         logger.warning("dog sdk abort: %s", reason)
+
+    def _release_arbiter(self, reason: str) -> None:
+        """D0：abort → Arbiter.force_release；钩子失败不得抬高异常。
+
+        on_abort 是附加通知，不能替代 force_release（避免旁路仲裁层）。
+        """
+        if self._on_abort is not None:
+            try:
+                self._on_abort(reason)
+            except Exception:  # noqa: BLE001
+                logger.exception("on_abort hook failed; abort latch kept")
+        arb = self._arbiter
+        if arb is None and self.nav is not None:
+            arb = getattr(self.nav, "arbiter", None)
+        release = getattr(arb, "force_release", None) if arb is not None else None
+        if callable(release):
+            try:
+                release(reason)
+            except Exception:  # noqa: BLE001 — force_release 本应不抛，双保险
+                logger.exception("arbiter.force_release failed; abort latch kept")
 
     def tick(self, now: Optional[float] = None) -> None:
         if self._use_stub:
