@@ -42,6 +42,7 @@ class DogRuntimeConfig:
     account: str
     robot_id: str
     password_env: str = "TOPSEE_PASSWORD"
+    deployment: str = "cloud"
     arrived_states: List[str] = field(default_factory=list)
     enroute_states: List[str] = field(default_factory=list)
     battery_field: str = ""
@@ -206,6 +207,7 @@ class DogRuntime:
         kw: Dict[str, Any] = {
             "account": self.config.account,
             "password": self._password(),
+            "deployment": self.config.deployment or "cloud",
         }
         if self.config.token_header:
             kw["token_header"] = self.config.token_header

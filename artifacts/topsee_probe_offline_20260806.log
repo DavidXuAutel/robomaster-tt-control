@@ -1,0 +1,15 @@
+报告已写入 artifacts/topsee_probe_offline_20260806.json
+
+=== 摘要 ===
+  E0  ok       登录链路是否通、授权是否有效
+  E2  ok       currentState / totalState 的真实取值枚举
+  E5  ok       getRobotMapAll 的真实响应结构
+  E6  ok       气体历史的时间参数格式
+  E7  ok       取流地址响应结构（≠深度可用；深度协议见 G12/D2b）
+  E8  ok       会话/token 有效期
+  E9  ok       告警列表字段结构
+ E10  ok       实时状态字段名（电量等）
+
+以下只能靠抓包/实机，脚本做不了：
+  E3  手动/自动巡检模式切换（F14：无 HTTP 接口，须抓 Web 前端；人工切完 ack_human_mode_switch）
+  E4  DDS 运动权限四步协议（G11）：①/sportmodestate 持续可读；②释放平台控制后极小幅 Move + 速度回读；③停发≥2s deadman 归零；④平台侧同时活动时是否抢权

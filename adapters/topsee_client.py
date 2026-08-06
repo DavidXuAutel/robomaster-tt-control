@@ -5,8 +5,10 @@
 已核验的平台行为（对应方案 §2.1）：
   F1  成功返回码是 body 里的 `code:0`，不是 HTTP 200
   F2  未登录返回 HTTP 401，body 是纯文本「未登录」而非 JSON
-  F3  登录三步：取公钥 → RSA 加密密码 → POST pc/login（参数全在 query）
+  F3  登录三步：取公钥 → RSA 加密密码 → POST pc/login
+      （云端：参数在 query；离线一体机 :8888：JSON body + webToken）
   F4  token header 名与有效期文档未写 → 同时支持 cookie 会话与可配 header
+      （离线一体机抓包确认：`tuopushi_edge_token`）
   F5  账号有授权天数，到期无法登录 → 单独抛 TopseeLicenseError，不可重试
   F9  7 个接口已 deprecated，本模块一律不封装
 
@@ -161,6 +163,9 @@ class TopseeClient:
 
     ROBOT = "/service/api/robot"
     PERM = "/service/api/permission"
+    # 离线一体机（topsee-offline-app :8888）前缀与云端不同
+    _OFFLINE_PREFIX = "/service"
+    _OFFLINE_TOKEN_HEADER = "tuopushi_edge_token"
 
     def __init__(
         self,
@@ -173,26 +178,41 @@ class TopseeClient:
         insecure_tls: bool = False,
         current_language: str = "zh_CN",
         token_header: Optional[str] = None,
+        deployment: str = "cloud",
         opener: Optional[Any] = None,
     ) -> None:
         """
         base_url: 形如 `http://192.168.0.85:8001`（云端）或 `:8888`（离线一体机）。
+        deployment: `cloud`（默认）或 `offline`（:8888 一体机 API 形态）。
         abort_timeout_s: 取消/停止类调用的短超时，防止网络卡顿拖慢 abort 路径。
         insecure_tls: 现场 https 常为自签证书；仅在明确知情时打开。
         token_header: 抓包确认 token header 名后填入（G8）；未知时靠 cookie 会话。
         opener: 注入自定义 urllib opener，供测试替换。
         """
+        mode = (deployment or "cloud").strip().lower()
+        if mode not in ("cloud", "offline"):
+            raise ValueError(f"未知 deployment={deployment!r}（cloud|offline）")
+        self.deployment = mode
         self.base_url = base_url.rstrip("/")
         self.account = account
         self._password = password
         self.timeout_s = float(timeout_s)
         self.abort_timeout_s = float(abort_timeout_s)
         self.current_language = current_language
-        self.token_header = token_header
+        if token_header:
+            self.token_header = token_header
+        elif mode == "offline":
+            self.token_header = self._OFFLINE_TOKEN_HEADER
+        else:
+            self.token_header = None
         self._token: Optional[str] = None
         self._lock = threading.Lock()
         self.login_count = 0
         self.request_count = 0
+
+        if mode == "offline":
+            self.ROBOT = self._OFFLINE_PREFIX
+            self.PERM = self._OFFLINE_PREFIX
 
         if opener is not None:
             self._opener = opener
@@ -326,16 +346,25 @@ class TopseeClient:
                 raise TopseeAuthError(f"取公钥失败: {body[:160]}")
             enc = encrypt_b64(self._password, str(doc["data"]))
 
-            status, body = self._raw(
-                "POST",
-                f"{self.PERM}/free/pc/login",
-                params={
-                    "account": self.account,
-                    "password": enc,
-                    "securityKey": security_key,
-                    "currentLanguage": self.current_language,
-                },
-            )
+            login_payload = {
+                "account": self.account,
+                "password": enc,
+                "securityKey": security_key,
+                "currentLanguage": self.current_language,
+            }
+            if self.deployment == "offline":
+                # 离线一体机：POST JSON body；query/form 会 400/415
+                status, body = self._raw(
+                    "POST",
+                    f"{self.PERM}/free/pc/login",
+                    json_body=login_payload,
+                )
+            else:
+                status, body = self._raw(
+                    "POST",
+                    f"{self.PERM}/free/pc/login",
+                    params=login_payload,
+                )
             lic = self._classify_unauth(status, body)
             if isinstance(lic, TopseeLicenseError):
                 raise lic
@@ -352,12 +381,16 @@ class TopseeClient:
                 raise TopseeAuthError(f"登录失败: {body[:160]}")
             data = doc.get("data")
             if isinstance(data, Mapping):
-                for k in ("token", "accessToken", "access_token"):
+                for k in ("webToken", "token", "accessToken", "access_token"):
                     if data.get(k):
                         self._token = str(data[k])
                         break
             self.login_count += 1
-            logger.info("topsee 登录成功 account=%s", self.account)
+            logger.info(
+                "topsee 登录成功 account=%s deployment=%s",
+                self.account,
+                self.deployment,
+            )
 
     def logout(self) -> None:
         """退出登录。失败只记日志，不抛（收尾路径）。"""
@@ -466,13 +499,19 @@ class TopseeClient:
     # ---------- 地图与点位 ----------
 
     def map_update(self, body: Mapping[str, Any]) -> Any:
-        """POST mapMan/mapUpdate — MapUpdateDomain（F15）。
+        """POST 地图更新 — MapUpdateDomain（F15）。
 
+        云端：`mapMan/mapUpdate`；离线一体机：`free/mapUpdate`。
         action: 0 初始化 / 1 重定位 / 2 增量建图 / 3 结束 / 4 取消 / 5 切割 / 6 加载地图
         重定位需带 `xyth`（形如 `{"x":0,"y":0,"th":0}` 的 JSON 字符串）。
         注意：**重定位是否成功无法程序化读取**（G4 无置信度接口），仍需人工确认。
         """
-        return self.request("POST", f"{self.ROBOT}/mapMan/mapUpdate", json_body=body)
+        path = (
+            f"{self.ROBOT}/free/mapUpdate"
+            if self.deployment == "offline"
+            else f"{self.ROBOT}/mapMan/mapUpdate"
+        )
+        return self.request("POST", path, json_body=body)
 
     def relocate(self, robot_id: str, keyname: str, x: float, y: float, th: float) -> Any:
         """mapUpdate 的重定位便捷封装（action=1）。"""
@@ -492,14 +531,19 @@ class TopseeClient:
         )
 
     def get_robot_map_all(self, robot_id: str) -> Any:
-        """GET mapMan/getRobotMapAll — 地图 + 线路 + 点位导出。
+        """GET 地图 + 线路 + 点位导出。
 
+        云端：`mapMan/getRobotMapAll`；离线一体机有数据的是 `point/getRobotMapAll`
+        （`mapMan` 路径会回空点位）。
         G16：OpenAPI 把它的响应也标成 ShowRobotTaskAllEntity，疑似导出标注错误，
         解析方要对结构做防御（见 tools/export_dog_bindings.py）。
         """
-        return self.request(
-            "GET", f"{self.ROBOT}/mapMan/getRobotMapAll", params={"robotId": robot_id}
+        path = (
+            f"{self.ROBOT}/point/getRobotMapAll"
+            if self.deployment == "offline"
+            else f"{self.ROBOT}/mapMan/getRobotMapAll"
         )
+        return self.request("GET", path, params={"robotId": robot_id})
 
     def get_points_by_id(self, points_id: str) -> Any:
         """GET point/getPointsById — 点位详情（含 x/y/th）。"""
@@ -536,10 +580,12 @@ class TopseeClient:
         )
 
     def get_alarm_list(self, **params: Any) -> Any:
-        """GET taskAlarm/getAlarmList — 只读告警，作旁路证据，不驱动状态机。"""
-        return self.request(
-            "GET", f"{self.ROBOT}/taskAlarm/getAlarmList", params=params
-        )
+        """GET 只读告警，作旁路证据，不驱动状态机。
+
+        云端：`taskAlarm/getAlarmList`；离线一体机有数据的是 `getAlarmHistory`。
+        """
+        name = "getAlarmHistory" if self.deployment == "offline" else "getAlarmList"
+        return self.request("GET", f"{self.ROBOT}/taskAlarm/{name}", params=params)
 
     # ---------- 气体 ----------
 

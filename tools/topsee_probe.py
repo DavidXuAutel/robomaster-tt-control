@@ -114,8 +114,14 @@ class Probe:
         self.client.login()
         return {
             "login_ok": True,
+            "deployment": self.client.deployment,
             "token_header_configured": self.client.token_header,
-            "note": "登录成功。token header 名仍需抓包确认（G8），当前靠 cookie 会话。",
+            "token_present": bool(self.client._token),
+            "note": (
+                "离线一体机：header=tuopushi_edge_token，字段=webToken。"
+                if self.client.deployment == "offline"
+                else "登录成功。云端 token header 名仍需抓包确认（G8），当前可靠 cookie 会话。"
+            ),
         }
 
     def e1_navigate_produces_task(self) -> Dict[str, Any]:
@@ -355,6 +361,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="默认读 TOPSEE_PASSWORD 环境变量",
     )
     p.add_argument("--robot-id", required=True)
+    p.add_argument(
+        "--deployment",
+        default="cloud",
+        choices=("cloud", "offline"),
+        help="cloud=:8001 OpenAPI；offline=:8888 一体机（JSON 登录 + tuopushi_edge_token）",
+    )
+    p.add_argument(
+        "--token-header",
+        default=None,
+        help="覆盖 token header 名；offline 默认 tuopushi_edge_token",
+    )
     p.add_argument("--points-id", help="E1 用的目标点位 ID")
     p.add_argument(
         "--experiments",
@@ -394,6 +411,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         password=args.password,
         timeout_s=args.timeout,
         insecure_tls=args.insecure,
+        deployment=args.deployment,
+        token_header=args.token_header,
     )
     probe = Probe(
         client,
