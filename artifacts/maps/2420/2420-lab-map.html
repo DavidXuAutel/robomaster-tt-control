@@ -103,54 +103,48 @@
   </section>
   <aside>
     <div class="warn">
-      🎯 <b>本次目标：完整走通 P3→P4→P3，并抓停障告警现场证据</b><br/>
-      中午结论：停障告警常是<strong>假读数</strong>（阳光打爆深度相机 → 前方 0.02~0.03 m），
-      平台仍可能记 <code>result=成功</code>。现在约 13:46，光照与中午不同，
-      正好做对照。<br/>
-      请你走的过程中留意两件事：①狗面朝哪里（是否对窗）
-      ②报停障时前方是否真有物体。
+      🎯 <b>新方案：按你图画的「进走廊再分叉」</b><br/>
+      蓝点=P3 充电点 · 紫点=P4 路标 · 橙点=P1 巡检。<br/>
+      平台 <code>sendNavigate</code> 只能<strong>单点派单</strong>，图中分叉拆成串行多程；
+      中间「走廊中点」没有打点，由平台规划自行穿行。
     </div>
     <div class="warn">
-      ⚠️ <b>「成功」不等于走到了</b>——判成败只认肉眼位移 + 大屏图标移动。<br/>
-      ⛔ 遥控器开机保 <code>L2+B</code>，<b>不按 START</b>。<br/>
-      ⛔ 到站后用 Body Control 摇杆转朝向，<b>不要用 Redirect</b>。
+      🔴 <b>禁止 P3↔P1 直连</b>：与虚拟墙相交（净空 0）。必须经 P4 走廊绕行。<br/>
+      ⚠️ 判成败只认肉眼位移；每程 90 s 门禁；不按 START；不用 Redirect 复位朝向。
     </div>
 
-    <h2>当前状态（13:46 查）</h2>
+    <h2>当前状态</h2>
     <div class="card recommend">
-      <div>狗在：<strong>P3 充电点</strong>（应在充电板上）</div>
-      <div style="margin-top:4px"><code>(-1.03, 4.03)</code> · state=02 空闲 · bat <b>53%</b></div>
+      <div>狗在：<strong>P3 充电点</strong>（蓝点）</div>
+      <div style="margin-top:4px">推荐路径：<b>P3 → P4 → P1 → P4 → P3</b></div>
       <div style="margin-top:4px;color:var(--muted);font-size:.82rem">
-        中午充电约 30%→53%；最近停障告警停在 12:15，此后无新告警。
+        对应你图：先斜向进走廊到底（紫），再上走廊到橙，原路折返回充电点。
       </div>
     </div>
 
-    <h2>拟走路线（完整往返）</h2>
+    <h2>拟走路线（4 程）</h2>
     <ol class="plan">
-      <li><span style="color:#8fd0a8"><b>① 去程</b></span>：P3 → P4 紫路标<br/>
-        <code>pointsId</code>：<code>202607311046080138B2000397</code><br/>
-        6.58 m · 参考耗时 85~92 s</li>
-      <li><span style="color:#6ec8ff"><b>② 回程</b></span>：P4 → P3 充电点<br/>
-        <code>pointsId</code>：<code>202607311045581570B2000397</code><br/>
-        6.58 m · 最窄净空 1.80 m · 参考耗时 63~85 s</li>
-      <li><b>③ 到站</b>：Body Control 转到<strong>面朝空旷/背光</strong> → <code>Crouch</code></li>
-      <li><b>④ 复盘</b>：对照告警时间戳 vs 你观察到的朝向/前方物体</li>
+      <li><span style="color:#8fd0a8"><b>① P3→P4</b></span> 进走廊下端 · 6.58 m · 虚拟墙净空 ≥0.97 m<br/>
+        <code>202607311046080138B2000397</code></li>
+      <li><span style="color:#ffb060"><b>② P4→P1</b></span> 沿走廊上行 · 6.03 m · 净空 ≥1.22 m<br/>
+        <code>202607311046161810B2000397</code></li>
+      <li><span style="color:#c9a0ff"><b>③ P1→P4</b></span> 走廊下行折返 · 6.03 m<br/>
+        （不直回 P3，避开虚拟墙）</li>
+      <li><span style="color:#6ec8ff"><b>④ P4→P3</b></span> 回充电点 · 6.58 m</li>
     </ol>
 
     <h2>执行顺序</h2>
     <ol class="plan">
-      <li><code>L2+A</code> 站起 · <b>不按 START</b> · 说「好了」</li>
-      <li>我发去程 → <b>90 s 位移门禁</b>；全程实时刷告警表</li>
-      <li>你确认到 P4 → 我发回程（同样门禁 + 告警监控）</li>
-      <li>你确认回 P3 → 转朝向 → Crouch</li>
-      <li>兜底：遥控 <b>L2+B</b> · 大屏 🔴STOP · <code>stopTask</code></li>
+      <li>站起 · 不按 START · 朝向尽量背光/空旷 · 说「好了」</li>
+      <li>逐程派单；每程你肉眼确认到位后我再发下一程</li>
+      <li>全程盯停障告警；卡住则摇杆转向后重发</li>
+      <li>回 P3 → Crouch 充电</li>
     </ol>
 
     <div class="card">
-      <div style="color:#8fd0a8"><b>电量 53% · 够跑完整往返</b></div>
+      <div style="color:#ff9c6e"><b>合计约 25 m / 4 程 · 预估 6~8 分钟行走</b></div>
       <div style="margin-top:4px;color:var(--muted);font-size:.82rem">
-        若出现持续停障（多条 0.0X m）：先 <code>stopTask</code>，再用摇杆转离强光方向后重发。
-        瞬时单条停障可继续观察是否自行恢复。
+        若只想先验证走廊：可先做 ①②（P3→P4→P1），到位后再决定是否折返。
       </div>
     </div>
 
@@ -161,10 +155,9 @@
       <div>🟣 路标 (08)　🟠 巡检 (01)　🔵 充电 (03)</div>
       <div style="margin-top:6px;color:var(--muted);font-size:.85rem">
         细红折线：平台虚拟墙<br/>
-        ⚪ 白点：狗当前在 P3（起点=终点）<br/>
-        🟢 绿实线：①去程 P3→P4<br/>
-        🔵 青实线：②回程 P4→P3<br/>
-        淡蓝带：1.0 m 通行走廊（最窄净空 1.80 m）<br/>
+        ⚪ 白点：狗在 P3（起点=终点）<br/>
+        🟢 ① P3→P4　🟠 ② P4→P1　🟣 ③ P1→P4　🔵 ④ P4→P3<br/>
+        🔴 虚线：禁止的 P3↔P1 直连（穿虚拟墙）<br/>
         🟠 橙圆：柱子 Ø1.15 m
       </div>
     </div>
@@ -175,10 +168,16 @@ const DATA = {"mapName": "2420实验室", "levelName": "智城-24楼", "mapId": 
 const PLAN = {
   pose: { x: -1.0337, y: 4.0288, thDeg: null, label: '狗 · 现在在此（蹲）' },
   pillar: { x: -0.46, y: 6.51, r: 0.575 },
-  outbound: { from: [-1.0337, 4.0288], to: [3.4161, -0.8184], dist: 6.58, done: false },
-  inbound: { from: [3.4161, -0.8184], to: [-1.0337, 4.0288], dist: 6.58, minClear: 1.80, done: false },
+  P3: [-1.0337, 4.0288],
+  P4: [3.4161, -0.8184],
+  P1: [5.0660, 4.9783],
   rejected: { from: [-1.0337, 4.0288], to: [5.0660, 4.9783] },
-  offsetM: 0.38
+  legs: [
+    { from: 'P3', to: 'P4', color: 'rgba(62,207,142,0.95)', label: '① P3→P4', labelColor: '#8fd0a8' },
+    { from: 'P4', to: 'P1', color: 'rgba(255,176,96,0.95)', label: '② P4→P1', labelColor: '#ffb060' },
+    { from: 'P1', to: 'P4', color: 'rgba(201,160,255,0.90)', label: '③ P1→P4', labelColor: '#c9a0ff', offset: -1 },
+    { from: 'P4', to: 'P3', color: 'rgba(110,200,255,0.95)', label: '④ P4→P3', labelColor: '#6ec8ff', offset: -1 }
+  ]
 };
 const img = new Image();
 img.src = "map.jpg";
@@ -210,40 +209,34 @@ function arrowHead(from, to, size) {
 }
 function drawRouteLayer() {
   if (!showRoute) return;
-  const rawA = worldToCanvas(PLAN.outbound.from[0], PLAN.outbound.from[1]);
-  const rawB = worldToCanvas(PLAN.outbound.to[0], PLAN.outbound.to[1]);
-  // 往返同线，左右各偏 offsetM 让两程都看得见
-  const dx = rawB[0] - rawA[0], dy = rawB[1] - rawA[1];
-  const L = Math.hypot(dx, dy) || 1;
-  const off = mToPx(PLAN.offsetM);
-  const nx = (-dy / L) * off, ny = (dx / L) * off;
-  const outA = [rawA[0] + nx, rawA[1] + ny], outB = [rawB[0] + nx, rawB[1] + ny];
-  const inA = [rawB[0] - nx, rawB[1] - ny], inB = [rawA[0] - nx, rawA[1] - ny];
+  const pt = (name) => worldToCanvas(PLAN[name][0], PLAN[name][1]);
 
-  // 共用走廊底色（1.0 m 宽）
+  // 禁止直连：红虚线 P3↔P1
+  const rjA = worldToCanvas(PLAN.rejected.from[0], PLAN.rejected.from[1]);
+  const rjB = worldToCanvas(PLAN.rejected.to[0], PLAN.rejected.to[1]);
   ctx.save();
-  ctx.strokeStyle = 'rgba(110,200,255,0.16)';
-  ctx.lineWidth = mToPx(1.0); ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(rawA[0], rawA[1]); ctx.lineTo(rawB[0], rawB[1]); ctx.stroke();
+  ctx.setLineDash([6, 6]);
+  ctx.strokeStyle = 'rgba(255,80,80,0.75)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(rjA[0], rjA[1]); ctx.lineTo(rjB[0], rjB[1]); ctx.stroke();
   ctx.restore();
+  ctx.fillStyle = '#ff7a7a'; ctx.font = 'bold 11px sans-serif';
+  ctx.fillText('禁止直连', (rjA[0]+rjB[0])/2 - 24, (rjA[1]+rjB[1])/2 - 6);
 
-  // ① 去程 P3→P4：绿实线
-  ctx.strokeStyle = 'rgba(62,207,142,0.95)'; ctx.lineWidth = 3.5;
-  ctx.beginPath(); ctx.moveTo(outA[0], outA[1]); ctx.lineTo(outB[0], outB[1]); ctx.stroke();
-  ctx.fillStyle = 'rgba(62,207,142,0.95)';
-  arrowHead(outA, outB, 13);
-  const omx = (outA[0] + outB[0]) / 2, omy = (outA[1] + outB[1]) / 2;
-  ctx.fillStyle = '#8fd0a8'; ctx.font = 'bold 12px sans-serif';
-  ctx.fillText('①去程 6.58m', omx - 30, omy - 12);
-
-  // ② 回程 P4→P3：青实线
-  ctx.strokeStyle = 'rgba(110,200,255,0.95)'; ctx.lineWidth = 3.5;
-  ctx.beginPath(); ctx.moveTo(inA[0], inA[1]); ctx.lineTo(inB[0], inB[1]); ctx.stroke();
-  ctx.fillStyle = 'rgba(110,200,255,0.95)';
-  arrowHead(inA, inB, 13);
-  const imx = (inA[0] + inB[0]) / 2, imy = (inA[1] + inB[1]) / 2;
-  ctx.fillStyle = '#6ec8ff'; ctx.font = 'bold 12px sans-serif';
-  ctx.fillText('②回程 6.58m', imx - 30, imy + 20);
+  // 四程路线（往返同线用 offset 错开）
+  PLAN.legs.forEach((leg, idx) => {
+    const A0 = pt(leg.from), B0 = pt(leg.to);
+    const dx = B0[0]-A0[0], dy = B0[1]-A0[1], L = Math.hypot(dx,dy)||1;
+    const side = (leg.offset === -1 ? -1 : 1) * (0.22 + idx * 0.02);
+    const off = mToPx(side);
+    const nx = (-dy/L)*off, ny = (dx/L)*off;
+    const A = [A0[0]+nx, A0[1]+ny], B = [B0[0]+nx, B0[1]+ny];
+    ctx.strokeStyle = leg.color; ctx.lineWidth = 3.2;
+    ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke();
+    ctx.fillStyle = leg.color; arrowHead(A, B, 12);
+    const mx = (A[0]+B[0])/2, my = (A[1]+B[1])/2;
+    ctx.fillStyle = leg.labelColor; ctx.font = 'bold 12px sans-serif';
+    ctx.fillText(leg.label, mx - 28, my + (leg.offset === -1 ? 14 : -10));
+  });
 
   // 柱子
   const pc = worldToCanvas(PLAN.pillar.x, PLAN.pillar.y);
@@ -253,7 +246,7 @@ function drawRouteLayer() {
   ctx.fillStyle = '#ffb08a'; ctx.font = 'bold 11px sans-serif';
   ctx.fillText('柱子 Ø1.15m', pc[0] + mToPx(PLAN.pillar.r) + 4, pc[1] - 4);
 
-  // 狗当前位置（起点 = 终点 = P3）
+  // 狗
   const dp = worldToCanvas(PLAN.pose.x, PLAN.pose.y);
   ctx.beginPath(); ctx.arc(dp[0], dp[1], 8, 0, Math.PI * 2);
   ctx.fillStyle = '#ffffff'; ctx.fill();
