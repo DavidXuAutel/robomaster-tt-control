@@ -103,62 +103,54 @@
   </section>
   <aside>
     <div class="warn">
-      🔴 <b>本次头号风险：遥控器 START 会让派单空转</b><br/>
-      11:32 与 11:36 两程狗<b>一步没动</b>，平台却双双记
-      <code>result=成功</code>（183 s / 63 s）。原因判断：遥控器进入
-      START 运动模式后持续下发摇杆量（=0），机载按「遥控优先」仲裁，
-      把平台速度压成 0。<br/>
-      ⛔ <b>所以：遥控器要开机（保住 L2+B 急停），但绝不能按 START。</b>
-      保险起见先把遥控器<b>重新开关机一次</b>清掉模式，再用
-      <code>L2+A</code> 让狗站起。
+      🎯 <b>本次目标：完整走通 P3→P4→P3，并抓停障告警现场证据</b><br/>
+      中午结论：停障告警常是<strong>假读数</strong>（阳光打爆深度相机 → 前方 0.02~0.03 m），
+      平台仍可能记 <code>result=成功</code>。现在约 13:46，光照与中午不同，
+      正好做对照。<br/>
+      请你走的过程中留意两件事：①狗面朝哪里（是否对窗）
+      ②报停障时前方是否真有物体。
     </div>
     <div class="warn">
-      ⚠️ <b>「成功」不等于走到了</b>——平台不校验位移。本次判成败只认
-      两条：肉眼看狗真的走 + 大屏图标真的移动。<code>result</code> 字段仅作参考。
+      ⚠️ <b>「成功」不等于走到了</b>——判成败只认肉眼位移 + 大屏图标移动。<br/>
+      ⛔ 遥控器开机保 <code>L2+B</code>，<b>不按 START</b>。<br/>
+      ⛔ 到站后用 Body Control 摇杆转朝向，<b>不要用 Redirect</b>。
     </div>
 
-    <h2>当前状态（11:50 查）</h2>
+    <h2>当前状态（13:46 查）</h2>
     <div class="card recommend">
-      <div>狗在：<strong>P3 充电点</strong>（蓝点，蹲姿趴在充电板上）</div>
-      <div style="margin-top:4px"><code>(-1.03, 4.03)</code> · state=02 空闲 · bat <b>31%</b></div>
+      <div>狗在：<strong>P3 充电点</strong>（应在充电板上）</div>
+      <div style="margin-top:4px"><code>(-1.03, 4.03)</code> · state=02 空闲 · bat <b>53%</b></div>
       <div style="margin-top:4px;color:var(--muted);font-size:.82rem">
-        自 11:27 起未移动过；11:32 / 11:36 两个「成功」任务均为空转。
+        中午充电约 30%→53%；最近停障告警停在 12:15，此后无新告警。
       </div>
     </div>
 
     <h2>拟走路线（完整往返）</h2>
     <ol class="plan">
-      <li><span style="color:#8fd0a8"><b>① 去程</b></span>：P3 充电点 → P4 紫路标<br/>
+      <li><span style="color:#8fd0a8"><b>① 去程</b></span>：P3 → P4 紫路标<br/>
         <code>pointsId</code>：<code>202607311046080138B2000397</code><br/>
-        距离 <b>6.58 m</b> · 参考耗时 92 s（11:01 真实走通那次）</li>
+        6.58 m · 参考耗时 85~92 s</li>
       <li><span style="color:#6ec8ff"><b>② 回程</b></span>：P4 → P3 充电点<br/>
         <code>pointsId</code>：<code>202607311045581570B2000397</code><br/>
-        距离 <b>6.58 m</b> · 最窄净空 <b>1.80 m</b> · 参考耗时 63 s</li>
-      <li><b>③ 朝向复位</b>：到站后用<b>平台 Body Control 摇杆</b>转到原朝向
-        （相机里柱子居中≈1.6 m 即复位）。<br/>
-        <span style="color:#ff9c6e">不要用 Redirect——那改的是定位估计，不是狗的真实朝向，
-        会污染刚校准好的定位。</span></li>
-      <li><b>④ 蹲下</b>：Body Control 点 <code>Crouch</code>；充电仍需人工确认</li>
+        6.58 m · 最窄净空 1.80 m · 参考耗时 63~85 s</li>
+      <li><b>③ 到站</b>：Body Control 转到<strong>面朝空旷/背光</strong> → <code>Crouch</code></li>
+      <li><b>④ 复盘</b>：对照告警时间戳 vs 你观察到的朝向/前方物体</li>
     </ol>
 
     <h2>执行顺序</h2>
     <ol class="plan">
-      <li><b>门禁</b>：遥控器关机→开机（清 START 模式）→ <code>L2+A</code> 站起 →
-        <b>不按 START</b> → 主人说「好了」</li>
-      <li>我发去程单 → 派单后 <b>90 s 内狗必须可见地动</b>，否则我立刻
-        <code>stopTask</code> 中止，不再空烧 183 s<br/>
-        <span style="color:var(--muted);font-size:.82rem">
-        参考：11:01 那次真实走通全程只用 92 s，所以 90 s 没动基本可判失败。</span></li>
-      <li>到 P4 → 主人肉眼确认到位 → 我发回程单（同样 90 s 位移门禁）</li>
-      <li>回到 P3 → Body Control 转朝向 → <code>Crouch</code></li>
-      <li>兜底：遥控 <b>L2+B</b> 软趴 · 大屏 🔴STOP · 平台 <code>stopTask</code></li>
+      <li><code>L2+A</code> 站起 · <b>不按 START</b> · 说「好了」</li>
+      <li>我发去程 → <b>90 s 位移门禁</b>；全程实时刷告警表</li>
+      <li>你确认到 P4 → 我发回程（同样门禁 + 告警监控）</li>
+      <li>你确认回 P3 → 转朝向 → Crouch</li>
+      <li>兜底：遥控 <b>L2+B</b> · 大屏 🔴STOP · <code>stopTask</code></li>
     </ol>
 
     <div class="card">
-      <div style="color:#ff9c6e"><b>电量 31%，这是本次唯一硬约束</b></div>
+      <div style="color:#8fd0a8"><b>电量 53% · 够跑完整往返</b></div>
       <div style="margin-top:4px;color:var(--muted);font-size:.82rem">
-        两程合计约 13 m / 3 分钟行走。若门禁反复失败，先停下查原因，
-        不要靠反复派单试错——每次空转 183 s 都在白耗电。
+        若出现持续停障（多条 0.0X m）：先 <code>stopTask</code>，再用摇杆转离强光方向后重发。
+        瞬时单条停障可继续观察是否自行恢复。
       </div>
     </div>
 
