@@ -103,41 +103,62 @@
   </section>
   <aside>
     <div class="warn">
-      🔴 <b>自动蹲下充电：做不到</b><br/>
-      平台充电房配置为空（<code>getRoomPageDate total=0</code>），
-      P3「充电点」只是点位标记，没有关联充电桩。
-      <code>One Key Return</code> 最多把狗走回 P3，<b>不会真的充上电</b>。<br/>
-      ✅ 可做：P4 → P3 拓扑派单回充电点坐标；到站后可在 Body Control 手动点 <code>Crouch</code>。<br/>
-      ⚠️ 电量现约 <b>35%</b>，站姿仍在放电；回桩后需人工插线才续航。
+      🔴 <b>本次头号风险：遥控器 START 会让派单空转</b><br/>
+      11:32 与 11:36 两程狗<b>一步没动</b>，平台却双双记
+      <code>result=成功</code>（183 s / 63 s）。原因判断：遥控器进入
+      START 运动模式后持续下发摇杆量（=0），机载按「遥控优先」仲裁，
+      把平台速度压成 0。<br/>
+      ⛔ <b>所以：遥控器要开机（保住 L2+B 急停），但绝不能按 START。</b>
+      保险起见先把遥控器<b>重新开关机一次</b>清掉模式，再用
+      <code>L2+A</code> 让狗站起。
+    </div>
+    <div class="warn">
+      ⚠️ <b>「成功」不等于走到了</b>——平台不校验位移。本次判成败只认
+      两条：肉眼看狗真的走 + 大屏图标真的移动。<code>result</code> 字段仅作参考。
     </div>
 
-    <h2>当前状态（11:17 查）</h2>
+    <h2>当前状态（11:50 查）</h2>
     <div class="card recommend">
-      <div>狗在：<strong>路标点 P4</strong>（右下/最下角紫点）</div>
-      <div style="margin-top:4px"><code>(3.42, -0.82)</code> · state=02 空闲 · bat≈35%</div>
+      <div>狗在：<strong>P3 充电点</strong>（蓝点，蹲姿趴在充电板上）</div>
+      <div style="margin-top:4px"><code>(-1.03, 4.03)</code> · state=02 空闲 · bat <b>31%</b></div>
       <div style="margin-top:4px;color:var(--muted);font-size:.82rem">
-        第一次测试已完成 P3→P4；本次只补「回程」即完成往返。
+        自 11:27 起未移动过；11:32 / 11:36 两个「成功」任务均为空转。
       </div>
     </div>
 
-    <h2>拟走路线（往返）</h2>
+    <h2>拟走路线（完整往返）</h2>
     <ol class="plan">
-      <li><span style="color:#8fd0a8">① 去程（已完成）</span>：P3 充电点 → P4 紫路标，6.58 m</li>
-      <li><span style="color:#6ec8ff"><b>② 回程（待确认执行）</b></span>：P4 → P3<br/>
+      <li><span style="color:#8fd0a8"><b>① 去程</b></span>：P3 充电点 → P4 紫路标<br/>
+        <code>pointsId</code>：<code>202607311046080138B2000397</code><br/>
+        距离 <b>6.58 m</b> · 参考耗时 92 s（11:01 真实走通那次）</li>
+      <li><span style="color:#6ec8ff"><b>② 回程</b></span>：P4 → P3 充电点<br/>
         <code>pointsId</code>：<code>202607311045581570B2000397</code><br/>
-        距离 <b>6.58 m</b> · 最窄净空 <b>1.80 m</b>（与去程同线反向）</li>
-      <li><b>③ 到站后</b>：Body Control 手动 <code>Crouch</code>（恢复蹲姿）</li>
-      <li><b>④ 充电</b>：人工插线（平台无法自动对桩）</li>
+        距离 <b>6.58 m</b> · 最窄净空 <b>1.80 m</b> · 参考耗时 63 s</li>
+      <li><b>③ 朝向复位</b>：到站后用<b>平台 Body Control 摇杆</b>转到原朝向
+        （相机里柱子居中≈1.6 m 即复位）。<br/>
+        <span style="color:#ff9c6e">不要用 Redirect——那改的是定位估计，不是狗的真实朝向，
+        会污染刚校准好的定位。</span></li>
+      <li><b>④ 蹲下</b>：Body Control 点 <code>Crouch</code>；充电仍需人工确认</li>
     </ol>
 
-    <h2>执行顺序（确认后）</h2>
+    <h2>执行顺序</h2>
     <ol class="plan">
-      <li>大屏确认狗图标仍在 P4、定位未飘</li>
-      <li>主人回「GO」→ <code>sendNavigate</code> 到充电点 P3</li>
-      <li>盯任务：state 02→03→02；肉眼看狗是否贴到蓝色充电点</li>
-      <li>到站后手动 Crouch；插线充电</li>
-      <li>兜底：遥控 <b>L2+B</b> · 摇杆 🔴STOP · 平台 <code>stopTask</code></li>
+      <li><b>门禁</b>：遥控器关机→开机（清 START 模式）→ <code>L2+A</code> 站起 →
+        <b>不按 START</b> → 主人说「好了」</li>
+      <li>我发去程单 → 派单后 <b>30 s 内狗必须可见地动</b>，否则我立刻
+        <code>stopTask</code> 中止，不再空烧 183 s</li>
+      <li>到 P4 → 主人肉眼确认到位 → 我发回程单（同样 30 s 位移门禁）</li>
+      <li>回到 P3 → Body Control 转朝向 → <code>Crouch</code></li>
+      <li>兜底：遥控 <b>L2+B</b> 软趴 · 大屏 🔴STOP · 平台 <code>stopTask</code></li>
     </ol>
+
+    <div class="card">
+      <div style="color:#ff9c6e"><b>电量 31%，这是本次唯一硬约束</b></div>
+      <div style="margin-top:4px;color:var(--muted);font-size:.82rem">
+        两程合计约 13 m / 3 分钟行走。若门禁反复失败，先停下查原因，
+        不要靠反复派单试错——每次空转 183 s 都在白耗电。
+      </div>
+    </div>
 
     <h2>点位列表</h2>
     <div id="list"></div>
@@ -146,9 +167,10 @@
       <div>🟣 路标 (08)　🟠 巡检 (01)　🔵 充电 (03)</div>
       <div style="margin-top:6px;color:var(--muted);font-size:.85rem">
         细红折线：平台虚拟墙<br/>
-        ⚪ 白点：狗当前在 P4<br/>
-        🟢 绿虚线：去程 P3→P4（已完成）<br/>
-        🔵 青实线+走廊：回程 P4→P3（待执行）<br/>
+        ⚪ 白点：狗当前在 P3（起点=终点）<br/>
+        🟢 绿实线：①去程 P3→P4<br/>
+        🔵 青实线：②回程 P4→P3<br/>
+        淡蓝带：1.0 m 通行走廊（最窄净空 1.80 m）<br/>
         🟠 橙圆：柱子 Ø1.15 m
       </div>
     </div>
@@ -157,11 +179,12 @@
 <script>
 const DATA = {"mapName": "2420实验室", "levelName": "智城-24楼", "mapId": "202607291108383260B2000397", "floor": "1", "origin": [-16.700000762939453, -16.80000114440918], "resolution": 0.10000000149011612, "width": 418, "height": 555, "updated": "2026-07-31 11:07:57", "walls": [{"id": 1785294852216, "group": "wall", "type": "line", "points": [{"x": "4.4001", "y": "-2.7750"}, {"x": "7.3001", "y": "8.6500"}, {"x": "10.2002", "y": "19.9501"}, {"x": "4.2749", "y": "21.3250"}, {"x": "2.1500", "y": "13.7500"}, {"x": "5.8500", "y": "12.7001"}, {"x": "3.5500", "y": "4.1001"}, {"x": "-1.6251", "y": "5.5250"}, {"x": "-2.2501", "y": "3.2500"}, {"x": "-2.9500", "y": "0.7751"}, {"x": "-0.0005", "y": "-0.0750"}, {"x": "-0.3504", "y": "-1.3501"}, {"x": "4.3501", "y": "-2.7749"}], "radius": 0}], "points": [{"n": 1, "pointsId": "202607311046161810B2000397", "pointsName": "快捷打点-1785465976345", "pointsType": "01", "typeLabel": "巡检点", "x": 5.065974674838529, "y": 4.978290045855459, "th": 0.0, "planRole": "alt"}, {"n": 2, "pointsId": "202607311046240382B2000397", "pointsName": "快捷打点-1785465983955", "pointsType": "01", "typeLabel": "巡检点", "x": 7.132928674857798, "y": 13.111709925658147, "th": 0.0, "planRole": "alt"}, {"n": 3, "pointsId": "202607311045581570B2000397", "pointsName": "快捷打点-1785465958663", "pointsType": "03", "typeLabel": "充电点", "x": -1.0337400626370776, "y": 4.028827954520665, "th": 0.0, "planRole": "recommend"}, {"n": 4, "pointsId": "202607311046080138B2000397", "pointsName": "快捷打点-1785465968487", "pointsType": "08", "typeLabel": "路标点", "x": 3.416051836013157, "y": -0.8184258801885669, "th": 0.0, "planRole": "start"}, {"n": 5, "pointsId": "202607311046347938B2000397", "pointsName": "快捷打点-1785465994716", "pointsType": "08", "typeLabel": "路标点", "x": 4.200097960778134, "y": 16.287699999395215, "th": 0.0, "planRole": "candidate"}, {"n": 6, "pointsId": "202607311046294811B2000397", "pointsName": "快捷打点-1785465988928", "pointsType": "08", "typeLabel": "路标点", "x": 8.51581333783703, "y": 19.3218918092863, "th": 0.0, "planRole": "candidate"}, {"n": 7, "pointsId": "202607311046328796B2000397", "pointsName": "快捷打点-1785465992346", "pointsType": "08", "typeLabel": "路标点", "x": 5.2159676601862905, "y": 20.071467144550617, "th": 0.0, "planRole": "candidate"}], "notes": ["坐标来自平台 mapSpot≈ROS origin+resolution；Y 默认按图像向下翻转。", "若点位整体上下颠倒，点「翻转 Y」再对现场。", "接口曾回报：机器人当前未加载地图——阶段 B 前请在大屏加载/重定位「2420实验室」。"]};
 const PLAN = {
-  pose: { x: 3.4161, y: -0.8184, thDeg: null },
+  pose: { x: -1.0337, y: 4.0288, thDeg: null, label: '狗 · 现在在此（蹲）' },
   pillar: { x: -0.46, y: 6.51, r: 0.575 },
-  outbound: { from: [-1.0337, 4.0288], to: [3.4161, -0.8184], dist: 6.58, done: true },
+  outbound: { from: [-1.0337, 4.0288], to: [3.4161, -0.8184], dist: 6.58, done: false },
   inbound: { from: [3.4161, -0.8184], to: [-1.0337, 4.0288], dist: 6.58, minClear: 1.80, done: false },
-  rejected: { from: [-1.0337, 4.0288], to: [5.0660, 4.9783] }
+  rejected: { from: [-1.0337, 4.0288], to: [5.0660, 4.9783] },
+  offsetM: 0.38
 };
 const img = new Image();
 img.src = "map.jpg";
@@ -193,36 +216,40 @@ function arrowHead(from, to, size) {
 }
 function drawRouteLayer() {
   if (!showRoute) return;
-  const outA = worldToCanvas(PLAN.outbound.from[0], PLAN.outbound.from[1]);
-  const outB = worldToCanvas(PLAN.outbound.to[0], PLAN.outbound.to[1]);
-  const inA = worldToCanvas(PLAN.inbound.from[0], PLAN.inbound.from[1]);
-  const inB = worldToCanvas(PLAN.inbound.to[0], PLAN.inbound.to[1]);
+  const rawA = worldToCanvas(PLAN.outbound.from[0], PLAN.outbound.from[1]);
+  const rawB = worldToCanvas(PLAN.outbound.to[0], PLAN.outbound.to[1]);
+  // 往返同线，左右各偏 offsetM 让两程都看得见
+  const dx = rawB[0] - rawA[0], dy = rawB[1] - rawA[1];
+  const L = Math.hypot(dx, dy) || 1;
+  const off = mToPx(PLAN.offsetM);
+  const nx = (-dy / L) * off, ny = (dx / L) * off;
+  const outA = [rawA[0] + nx, rawA[1] + ny], outB = [rawB[0] + nx, rawB[1] + ny];
+  const inA = [rawB[0] - nx, rawB[1] - ny], inB = [rawA[0] - nx, rawA[1] - ny];
 
-  // 去程（已完成）：绿虚线
+  // 共用走廊底色（1.0 m 宽）
   ctx.save();
-  ctx.setLineDash([8, 6]);
-  ctx.strokeStyle = 'rgba(62,207,142,0.55)'; ctx.lineWidth = 2.5;
-  ctx.beginPath(); ctx.moveTo(outA[0], outA[1]); ctx.lineTo(outB[0], outB[1]); ctx.stroke();
-  ctx.restore();
-  ctx.fillStyle = 'rgba(62,207,142,0.7)';
-  arrowHead(outA, outB, 11);
-  const omx = (outA[0] + outB[0]) / 2, omy = (outA[1] + outB[1]) / 2;
-  ctx.fillStyle = '#8fd0a8'; ctx.font = 'bold 11px sans-serif';
-  ctx.fillText('①去程 已完成', omx - 36, omy - 10);
-
-  // 回程走廊 + 青实线
-  ctx.save();
-  ctx.strokeStyle = 'rgba(110,200,255,0.20)';
+  ctx.strokeStyle = 'rgba(110,200,255,0.16)';
   ctx.lineWidth = mToPx(1.0); ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(inA[0], inA[1]); ctx.lineTo(inB[0], inB[1]); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(rawA[0], rawA[1]); ctx.lineTo(rawB[0], rawB[1]); ctx.stroke();
   ctx.restore();
+
+  // ① 去程 P3→P4：绿实线
+  ctx.strokeStyle = 'rgba(62,207,142,0.95)'; ctx.lineWidth = 3.5;
+  ctx.beginPath(); ctx.moveTo(outA[0], outA[1]); ctx.lineTo(outB[0], outB[1]); ctx.stroke();
+  ctx.fillStyle = 'rgba(62,207,142,0.95)';
+  arrowHead(outA, outB, 13);
+  const omx = (outA[0] + outB[0]) / 2, omy = (outA[1] + outB[1]) / 2;
+  ctx.fillStyle = '#8fd0a8'; ctx.font = 'bold 12px sans-serif';
+  ctx.fillText('①去程 6.58m', omx - 30, omy - 12);
+
+  // ② 回程 P4→P3：青实线
   ctx.strokeStyle = 'rgba(110,200,255,0.95)'; ctx.lineWidth = 3.5;
   ctx.beginPath(); ctx.moveTo(inA[0], inA[1]); ctx.lineTo(inB[0], inB[1]); ctx.stroke();
   ctx.fillStyle = 'rgba(110,200,255,0.95)';
   arrowHead(inA, inB, 13);
   const imx = (inA[0] + inB[0]) / 2, imy = (inA[1] + inB[1]) / 2;
   ctx.fillStyle = '#6ec8ff'; ctx.font = 'bold 12px sans-serif';
-  ctx.fillText('②回程 待执行 6.58m', imx - 52, imy + 16);
+  ctx.fillText('②回程 6.58m', imx - 30, imy + 20);
 
   // 柱子
   const pc = worldToCanvas(PLAN.pillar.x, PLAN.pillar.y);
@@ -232,13 +259,13 @@ function drawRouteLayer() {
   ctx.fillStyle = '#ffb08a'; ctx.font = 'bold 11px sans-serif';
   ctx.fillText('柱子 Ø1.15m', pc[0] + mToPx(PLAN.pillar.r) + 4, pc[1] - 4);
 
-  // 狗当前在 P4
+  // 狗当前位置（起点 = 终点 = P3）
   const dp = worldToCanvas(PLAN.pose.x, PLAN.pose.y);
   ctx.beginPath(); ctx.arc(dp[0], dp[1], 8, 0, Math.PI * 2);
   ctx.fillStyle = '#ffffff'; ctx.fill();
   ctx.strokeStyle = '#0a0e13'; ctx.lineWidth = 2; ctx.stroke();
   ctx.fillStyle = '#fff'; ctx.font = 'bold 11px sans-serif';
-  ctx.fillText('狗 · 现在在此', dp[0] + 12, dp[1] + 4);
+  ctx.fillText(PLAN.pose.label, dp[0] + 12, dp[1] + 4);
 }
 function draw() {
   const cssW = Math.min(720, (cv.parentElement.clientWidth || 720));
