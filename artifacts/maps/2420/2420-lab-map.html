@@ -145,9 +145,11 @@
     <ol class="plan">
       <li><b>门禁</b>：遥控器关机→开机（清 START 模式）→ <code>L2+A</code> 站起 →
         <b>不按 START</b> → 主人说「好了」</li>
-      <li>我发去程单 → 派单后 <b>30 s 内狗必须可见地动</b>，否则我立刻
-        <code>stopTask</code> 中止，不再空烧 183 s</li>
-      <li>到 P4 → 主人肉眼确认到位 → 我发回程单（同样 30 s 位移门禁）</li>
+      <li>我发去程单 → 派单后 <b>90 s 内狗必须可见地动</b>，否则我立刻
+        <code>stopTask</code> 中止，不再空烧 183 s<br/>
+        <span style="color:var(--muted);font-size:.82rem">
+        参考：11:01 那次真实走通全程只用 92 s，所以 90 s 没动基本可判失败。</span></li>
+      <li>到 P4 → 主人肉眼确认到位 → 我发回程单（同样 90 s 位移门禁）</li>
       <li>回到 P3 → Body Control 转朝向 → <code>Crouch</code></li>
       <li>兜底：遥控 <b>L2+B</b> 软趴 · 大屏 🔴STOP · 平台 <code>stopTask</code></li>
     </ol>
