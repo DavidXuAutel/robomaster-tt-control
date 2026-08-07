@@ -16,6 +16,7 @@ goal 错配——这是最危险的失败模式。
 
 from __future__ import annotations
 
+import importlib
 import logging
 import time
 from dataclasses import dataclass, replace
@@ -34,11 +35,38 @@ API_BODY_HEIGHT = 1013
 API_SPEED_LEVEL = 1015
 API_MOVE_TO_POS = 1036
 
+# 机型能力表（2026-08-07 实测 unitree_sdk2py）。
+# 同一个 api_id 在不同机型上未必存在：go2 的 SportClient 没有
+# SwitchGait / BodyHeight / MoveToPos，且 1036 在 go2 上是 Heart 而非 MoveToPos。
+# 所以 api_id 常量只在本表声明的机型范围内有效，禁止跨机型复用同一个客户端。
+_COMMON_API_METHODS: Dict[int, str] = {
+    API_DAMP: "Damp",
+    API_STOP_MOVE: "StopMove",
+    API_STAND_UP: "StandUp",
+    API_STAND_DOWN: "StandDown",
+    API_MOVE: "Move",
+    API_SPEED_LEVEL: "SpeedLevel",
+}
+FAMILY_API_METHODS: Dict[str, Dict[int, str]] = {
+    "b2": {
+        **_COMMON_API_METHODS,
+        API_SWITCH_GAIT: "SwitchGait",
+        API_BODY_HEIGHT: "BodyHeight",
+        API_MOVE_TO_POS: "MoveToPos",
+    },
+    "go2": dict(_COMMON_API_METHODS),
+}
+# 本项目目标机是 B2；默认值不许是「手边最容易跑通的那个」。
+DEFAULT_FAMILY = "b2"
+
 TOPIC_SPORT_STATE = "rt/sportmodestate"
 TOPIC_LOW_STATE = "rt/lowstate"
 
 # D0 / v3.1 §3-D0：>500ms 无样本 → dds_stale
 DDS_STALE_S = 0.5
+
+# v2 §数据契约要求的本体感受全量，缺一项 D3 训练数据就不完整
+_MOTOR_FIELDS = ("q", "dq", "ddq", "tau_est", "temperature", "lost", "mode")
 
 
 def _as_float_list(value: Any, *, n: int) -> List[float]:
@@ -56,54 +84,81 @@ def _as_float_list(value: Any, *, n: int) -> List[float]:
     return out
 
 
-def sport_state_to_dict(msg: Any, *, t_mono: Optional[float] = None) -> Dict[str, Any]:
-    """把 SportModeState IDL / Mapping 归一成 read() 契约字典。"""
-    if isinstance(msg, Mapping):
-        pos = _as_float_list(msg.get("position"), n=3)
-        vel = _as_float_list(msg.get("velocity"), n=3)
-        yaw_speed = float(msg.get("yaw_speed", 0.0))
-        imu = msg.get("imu_state") or {}
-        rpy = _as_float_list(
-            imu.get("rpy") if isinstance(imu, Mapping) else getattr(imu, "rpy", None),
-            n=3,
-        )
-    else:
-        pos = _as_float_list(getattr(msg, "position", None), n=3)
-        vel = _as_float_list(getattr(msg, "velocity", None), n=3)
-        yaw_speed = float(getattr(msg, "yaw_speed", 0.0) or 0.0)
-        imu = getattr(msg, "imu_state", None)
-        rpy = _as_float_list(getattr(imu, "rpy", None) if imu is not None else None, n=3)
+def _field_reader(obj: Any) -> Callable[..., Any]:
+    """IDL 对象与 Mapping 共用的取值器，省掉两套分支。"""
+    if isinstance(obj, Mapping):
+        return obj.get
+    return lambda key, default=None: getattr(obj, key, default)
+
+
+def _stamp_to_seconds(stamp: Any) -> Optional[float]:
+    """`TimeSpec_(sec, nanosec)` → 秒。
+
+    这是**设备钟**，与 `t_mono`（本机接收时刻）不同源，两者相减没有意义。
+    它的用途是看自身增量：设备钟不涨而本机钟在涨 ⇒ 狗侧卡住而非网络丢包。
+    """
+    if stamp is None:
+        return None
+    get = _field_reader(stamp)
+    sec, nsec = get("sec"), get("nanosec")
+    if sec is None and nsec is None:
+        return None
+    return float(sec or 0) + float(nsec or 0) * 1e-9
+
+
+def _imu_to_dict(imu: Any) -> Dict[str, Any]:
+    """IMU 全量。只留 rpy 会让 D3 拿不到角速度/加速度，无法复原姿态动力学。"""
+    get = _field_reader(imu) if imu is not None else (lambda key, default=None: default)
     return {
-        "position": pos,
-        "velocity": vel,
-        "yaw_speed": yaw_speed,
-        "imu_state": {"rpy": rpy},
+        "rpy": _as_float_list(get("rpy"), n=3),
+        "quaternion": _as_float_list(get("quaternion"), n=4),
+        "gyroscope": _as_float_list(get("gyroscope"), n=3),
+        "accelerometer": _as_float_list(get("accelerometer"), n=3),
+        "temperature": float(get("temperature") or 0.0),
+    }
+
+
+def sport_state_to_dict(msg: Any, *, t_mono: Optional[float] = None) -> Dict[str, Any]:
+    """把 SportModeState IDL / Mapping 归一成 read() 契约字典。
+
+    `t_mono` 是接收时刻单调钟，`t_device` 是报文自带的设备钟（`stamp`）。
+    """
+    get = _field_reader(msg)
+    return {
+        "position": _as_float_list(get("position"), n=3),
+        "velocity": _as_float_list(get("velocity"), n=3),
+        "yaw_speed": float(get("yaw_speed", 0.0) or 0.0),
+        "imu_state": _imu_to_dict(get("imu_state")),
+        "foot_force": _as_float_list(get("foot_force"), n=4),
+        "t_device": _stamp_to_seconds(get("stamp")),
         "t_mono": float(t_mono if t_mono is not None else time.monotonic()),
     }
 
 
 def low_state_to_dict(msg: Any, *, t_mono: Optional[float] = None) -> Dict[str, Any]:
-    """把 LowState IDL / Mapping 归一成 read() 契约字典。"""
-    if isinstance(msg, Mapping):
-        bms = msg.get("bms_state") or {}
-        soc = bms.get("soc") if isinstance(bms, Mapping) else getattr(bms, "soc", None)
-        motor = msg.get("motor_state")
-    else:
-        bms = getattr(msg, "bms_state", None)
-        soc = getattr(bms, "soc", None) if bms is not None else None
-        motor = getattr(msg, "motor_state", None)
+    """把 LowState IDL / Mapping 归一成 read() 契约字典。
+
+    保留 v2 §数据契约点名的本体感受全量：12 电机的 q/dq/ddq/tau_est/温度/丢包、
+    IMU 全量、足底力。`tick` 是设备侧 ms 计数器，**不是墙钟**。
+    """
+    get = _field_reader(msg)
+    bms = get("bms_state")
+    soc = _field_reader(bms)("soc") if bms is not None else None
+    motor = get("motor_state")
     motor_out: List[Dict[str, float]] = []
-    if motor is not None:
-        for m in list(motor)[:12]:
-            if isinstance(m, Mapping):
-                motor_out.append({"q": float(m.get("q", 0.0))})
-            else:
-                motor_out.append({"q": float(getattr(m, "q", 0.0) or 0.0)})
+    for m in list(motor or [])[:12]:
+        get_m = _field_reader(m)
+        motor_out.append({f: float(get_m(f, 0.0) or 0.0) for f in _MOTOR_FIELDS})
     while len(motor_out) < 12:
-        motor_out.append({"q": 0.0})
+        motor_out.append({f: 0.0 for f in _MOTOR_FIELDS})
+    tick = get("tick")
     return {
         "bms_state": {"soc": float(soc) if soc is not None else 0.0},
         "motor_state": motor_out,
+        "imu_state": _imu_to_dict(get("imu_state")),
+        "foot_force": _as_float_list(get("foot_force"), n=4),
+        "foot_force_est": _as_float_list(get("foot_force_est"), n=4),
+        "tick": int(tick) if tick is not None else None,
         "t_mono": float(t_mono if t_mono is not None else time.monotonic()),
     }
 
@@ -136,6 +191,8 @@ class SportPose:
     vy: float
     vyaw: float
     t_mono: float
+    # 设备钟（`stamp`）。与 t_mono 不同源，只用来区分狗侧卡顿与网络断流。
+    t_device: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -246,21 +303,21 @@ class LoopbackTransport:
         if not self.connected or not self.state_available:
             return None
         now = time.monotonic()
+        # 走与 DDS 同一套转换器，保证两种传输层的 read() 契约逐字段一致——
+        # 否则 loopback 全绿而真机缺字段，测试等于没测。
         if topic == TOPIC_SPORT_STATE:
             p = self._pose
-            return {
-                "position": [p.x, p.y, p.z],
-                "velocity": [p.vx, p.vy, 0.0],
-                "yaw_speed": p.vyaw,
-                "imu_state": {"rpy": [0.0, 0.0, p.yaw]},
-                "t_mono": now if p.t_mono == 0.0 else float(p.t_mono),
-            }
+            return sport_state_to_dict(
+                {
+                    "position": [p.x, p.y, p.z],
+                    "velocity": [p.vx, p.vy, 0.0],
+                    "yaw_speed": p.vyaw,
+                    "imu_state": {"rpy": [0.0, 0.0, p.yaw]},
+                },
+                t_mono=now if p.t_mono == 0.0 else float(p.t_mono),
+            )
         if topic == TOPIC_LOW_STATE:
-            return {
-                "bms_state": {"soc": 88},
-                "motor_state": [{"q": 0.0}] * 12,
-                "t_mono": now,
-            }
+            return low_state_to_dict({"bms_state": {"soc": 88}}, t_mono=now)
         return None
 
     def sample_age_s(self, topic: str) -> Optional[float]:
@@ -293,24 +350,31 @@ class DdsTransport:
         *,
         interface: str,
         domain_id: int = 0,
+        family: str = DEFAULT_FAMILY,
         subscriber_factory: Optional[Callable[[str, Any], Any]] = None,
     ) -> None:
+        family = str(family).lower()
+        if family not in FAMILY_API_METHODS:
+            raise ValueError(
+                f"未知机型 family={family!r}；已实测能力表的机型：{sorted(FAMILY_API_METHODS)}"
+            )
         self.interface = interface
         self.domain_id = int(domain_id)
+        self.family = family
         self._subscriber_factory = subscriber_factory
         self._sport: Any = None
         self._subs: Dict[str, Any] = {}
         self._latest: Dict[str, Dict[str, Any]] = {}
 
-    def connect(self) -> None:
+    def _connect_subscribers(self) -> None:
+        """只做状态订阅：初始化 DDS 域 + 挂两个 subscriber，不碰命令通道。"""
         try:
             from unitree_sdk2py.core.channel import (  # type: ignore[import-not-found]
                 ChannelFactoryInitialize,
                 ChannelSubscriber,
             )
-            from unitree_sdk2py.go2.sport.sport_client import (  # type: ignore[import-not-found]
-                SportClient,
-            )
+
+            # go2 / b2 / b2w 共用 unitree_go IDL；g1 走 unitree_hg，不在本表内。
             from unitree_sdk2py.idl.unitree_go.msg.dds_ import (  # type: ignore[import-not-found]
                 LowState_,
                 SportModeState_,
@@ -320,16 +384,47 @@ class DdsTransport:
                 "缺少 unitree_sdk2py。真机联调前先在狗侧网络的机器上安装官方 SDK，"
                 "不要退化成 loopback 假数据。"
             ) from exc
-        ChannelFactoryInitialize(self.domain_id, self.interface)
-        self._sport = SportClient()
-        self._sport.Init()
+        # interface 留空＝交给 CYCLONEDDS_URI 决定，避免把网卡名硬写进代码
+        if self.interface:
+            ChannelFactoryInitialize(self.domain_id, self.interface)
+        else:
+            ChannelFactoryInitialize(self.domain_id)
         factory = self._subscriber_factory or (
             lambda topic, msg_type: ChannelSubscriber(topic, msg_type)
         )
         self._start_subscriber(TOPIC_SPORT_STATE, SportModeState_, sport_state_to_dict, factory)
         self._start_subscriber(TOPIC_LOW_STATE, LowState_, low_state_to_dict, factory)
+
+    def connect_readonly(self) -> None:
+        """只读订阅：不创建 SportClient，因此 `call()` 恒拒绝。
+
+        v3.4：厂商未书面批准前 DDS 命令通道默认禁用，而只读遥测另行申请。
+        两者必须能分开启用，所以这条路径在架构上是常设的，不是测试便利。
+        """
+        self._connect_subscribers()
         logger.info(
-            "DDS 已连接 interface=%s domain=%s topics=%s",
+            "DDS 只读已连接（无命令通道）family=%s domain=%s topics=%s",
+            self.family,
+            self.domain_id,
+            sorted(self._subs),
+        )
+
+    def connect(self) -> None:
+        try:
+            sport_mod = importlib.import_module(
+                f"unitree_sdk2py.{self.family}.sport.sport_client"
+            )
+        except ImportError as exc:  # pragma: no cover — SDK 版本不含该机型
+            raise UnitreeNotConnected(
+                f"unitree_sdk2py 没有 {self.family} 的 sport_client。"
+                "机型客户端不可互相顶替（go2 与 b2 的 API 面不同），先对齐 SDK 版本。"
+            ) from exc
+        self._connect_subscribers()
+        self._sport = sport_mod.SportClient()
+        self._sport.Init()
+        logger.info(
+            "DDS 已连接 family=%s interface=%s domain=%s topics=%s",
+            self.family,
             self.interface,
             self.domain_id,
             sorted(self._subs),
@@ -364,29 +459,33 @@ class DdsTransport:
         self._subs.clear()
         self._latest.clear()
 
-    def call(self, api_id: int, payload: Mapping[str, Any]) -> Any:  # pragma: no cover
+    def call(self, api_id: int, payload: Mapping[str, Any]) -> Any:
+        """按机型能力表派发。表里没有的 api_id 干净报错，不落到 AttributeError。"""
         if self._sport is None:
             raise UnitreeNotConnected("DdsTransport 未 connect")
-        sport = self._sport
+        api_id = int(api_id)
+        method_name = FAMILY_API_METHODS[self.family].get(api_id)
+        if method_name is None:
+            raise UnitreeError(
+                f"机型 {self.family} 不支持 api_id={api_id}（见 FAMILY_API_METHODS）"
+            )
+        method = getattr(self._sport, method_name, None)
+        if not callable(method):
+            raise UnitreeError(
+                f"{self.family} 的 SportClient 没有 {method_name}()；"
+                "SDK 版本与能力表不一致，先对齐版本再上真机。"
+            )
         if api_id == API_MOVE:
-            return sport.Move(payload["vx"], payload["vy"], payload["vyaw"])
-        if api_id == API_STOP_MOVE:
-            return sport.StopMove()
-        if api_id == API_DAMP:
-            return sport.Damp()
-        if api_id == API_STAND_UP:
-            return sport.StandUp()
-        if api_id == API_STAND_DOWN:
-            return sport.StandDown()
+            return method(payload["vx"], payload["vy"], payload["vyaw"])
         if api_id == API_SWITCH_GAIT:
-            return sport.SwitchGait(int(payload["gait"]))
+            return method(int(payload["gait"]))
         if api_id == API_BODY_HEIGHT:
-            return sport.BodyHeight(float(payload["height"]))
+            return method(float(payload["height"]))
         if api_id == API_SPEED_LEVEL:
-            return sport.SpeedLevel(int(payload["level"]))
+            return method(int(payload["level"]))
         if api_id == API_MOVE_TO_POS:
-            return sport.MoveToPos(payload["x"], payload["y"], payload["yaw"])
-        raise UnitreeError(f"未支持的 api_id={api_id}")
+            return method(payload["x"], payload["y"], payload["yaw"])
+        return method()
 
     def read(self, topic: str) -> Optional[Mapping[str, Any]]:
         sample = self._latest.get(topic)
@@ -463,6 +562,7 @@ class UnitreeSportClient:
             vy=float(vel[1]),
             vyaw=float(msg.get("yaw_speed", 0.0)),
             t_mono=t_mono,
+            t_device=msg.get("t_device"),
         )
 
     def get_low_state(self) -> Optional[Mapping[str, Any]]:

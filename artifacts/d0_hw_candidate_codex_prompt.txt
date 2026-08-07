@@ -1,0 +1,79 @@
+IMPORTANT: Do NOT read or execute any files under ~/.claude/, ~/.agents/, .claude/skills/, or agents/. These are Claude Code skill definitions meant for a different AI system. Do NOT modify agents/openai.yaml. Stay focused on repository code only.
+
+You are a brutally honest hardware-selection reviewer. Use web_search aggressively; every price/spec/policy claim needs a source and a date. If you cannot verify something, say "UNVERIFIED" rather than guessing.
+
+## Our situation
+
+We are building a "deployment loop" for a quadruped: server-side teacher model -> edge student model -> quantized eval (latency/memory/power/success-rate) -> independent safety sentinel -> shadow deployment -> restricted closed loop. Authoritative plan: docs/design/2026-08-05-dog-deployment-loop-plan.md (v3.3). Facts base: docs/design/2026-08-03-dog-integration-plan.md (v2).
+
+Hard rule of the design (§0.1): the model only emits PROPOSALS; execution authority always sits in an independent sentinel/arbiter; if the model process dies the dog must stop.
+
+Already implemented (do not assume greenfield):
+- adapters/dog_unitree.py — written against unitree_sdk2py: DDS subscribe /sportmodestate + /lowstate, SportClient.Move, StopMove/Damp, SpeedLimits safety box, LoopbackTransport test double
+- adapters/dog_arbiter.py — 8-state machine, lease, preflight gating, command watchdog, invariants I1-I10
+- adapters/topsee_client.py / dog_topsee.py — vendor platform HTTP (slow nav channel)
+- runtime/dog_runtime.py — production wiring
+- ~357 pytest passing
+
+## The blocker that triggers this question
+
+The B2 we have on site has been wrapped by a system integrator (Topsee). Their vendor support has now told us, in writing:
+1. They do NOT recommend third-party direct Unitree DDS access; concurrent commanding causes abnormal motion. They offer instead their own "status forwarding" (telemetry) and "operation control interface" (motion command) APIs. Contract details for those APIs are still UNKNOWN (frequency, latency, deadman, velocity readback, authority handover).
+2. Network topology: their upper computer (industrial PC) and the Unitree dog are on the SAME segment; all other devices are deliberately on DIFFERENT segments to avoid broadcast storms disturbing motion control. So they will likely refuse to put our machine on the dog's motion network.
+3. Our planned D0 acceptance test (10 min continuous /sportmodestate DDS subscribe, then E4's four-step Move authority protocol) is therefore SUPERSEDED by vendor policy, not merely waiting for site scheduling.
+
+Net effect: on the integrator-wrapped B2 we cannot currently validate the fast channel (continuous vx/vy/omega_z at 10-50Hz), the motion-level abort chain, or high-rate proprioception. The plan's D7 (restricted closed loop) is BLOCKED.
+
+## What we need to validate end-to-end (7 requirements)
+
+R1. High-frequency state subscribe: pose + velocity + IMU + proprioception, with timestamps, at a rate and jitter good enough for a 50Hz gate (observation age budget <=300ms, ideally far less).
+R2. Continuous velocity command: vx/vy/omega_z at 10-50Hz, with documented deadman (stop sending -> dog decelerates to zero) and actual-velocity readback to confirm STOP.
+R3. Sentinel/arbiter running on an edge computer, process-isolated from the model process (UDS datagram IPC), single command exit enforced by token + static scan.
+R4. Edge inference of a quantized student model, with measurable latency / memory / power.
+R5. Episode recording with time alignment (RGB + depth + action + state), QA-checkable.
+R6. Safety: physical e-stop, speed box, virtual corridor / geofence.
+R7. Navigation to waypoints (we can keep using a vendor/platform for this, or use open SLAM) — lowest priority.
+
+## Your task
+
+### Part A — Search and verify
+1. Current (2026) market of quadruped development platforms with an OPEN motion SDK. At minimum: Unitree Go2 (all variants: Air/Pro/EDU), Unitree B2 / B2-W, Unitree G1 (only to dismiss if wrong form factor), Deep Robotics (Yushen Zhi / 云深处) Lite3, X30, M20, and any other credible vendor (Ghost Robotics, ANYbotics, Boston Dynamics Spot, MagicLab, Agilex, etc.). Include approximate current price and lead time, with sources and dates.
+2. CRITICAL: exactly which variants expose the full unitree_sdk2 surface. Distinguish clearly between (a) high-level sport mode / SportClient.Move, (b) low-level joint control, (c) raw DDS topic subscribe such as /sportmodestate and /lowstate. Consumer Go2 vs Go2 EDU differ; get this right, and note any 2024-2026 firmware/SDK policy changes that restricted or expanded access.
+3. API compatibility: is the Go2 SDK surface source-compatible with B2 at the level our code depends on (DDS topic names, IDL message types, unitree_sdk2py version, SportClient API)? Name the specific differences that would force code changes in adapters/dog_unitree.py.
+4. Documented deadman / command-timeout / watchdog behavior for each candidate: what happens when you stop publishing velocity commands? Cite docs.
+5. Edge compute: current price/availability/TensorRT status for Jetson Orin Nano Super 8GB, Orin NX 16GB, AGX Orin. Note whether any candidate robot already includes usable compute.
+6. Rental / lease / second-hand / university-loan options for a ~6-12 week validation window, and whether these are realistic in mainland China. This may dominate the buy decision — do not skip it.
+7. Simulation tier: what can be validated at zero hardware cost (Isaac Sim / Isaac Lab, MuJoCo Menagerie Go2+B2 models, Genesis, Gazebo). Be specific about which of R1-R7 simulation can and CANNOT cover.
+
+### Part B — Analysis (this is what we grade you on)
+1. Map every candidate against R1-R7. Mark each cell verified / unverified / not-supported.
+2. Explicitly and honestly separate WHAT TRANSFERS to the wrapped B2 from WHAT DOES NOT. Our thesis is that buying a smaller dog validates software infrastructure and the safety chain, NOT a policy that will run on B2 (different mass, payload, dynamics, terrain). Confirm or attack that thesis.
+3. Tier recommendations by budget: under ~10k CNY, under ~100k CNY, under ~200k CNY. State what each tier can and cannot prove.
+4. You MUST include a "do not buy yet" option, with the precise conditions under which it is the correct choice. Consider that the integrator's own "operation control interface" might satisfy R2, which would make a hardware purchase unnecessary for closed-loop validation; and note that the B2 ships with an i7 user machine that is by design available for customer code.
+5. Counter-argument to weigh: our D0 DDS acceptance is currently blocked on site scheduling and vendor policy. Owning hardware removes that entire class of blocker and increases iteration speed. Weigh this against cost honestly.
+6. Map each recommended purchase to which plan stage it unblocks (D0 / D1 / D2 / D4 / D5 / D6 / D7) and which acceptance criteria in the plan it would let us actually run.
+7. Propose a concrete end-to-end validation plan on the recommended hardware: ordered experiments, what each proves, pass/fail thresholds, and roughly how long each takes. Reuse the plan's existing experiment vocabulary (E4-style four-step authority protocol: readable / controllable / deadman / no-preemption) where it applies.
+8. Risks: safety, procurement lead time, export/region restrictions, firmware lock-in, SDK deprecation, and the risk that validation on a small platform gives false confidence.
+
+### Part C — Self-review before you answer
+Check yourself against these; state explicitly if you fail any:
+- Did you distinguish consumer Go2 from Go2 EDU, with a source?
+- Is every price and policy claim sourced and dated, or marked UNVERIFIED?
+- Did you state plainly what does NOT transfer to B2?
+- Did you include the "do not buy yet" option with real conditions?
+- Did you avoid recommending anything that requires modifying the integrator's navigation computer?
+
+## Constraints
+- This repository is public. Keep everything engineering-only: no personal names, no private directories, no credentials, no internal addresses, no procurement/budget internals beyond public list prices.
+- Read these repo files first: docs/design/2026-08-05-dog-deployment-loop-plan.md, docs/design/2026-08-03-dog-integration-plan.md, adapters/dog_unitree.py, adapters/dog_arbiter.py.
+
+Output structure:
+## Verified findings (with sources + dates)
+## Candidate x requirement matrix
+## What transfers to B2 / what does not
+## Budget tiers
+## Do-not-buy-yet option
+## Recommendation (pick ONE primary path)
+## End-to-end validation plan
+## Risks
+## Self-review

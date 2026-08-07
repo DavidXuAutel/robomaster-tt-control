@@ -1,0 +1,387 @@
+SESSION_ID:019fdb44-7ce6-7ad3-8b2a-2cf4340dcdaa
+I’ll first extract the exact stage gates, acceptance criteria, and adapter dependencies from the four repository files. Then I’ll verify the hardware/SDK/price/rental claims against dated primary sources where possible, marking anything else `UNVERIFIED`. I’ll keep this entirely read-only and won’t touch the integrator’s computer or repository files.
+[codex ran] /bin/zsh -lc "wc -l docs/design/2026-08-05-dog-deployment-loop-plan.md docs/design/2026-08-03-dog-integration-plan.md adapters/dog_unitree.py adapters/dog_arbiter.py && sed -n '1,260p' docs/design/2026-08-05-dog-deployment-loop-plan.md && sed -n '1,260p' docs/design/2026-08-03-dog-integration-plan.md && sed -n '1,320p' adapters/dog_unitree.py && sed -n '1,360p' adapters/dog_arbiter.py"
+[codex ran] /bin/zsh -lc "rg -n '"'^### D[0-8]|''^'"\\*\\*验收\\*\\*|"'^## [0-9]|''^### 6'"\\.|E4|D7|I[1-9]|I10|TOPIC_|unitree_sdk2py|ChannelSubscriber|SportClient|Move\\(|StopMove|Damp|cmd_watchdog|watchdog|class DdsTransport|def connect|def move|def stop|def damp|def get_' docs/design/2026-08-05-dog-deployment-loop-plan.md docs/design/2026-08-03-dog-integration-plan.md adapters/dog_unitree.py adapters/dog_arbiter.py"
+[codex ran] /bin/zsh -lc "sed -n '185,365p' docs/design/2026-08-05-dog-deployment-loop-plan.md && sed -n '39,160p' docs/design/2026-08-03-dog-integration-plan.md && sed -n '200,275p' docs/design/2026-08-03-dog-integration-plan.md && sed -n '377,475p' docs/design/2026-08-03-dog-integration-plan.md && sed -n '282,573p' adapters/dog_unitree.py && sed -n '350,536p' adapters/dog_arbiter.py"
+The repository confirms the decisive distinction: D0’s real criterion is a 10-minute state stream, while D7 requires all four E4 properties—readable, controllable, deadman, and no-preemption. The adapter is specifically coupled to `unitree_sdk2py.go2.sport.SportClient`, `unitree_go` IDLs, and `rt/sportmodestate`/`rt/lowstate`; “supports Unitree SDK2” is therefore not enough unless those exact dependencies line up.
+A critical compatibility finding: the current adapter is only portable across Go2/B2 for the narrow `Move`/`StopMove`/`Damp` subset. Current `unitree_sdk2py` has separate `go2.sport.SportClient` and `b2.sport.SportClient` classes; B2 exposes `SwitchGait`, `BodyHeight`, and `MoveToPos`, while the current Go2 Python client does not expose those same methods (API 1036 is `Heart` there). The shared `unitree_go` IDLs and state topics transfer, but the full facade does not.
+[codex ran] /bin/zsh -lc "sed -n '1,170p' adapters/dog_unitree.py && sed -n '282,402p' adapters/dog_unitree.py"
+## Verified findings (with sources + dates)
+
+All web sources were checked on **2026-08-07**. Older published prices or policies are identified by their publication date. Anything not supported by a usable source is marked **UNVERIFIED**.
+
+### Bottom line
+
+Your thesis is substantially correct but needs one correction:
+
+> A smaller open robot can validate the software deployment loop and logical safety architecture. It cannot validate the wrapped B2’s motion abort chain, authority handover, stopping behavior, dynamics, perception distribution, or D7 acceptance.
+
+Therefore my primary recommendation is **do not buy a robot yet**. Give Topsee a strict, ten-business-day API acceptance gate on the B2’s existing i7 user computer. If that gate fails, the least-wrong fallback purchase is a **Go2 EDU**, not Air, Pro, X, G1, X30, M20, or Spot.
+
+A Go2 EDU would buy iteration speed and remove vendor scheduling from surrogate development, but it would **not unblock authoritative B2 D7**.
+
+### Repository findings that materially change the decision
+
+The current `adapters/dog_unitree.py` is not a complete R1 implementation:
+
+- It subscribes to native `rt/sportmodestate` and `rt/lowstate`.
+- It replaces the robot’s source timestamp with local `time.monotonic()`.
+- It keeps sport position, planar velocity, yaw rate, and IMU RPY, but discards accelerometer/gyro data.
+- It keeps only joint position `q`, discarding `dq`, estimated torque, temperature, loss counters, and other proprioception.
+
+So even on an open Go2 EDU, R1 needs adapter work before it is satisfied.
+
+The current transport also imports:
+
+```python
+unitree_sdk2py.go2.sport.sport_client.SportClient
+```
+
+That is correct for Go2 but not B2. The current official Python SDK has a separate B2 client at `unitree_sdk2py.b2.sport.sport_client.SportClient`. `Move`, `StopMove`, and `Damp` have compatible signatures, but the complete API is not identical: B2 exposes `SwitchGait`, `BodyHeight`, and `MoveToPos`; the current Go2 Python client lacks those same methods and uses API 1036 for `Heart`. See the current [Go2 client](https://raw.githubusercontent.com/unitreerobotics/unitree_sdk2_python/master/unitree_sdk2py/go2/sport/sport_client.py) and [B2 client](https://raw.githubusercontent.com/unitreerobotics/unitree_sdk2_python/master/unitree_sdk2py/b2/sport/sport_client.py), checked 2026-08-07.
+
+Required compatibility changes would therefore include:
+
+1. Parameterize robot family and import the correct SportClient.
+2. Add an explicit per-family capability table instead of assuming one API surface.
+3. Preserve the device timestamp alongside receipt monotonic time.
+4. Preserve IMU acceleration/angular velocity and motor `q/dq/tau/temp/lost`.
+5. Check RPC return codes; `Move` is a no-reply call in both current clients.
+6. Pin a tested SDK commit and firmware combination.
+
+The positive part is that Go2, B2, B2-W and Go2-W use the same `unitree_go` low-level IDLs, while G1 uses `unitree_hg`. Unitree’s simulator documents that distinction explicitly. [Unitree MuJoCo](https://github.com/unitreerobotics/unitree_mujoco), checked 2026-08-07.
+
+### Exactly which Unitree variants are open
+
+| Variant | Sport `Move` | Low-level joint control | Raw DDS state | Verdict |
+|---|---:|---:|---:|---|
+| Go2 Air | No official secondary-development support | No | No supported access | Do not buy |
+| Go2 Pro | No official secondary-development support | No | No supported access | Do not buy |
+| Go2 X | Partial secondary development | UNVERIFIED | UNVERIFIED | Too ambiguous |
+| Go2 EDU | Yes | Yes | Yes | Valid surrogate |
+| Stock B2 | Yes | Yes | Yes | Closest target, far over budget |
+| Stock B2-W | Likely B2 Sport service; exact public statement **UNVERIFIED** | Yes, shared `unitree_go` surface | Yes | Quote/test first |
+| Wrapped B2 | Direct access prohibited by integrator policy | Prohibited | Prohibited | Vendor API only |
+| G1 base | No secondary development | No supported SDK development | No | Wrong platform |
+| G1 EDU | Uses G1 locomotion APIs and `unitree_hg`, not Go2/B2 surface | Yes, different stack | Yes, different IDL | Wrong form factor/API |
+
+The current official Go2 comparison marks Air and Pro with no secondary development, X as partial, and EDU as fully supported. It also lists EDU depth camera and optional Orin compute. [Unitree Go2 comparison](https://www.unitree.com/cn/go2/), checked 2026-08-07.
+
+Do not treat unofficial Air/Pro jailbreaks as procurement-grade access. A community-maintained firmware matrix reports that DDS unlocking changes across firmware releases and requires modified packages/root access. That is not an official entitlement and creates warranty, safety, and update risk. [RoboVerse firmware report](https://wiki.theroboverse.com/en/firmware/secondary_development), updated 2025-11-04. I found no verified official 2024–2026 policy expansion granting full SDK2 access to Air or Pro.
+
+### Market, price and lead-time findings
+
+| Candidate | Approximate price | Lead time | Honest assessment |
+|---|---|---|---|
+| Go2 Air | ¥9,997 incl. tax | Global store says within one month for consumer Go2 | Cheap but no official SDK; irrelevant |
+| Go2 Pro | ¥18,600 incl. tax | Global store currently says backordered | No official SDK; irrelevant |
+| Go2 X | ¥29,999 incl. tax | **UNVERIFIED** | Partial development is insufficient |
+| Go2 EDU | Officially quote-only; public Chinese listings cluster near ¥79,999–¥89,999 | Mainland lead **UNVERIFIED**; UK seller states 4–5 weeks | Best surrogate |
+| B2 / B2-W | Official international store displays US$100,000; actual configured quote **UNVERIFIED** | **UNVERIFIED** | Closest target, outside all stated tiers |
+| G1 base | ¥85,000 incl. tax; explicitly no secondary development | Backordered internationally; delivery on request | Humanoid and wrong API |
+| G1 EDU | Quote-only | **UNVERIFIED** | Wrong form factor |
+| Deep Robotics Lite3 Basic | US$2,890 | Official page estimates shipment within 30 working days | Interesting low-cost alternative; adapter rewrite |
+| Deep Robotics X30 | Public comparison in Unitree’s 2026 filing gives ¥380,000 starting price; current quote **UNVERIFIED** | **UNVERIFIED** | Industrial platform, no public contract sufficient for R1/R2 |
+| Deep Robotics M20 | Mainland price **UNVERIFIED**; overseas offers roughly US$54k–61k | Reseller says 4–6 weeks; mainland **UNVERIFIED** | Expensive, wheel-leg dynamics differ |
+| MagicDog EDU | ¥49,999 published in a July 2025 brand catalogue | Current lead **UNVERIFIED** | Credible open SDK, but deadman/timing unknown |
+| AgiBot D1 EDU | Exact EDU price **UNVERIFIED**; public family starting price was ¥13,000 | **UNVERIFIED** | Good public SDK documentation, but missing R1/R2 guarantees |
+| Boston Dynamics Spot | Current official price quote-only; US$74,500 was the 2020 launch price, not a verified 2026 quote | Mainland lead **UNVERIFIED** | Excellent API, commercially irrational here |
+| ANYmal | Current official quote **UNVERIFIED**; a 2025 academic comparison estimated about US$150k | **UNVERIFIED** | Enterprise inspection API, not a cheap development dog |
+| Ghost Vision 60 | Price, mainland availability and full SDK terms **UNVERIFIED** | **UNVERIFIED** | Export/procurement risk; reject |
+| AgileX | No current standalone AgileX quadruped found; its published quadruped integration uses a Unitree Go2-W | **UNVERIFIED** | Not an independent alternative |
+
+Sources:
+
+- Go2 prices and variant capabilities: [Unitree China product table](https://www.unitree.com/cn/go2/), checked 2026-08-07.
+- Go2 global availability: [Unitree official shop](https://shop.unitree.com/products/unitree-go2), checked 2026-08-07.
+- Go2 EDU Chinese listing: [Tsinghua technology mall listing](https://kjsc.sysc.tsinghua.edu.cn/mall-view/product/detail?skuid=154438), checked 2026-08-07; listing shows no sales, so this is not a confirmed transaction price.
+- Go2 EDU UK lead time: [SCAN UK](https://www.scan.co.uk/products/unitree-go2-edu), checked 2026-08-07.
+- B2/B2-W price and B2 i7 configuration: [Unitree shop](https://shop.unitree.com/) and [B2 specifications](https://www.unitree.com/b2/), checked 2026-08-07.
+- G1 price and policy: [Unitree G1 China page](https://www.unitree.com/cn/g1/) and [official shop](https://shop.unitree.com/collections/humanoid-robot/products/unitree-g1), checked 2026-08-07.
+- Lite3 price/lead: [Deep Robotics Lite3](https://www.deeprobotics.cn/en/index/lite3.html), checked 2026-08-07.
+- X30 comparison price: [Unitree 2026 filing](https://static.sse.com.cn/stock/disclosure/announcement/c/202603/002178_20260320_OE27.pdf), published 2026-03-20.
+- MagicDog: [MagicLab SDK statement](https://www.magiclab.top/opensource), checked 2026-08-07; [2025 brand catalogue](https://www.worldrobotconference.com/profile/robot/download/2025/07/11/%E9%AD%94%E6%B3%95%E5%8E%9F%E5%AD%90%E5%93%81%E7%89%8C%E6%89%8B%E5%86%8C-%E4%B8%AD%E6%96%87-FINAL_20250711140734A016.pdf).
+- AgiBot: [D1 EDU/Ultra SDK guide](https://www.agibot.com.cn/filepage/324/detail/38.html), published 2026-03-31.
+- Spot API and current sales status: [Spot product page](https://bostondynamics.com/products/spot/) checked 2026-08-07; [2020 launch price](https://spectrum.ieee.org/boston-dynamics-spot-robot-dog-now-available).
+- ANYmal API: [ANYmal API/SDK overview](https://developer.siemens.com/anybotics/overview.html), checked 2026-08-07.
+
+### Deadman/watchdog evidence
+
+This is the largest unresolved procurement risk.
+
+- **Unitree Go2/B2/B2-W:** `Move` and `StopMove` are documented, but I found no authoritative robot-side timeout specifying what happens when `Move` calls cease. **UNVERIFIED.** A third-party abstraction claims a one-second velocity duration, but that is not sufficient evidence for native `SportClient.Move`.
+- **Lite3 low-level joint SDK:** verified: after more than one second without SDK commands, the underlying controller retrieves authority, enters damping protection, and later clears commands. This statement applies to the low-level MotionSDK, not necessarily the high-level `/cmd_vel` bridge. [Lite3 MotionSDK](https://github.com/DeepRoboticsLab/Lite3_MotionSDK), checked 2026-08-07.
+- **AgiBot D1 EDU:** control handover between SDK and remote is documented, including prohibition on simultaneous control, but command-loss timeout and actual base-velocity feedback are **UNVERIFIED**. [D1 guide](https://www.agibot.com.cn/filepage/324/detail/38.html), published 2026-03-31.
+- **MagicDog:** high-level, low-level, sensor, state and navigation services are public; command timeout is **UNVERIFIED**. [MagicLab open-source centre](https://www.magiclab.top/opensource), checked 2026-08-07.
+- **Spot:** verified. Velocity commands require an end time, and its E-stop endpoint has a configurable challenge/response timeout that brings the robot to a safe state before cutting power. [Robot command API](https://dev.bostondynamics.com/python/bosdyn-client/src/bosdyn/client/robot_command.html) and [E-stop protocol](https://dev.bostondynamics.com/protos/bosdyn/api/proto_reference.html), Spot SDK 5.1.4, checked 2026-08-07.
+- **X30, M20, ANYmal, Ghost:** exact velocity deadman behavior **UNVERIFIED**.
+
+No Unitree purchase should be approved without either a written timeout guarantee or an accepted E4 deadman test on the exact serial number and firmware.
+
+### Edge compute
+
+- Orin Nano Super 8GB: official headline price US$249, up to 67 TOPS, 7–25W. [NVIDIA Orin page](https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/), checked 2026-08-07.
+- Orin NX 16GB: NVIDIA pages currently conflict between US$699 and US$999 volume pricing; current single-unit mainland price is **UNVERIFIED**. Up to 157 TOPS; Super mode can require a carrier/thermal solution supporting 40W. [NVIDIA Jetson modules](https://developer.nvidia.com/embedded/jetson-modules) and [FAQ](https://developer.nvidia.com/embedded/faq), checked 2026-08-07.
+- AGX Orin 64GB developer kit: official pages conflict between US$1,999 and US$3,499; the US marketplace showed US$3,499 and out of stock. Current mainland price/stock is **UNVERIFIED**. Power range is 15–60W. [AGX marketplace](https://marketplace.nvidia.com/en-us/enterprise/robotics-edge/jetson-agx-orin-developer-kit/), checked 2026-08-07.
+- TensorRT support is current: JetPack 6.2.2 includes TensorRT 10.3; JetPack 7.2 lists TensorRT 10.16.2 and Orin-family support. [JetPack 6.2.2](https://developer.nvidia.com/embedded/jetpack-sdk-622) and [JetPack downloads](https://developer.nvidia.com/embedded/jetpack/downloads), checked 2026-08-07.
+- Orin production modules are listed through January 2032. [NVIDIA lifecycle](https://developer.nvidia.com/embedded/lifecycle), checked 2026-08-07.
+
+The B2 already includes an i7 explicitly designated for user development and optionally supports up to three Orin NX modules. That makes buying compute before inventorying the existing B2 poor sequencing. [B2 specification](https://www.unitree.com/b2/), checked 2026-08-07.
+
+Do not upgrade JetPack or install anything on the B2’s i5 platform/navigation machine.
+
+### Rental, lease, used and university access in mainland China
+
+Commercial rentals are real, but development access is not established. A February 2026 Chinese report listed Go2-X, Go2-Pro and Lite3 rentals starting at ¥78/day. Those are predominantly event/demo rentals; the listing does not establish EDU firmware, Ethernet/DDS access, custom code permission, or insurance for closed-loop experiments. [Chinese rental-market report](https://tidenews.com.cn/news.html?id=3380215), published 2026-02.
+
+For a 6–12 week engineering rental, require all of these in writing:
+
+- Exact EDU/developer variant and serial number.
+- Firmware version frozen for the rental.
+- Permission for SDK/DDS or the named vendor API.
+- Permission to connect an external edge computer and run repeated motion tests.
+- E-stop/remote, batteries, charger and safety frame.
+- Damage/consumables terms covering controlled research use.
+- Replacement SLA.
+- Pre-delivery R1 and E4 demonstration.
+
+No public mainland rental meeting those conditions was verified. Therefore **development-capable rental availability is UNVERIFIED**.
+
+University inventory clearly exists—public records show Chinese institutions purchasing Go2 EDU and universities operating Lite3—but I found no public external loan scheme. A loan is realistic only through an existing institutional collaboration and equipment-liability process; an open 6–12 week university loan programme is **UNVERIFIED**.
+
+Second-hand Go2 EDU pricing and availability are **UNVERIFIED**. Do not buy used unless payment is conditional on a 30-minute DDS/RPC acceptance test, firmware/serial verification, battery health report, and confirmation that it is truly EDU rather than an Air/Pro with unsupported modifications.
+
+### Simulation tier
+
+- Unitree’s own MuJoCo simulator supports Go2, B2 and B2-W models plus `LowCmd`, `LowState`, and `SportModeState` over SDK2-compatible DDS. It explicitly says the current simulator is primarily low-level and does not emulate the complete high-level Sport service. [Unitree MuJoCo](https://github.com/unitreerobotics/unitree_mujoco), checked 2026-08-07.
+- MuJoCo Menagerie includes Go2 but not B2; model fidelity is not guaranteed and its own documentation says quality varies. [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie), checked 2026-08-07.
+- Isaac Lab includes Go2 and Spot velocity-tracking environments; B2 is not in its built-in list. [Isaac Lab robots](https://isaac-sim.github.io/IsaacLab/) and [environments](https://isaac-sim.github.io/IsaacLab/develop/source/overview/environments.html), checked 2026-08-07.
+- Genesis has a Go2 RL environment but no verified B2 deployment contract. [Genesis release notes](https://github.com/Genesis-Embodied-AI/genesis-world/blob/main/RELEASE.md), checked 2026-08-07.
+- Official Unitree Gazebo support is low-level joint simulation and explicitly does not provide built-in high-level walking control. [Unitree ROS/Gazebo](https://github.com/unitreerobotics/unitree_ros), checked 2026-08-07.
+
+At zero robot cost, simulation can validate R3, most of D2a, D4 functional correctness, D5’s full fault matrix, and virtual R6/R7 logic. It cannot validate robot/network timing, actual deadman, actual stopping distance, power, thermal behavior, physical e-stop, real sensor synchronization, authority contention or success rate.
+
+## Candidate x requirement matrix
+
+`V` = documented capability exists, though your acceptance test still must run.  
+`U` = incomplete or UNVERIFIED.  
+`N` = not supported or wrong platform.
+
+| Candidate | R1 state | R2 velocity/deadman | R3 sentinel | R4 edge inference | R5 episodes | R6 safety | R7 waypoints |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Wrapped B2 + Topsee APIs | U | U | V¹ | V¹ | U | U | V |
+| Stock B2 | V² | U | V | V | U | U | V |
+| Stock B2-W | U | U | V | V | U | U | V |
+| Go2 EDU | U³ | U | V | V | U | U⁴ | V |
+| Go2 X | U | U | U | V | U | U | V |
+| Go2 Air/Pro | N | N | N | U | U | U | V |
+| G1/G1 EDU | N | N | U | V | U | U | U |
+| Lite3 | U | U⁵ | V | U | U | U | U |
+| X30 | U | U | U | U | U | U | V |
+| M20 | U | U | U | U | U | U | V |
+| AgiBot D1 EDU | U | U | V | U | U | U | N |
+| MagicDog EDU | U | U | V | U | U | U | V |
+| Spot | V⁶ | V | V | U | V | V | V |
+| ANYmal | U | U | V | U | V | V | V |
+| Ghost Vision 60 | U | U | U | U | U | U | U |
+| Simulation only | U | N | V | N⁷ | U | U | V |
+
+Notes:
+
+1. Only if Topsee permits processes on the B2 i7 user machine. Never use the i5 navigation computer.
+2. Documented fields and topics exist; rate, jitter and target timestamp quality still require measurement.
+3. Go2 supplies the necessary DDS fields, but the current adapter discards source timestamps and most proprioception.
+4. The handheld remote provides an operator-triggered damping soft stop (`L2+B`); this is not evidence of a safety-rated physical power-cut E-stop. [Go2 control manual](https://docs.quadruped.de/projects/go2/html/controller.html), checked 2026-08-07.
+5. Lite3’s one-second deadman is verified only for low-level joint control, not high-level velocity.
+6. Spot’s 333Hz joint/IMU stream requires the separately licensed beta joint-control API. [Spot joint-control API](https://dev.bostondynamics.com/docs/concepts/joint_control/readme), SDK 5.1.4.
+7. Inference functionality can run in simulation, but target latency/memory/power cannot be proved without the target edge computer.
+
+R3 is primarily your own architecture; robot hardware does not prove UDS isolation, token enforcement or static-scan correctness. Hardware proves only that the isolated chain reaches a real command sink and fails safe.
+
+## What transfers to B2 / what does not
+
+### Transfers
+
+From Go2 EDU to a stock B2:
+
+- `unitree_go` IDL concepts and `rt/sportmodestate`/`rt/lowstate`.
+- The narrow `Move(vx,vy,vyaw)`, `StopMove`, `Damp` abstraction.
+- DDS freshness monitoring and data-loss injection.
+- Arbiter state machine, lease/token rules and I1–I15.
+- UDS model-to-gate isolation and model-death behavior.
+- Recorder/QA/replay schema and failure detection.
+- ONNX/TensorRT export and benchmarking methodology.
+- Speed-box, acceleration/jerk limit and virtual-corridor implementation.
+- The structure of the E4 readable/controllable/deadman/no-preemption protocol.
+
+### Does not transfer
+
+- Topsee’s status-forwarding or operation-control API.
+- Authority ownership between Topsee and the Unitree controller.
+- Target B2 deadman, StopMove/Damp effectiveness or actual stopping distance.
+- The integrator’s network segregation and broadcast restrictions.
+- B2 firmware and SDK service configuration.
+- B2’s 60kg dynamics versus Go2’s approximately 15kg mass.
+- Payload-dependent stability, slips, stair/terrain response and actuator thermal limits.
+- Camera placement, intrinsic/extrinsic calibration, occlusion and vibration.
+- B2/i7 power and thermal measurements.
+- Topsee E1/E3 semantics, mission cancellation, map alignment and navigation state.
+- The student policy’s success rate or safe operating envelope.
+- Target D7.
+
+So the thesis should be phrased as:
+
+> Go2 EDU validates the software safety architecture and development workflow. It does not validate the B2 system safety case or a B2 policy.
+
+That distinction matters because the motion-level abort chain is exactly the part now hidden behind Topsee.
+
+## Budget tiers
+
+### Under approximately ¥10,000
+
+Recommendation: **simulation plus existing compute only**.
+
+Optionally add an Orin Nano Super if a target-like TensorRT/power bench is needed; its official US price is US$249, but mainland delivered price is **UNVERIFIED**.
+
+Can prove:
+
+- D0/DDS parsing against Unitree MuJoCo’s simulated state topics.
+- D1 harness behavior.
+- D2a recorder, QA and deterministic replay.
+- D4 model export/inference functionality.
+- D5 UDS isolation, token/static scan and ≥10,000 fault injections.
+- Virtual corridor and waypoint logic.
+
+Cannot prove:
+
+- Real R1 timing.
+- Robot-side R2 deadman.
+- Physical R5 synchronization.
+- R6 physical stop.
+- B2 D0/D2b/D6/D7.
+
+A consumer Go2 Air is not a clever bargain; it is the wrong SKU.
+
+### Under approximately ¥100,000
+
+If hardware must be acquired, choose **Go2 EDU**, conditional on presale acceptance. Public Chinese pricing is near ¥79,999–¥89,999, but an official current quote and delivery date are still required.
+
+Can prove on a surrogate:
+
+- Real DDS state acquisition.
+- Go2-specific E4.
+- Real process-death and command-loss experiments.
+- D1/D2b/D3/D4/D5/D6 mechanics.
+- Go2-specific restricted corridor trials.
+
+Cannot prove:
+
+- Topsee API or authority handover.
+- Wrapped-B2 D0.
+- B2 deadman or abort chain.
+- B2 dynamics or D7.
+- A safety-rated physical E-stop unless separately engineered and approved.
+
+MagicDog EDU and Lite3 are cheaper, but both require a new adapter and have weaker public deadman/timestamp evidence. Their lower purchase price trades directly against integration uncertainty.
+
+### Under approximately ¥200,000
+
+Choose a properly configured **Go2 EDU plus dedicated edge compute, spare batteries, sensor/storage hardware and a physical test enclosure**. Do not spend the extra budget merely upgrading from Nano to AGX before profiling the student model.
+
+This tier can make R1–R6 credible on the surrogate and support extended D6/shadow trials. It still cannot buy target equivalence. B2, B2-W and X30 remain outside this tier on public pricing.
+
+## Do-not-buy-yet option
+
+This is the correct choice if all of the following can be resolved within **ten business days**:
+
+1. Topsee provides a versioned status API with pose, actual base velocity, IMU and required proprioception, device timestamps, clock definition, units and sequence numbers.
+2. It sustains either at least 50Hz delivery or produces P99 observation age ≤100ms and maximum age ≤300ms when sampled by the 50Hz gate.
+3. The operation API accepts continuous `vx/vy/omega_z` at 10–50Hz.
+4. Topsee documents command TTL/deadman, stop/deceleration behavior and actual-velocity confirmation.
+5. It provides an atomic authority-handover mechanism that rejects, rather than blends, concurrent control.
+6. The API is reachable from the B2’s **i7 user computer** or through a vendor-supported unicast route that does not attach another machine to the motion segment.
+7. Topsee permits your Gate, Arbiter, recorder and model processes on the i7 user machine, with no changes to the i5 navigation computer.
+8. A supervised E4-style acceptance test is scheduled.
+
+It is also correct to wait if D2a and D5 offline acceptance are not complete; hardware will not accelerate unfinished software gates.
+
+It becomes wrong to wait when Topsee refuses one of items 1–7, cannot schedule the acceptance within ten business days, or provides no written deadman/authority contract. At that point, Go2 EDU is rational as an iteration rig—even though it does not remove the final B2 blocker.
+
+The counterargument is real: ownership eliminates site scheduling for surrogate tests and permits daily failure injection. That can easily save weeks. But it does **not** eliminate the vendor-policy blocker on the wrapped B2. Buying a Go2 solves “we cannot iterate on any real robot,” not “we can now deploy on B2.”
+
+## Recommendation (pick ONE primary path)
+
+**Primary path: do not buy a robot for ten business days; run a contract-first acceptance on the existing wrapped B2 using only its i7 user computer and Topsee’s supported APIs.**
+
+Prepare a conditional Go2 EDU purchase, but do not release it until the vendor gate fails. If it fails, buy Go2 EDU only after the seller passes:
+
+- Exact EDU serial/firmware verification.
+- 30-minute `rt/sportmodestate` and `rt/lowstate` demonstration.
+- `Move`/`StopMove` demonstration.
+- No forced cloud dependency for local DDS.
+- Firmware-freeze and warranty terms.
+- Written acknowledgement that SDK development is supported.
+- Delivery of the handheld damping-stop controller.
+- Return/acceptance language if DDS or motion control is absent.
+
+Stage impact:
+
+| Acquisition/path | D0 | D1 | D2 | D4 | D5 | D6 | D7 |
+|---|---|---|---|---|---|---|---|
+| Topsee API on existing B2 | Unblocks after approved D0 acceptance amendment | Yes | Yes | Yes | Yes | Yes | Yes, if E4-equivalent passes |
+| Go2 EDU | Surrogate D0 only | Yes | Yes | Yes | Yes | Go2 shadow only | Go2-only D7; B2 remains blocked |
+| Jetson alone | No | Edge bench | No | TensorRT/power | Partial | No physical shadow | No |
+| Lite3/MagicDog/AgiBot | Requires new adapter and new acceptance definition | Yes | Likely | Yes | Yes | Platform-specific | Not B2 D7 |
+| Simulation | Parser/logic only | Partial | D2a | Functional | Full offline | Synthetic only | No |
+
+Because the existing plan still names DDS as the D0/D7 acceptance path, using Topsee APIs requires an explicit plan amendment. Do not quietly mark D0 green under a different transport.
+
+## End-to-end validation plan
+
+This plan assumes the primary path: wrapped B2, Topsee APIs, and your processes on the i7 user computer only.
+
+| Experiment | What it proves | Pass threshold | Time |
+|---|---|---|---:|
+| 0. Contract/schema conformance | Fields, units, clocks, sequence, transport and ownership are implementable | No unknown mandatory fields; recorded API/firmware version | 0.5–1 day |
+| 1. E4-readable | R1 and revised D0 state path | 10 min continuous; timestamp regressions 0; P99 age ≤100ms; max ≤300ms; all required fields ≥99.9% present | 2–3 h |
+| 2. Extended telemetry soak | Jitter/loss under realistic load | 2 h with recorder and inference active; stale episodes 0; measured loss <0.1% | 0.5 day |
+| 3. E4-controllable | R2 command path and actual-velocity feedback | In enclosure, command ±0.10m/s and ±0.10rad/s axes separately; correct sign; P95 issue-to-readback ≤150ms; no unintended axis >0.05 | 0.5 day |
+| 4. E4-deadman | Host/gate/network death stops the dog | Stop commands without explicit zero; speed <0.05m/s within 2s and remains there 1s; repeat 20/20 | 0.5 day |
+| 5. E4-no-preemption | Single command owner | Zero-motion ownership tests first; non-owner commands rejected deterministically. Only attempt tiny motion after vendor confirms safe arbitration; 20/20 clean handovers | 0.5–1 day |
+| 6. Model-process death | R3 iron rule | Kill model during ≤0.10m/s motion; Gate detects ≤100ms; zero enters sink ≤250ms; actual speed <0.05m/s within the accepted physical stop bound; 20/20 | 0.5 day |
+| 7. Gate/host/network death | Independent robot/vendor deadman | Kill Gate, terminate runtime and disconnect user-side API path separately; each yields confirmed stop, 10/10 per mode | 0.5–1 day |
+| 8. Single-exit enforcement | No bypass around sentinel | Token negative tests all rejected; static scan finds no unauthorized call sites; I1–I15 green | 2–4 h |
+| 9. Recorder acceptance | R5 | ≥5 episodes ×120s; monotonic timestamp violations 0; missing frames <1%; RGB/depth P99 alignment ≤50ms; pose coverage ≥95% | 1 day |
+| 10. Edge benchmark | R4 | 60min: 10Hz input, P95 ≤80ms, P99 ≤120ms, memory ≤12GB, Jetson average ≤25W if Jetson is used, zero crash | 1 day |
+| 11. Safety envelope | R6 | Speed-box violations 0; corridor exits 0; STOP readback confirmed; operator-held physical/remote stop drill succeeds 10/10 | 1 day |
+| 12. Shadow deployment | D6 | ≥2h, ≥10 route segments, availability ≥99.5%, dangerous-event recall ≥95%, false STOP ≤5% | 2–3 field days plus labeling |
+| 13. Restricted D7 | End-to-end target loop | Only after authorization: 30 A/B pairs/60 trials; zero envelope violation; B success ≥90%; intervention reduction CI lower bound >0; all episodes pass QA | 4–6 field days |
+
+For E4 no-preemption, do not reproduce the unsafe “two live controllers command motion concurrently” condition that Topsee has already prohibited. Verify atomic acquisition/rejection at zero velocity first. If the vendor cannot offer such arbitration, the result is failure, not a reason to try simultaneous live motion.
+
+If the Go2 EDU contingency is triggered, run experiments 1–12 on it. Record the results as `surrogate=go2_edu`; do not use them to close B2 E1, E3, E4 or D7.
+
+## Risks
+
+- **No documented Unitree deadman.** Empirical Go2 success would not prove B2 or Topsee behavior.
+- **Soft stop versus physical E-stop.** `L2+B` damping is useful but not a safety-rated physical disconnect. Cutting power to a standing quadruped can itself cause a hazardous fall.
+- **Authority race.** Any interface without atomic lease/handover is disqualifying.
+- **Firmware lock-in.** Freeze firmware and SDK commits. Do not accept OTA during validation. Do not assume downgrade is possible.
+- **SDK drift.** The Python SDK is source-installed, depends on CycloneDDS 0.10.2, and its Go2/B2 surfaces already differ. Pin and regression-test.
+- **Procurement delay.** Go2 EDU mainland lead time is unverified; B2/X30/M20 lead times are unverified.
+- **Regional/export restrictions.** NVIDIA lists Jetson under ECCN 5A992.c and lists China SKUs, but current stock is unverified. Spot screens purchasers against US denied-party lists; mainland delivery is unverified. [NVIDIA FAQ](https://developer.nvidia.com/embedded/faq) and [Boston Dynamics sales policy](https://bostondynamics.com/faq/), checked 2026-08-07.
+- **Rental mismatch.** A cheap Go2 Pro event rental is not a developer platform.
+- **False confidence.** The largest risk is passing thousands of Go2 tests and mentally converting that into B2 safety evidence.
+- **Compute integration.** A developer kit mounted on a moving robot needs approved power, cooling, vibration restraint and networking.
+- **Navigation distraction.** R7 should remain last; a good Nav2 demo does not prove R1/R2/R6.
+- **Plan-governance risk.** A vendor API can supersede DDS technically, but it does not supersede the written D0/D7 acceptance criteria without an approved plan revision.
+
+## Self-review
+
+- Consumer Go2 versus Go2 EDU distinguished with an official source: **PASS**.
+- Every price/policy claim sourced and dated or marked `UNVERIFIED`: **PASS**.
+- Plain statement of what does not transfer to B2: **PASS**.
+- Real do-not-buy-yet option with precise conditions: **PASS**.
+- No recommendation to modify the integrator’s navigation computer: **PASS**. All proposed B2-side work is restricted to the designated i7 user computer.
+- Failure found during review: **Unitree robot-side `SportClient.Move` deadman remains UNVERIFIED**, including on Go2 EDU and stock B2. This must remain a purchase/acceptance gate.
+
+tokens used: 7005339

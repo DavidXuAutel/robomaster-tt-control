@@ -1,0 +1,38 @@
+{
+  "tool": "dds_selfcheck",
+  "mode": "observe",
+  "scope": "只订阅外部发布端，量到帧率/间隔/字段完整性",
+  "not_in_scope": [
+    "命令通道 E4-C",
+    "deadman",
+    "真机时序"
+  ],
+  "family": "b2",
+  "domain_id": 7,
+  "seconds": 12.0,
+  "poll_hz": 300.0,
+  "sportmodestate": {
+    "frames": 1771,
+    "effective_hz": 147.58,
+    "gap_p50_ms": 7.15,
+    "gap_p99_ms": 7.99,
+    "gap_max_ms": 20.96
+  },
+  "lowstate": {
+    "frames": 1802,
+    "effective_hz": 150.17,
+    "gap_p50_ms": 7.01,
+    "gap_p99_ms": 8.01,
+    "gap_max_ms": 21.1
+  },
+  "device_stamp_count": 1771,
+  "device_stamp_distinct": 1,
+  "device_stamp_advancing": false,
+  "device_stamp_monotonic": true,
+  "missing_fields": [],
+  "notes": [
+    "device stamp 恒定（发布端未填 stamp）：t_device 校验在本次运行中无效"
+  ],
+  "ts": 1786108738.693687,
+  "subscribe_path_ok": true
+}

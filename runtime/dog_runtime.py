@@ -53,6 +53,7 @@ class DogRuntimeConfig:
     controller_force: Optional[str] = None
     dds_interface: str = "eth0"
     dds_domain_id: int = 0
+    dds_family: str = "b2"
     transport: str = "loopback"
     min_confidence: float = 0.9
     min_battery_pct: float = 25.0
@@ -221,6 +222,7 @@ class DogRuntime:
             transport: Any = DdsTransport(
                 interface=self.config.dds_interface,
                 domain_id=self.config.dds_domain_id,
+                family=self.config.dds_family,
             )
         elif mode == "loopback":
             transport = LoopbackTransport()

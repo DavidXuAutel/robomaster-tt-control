@@ -54,12 +54,24 @@
 </head>
 <body>
 
-<h1>机器狗部署闭环方案 v3.1</h1>
+<h1>机器狗部署闭环方案 v3.1<span style="font-size:.5em;font-weight:400;color:#b45309"> · 可读版，已落后于权威文档</span></h1>
 <p class="meta">
   2026-08-05 · 状态：<strong>可据此开发</strong>（其他 Agent 按 D0–D8 直接开工）· 已过 Codex 对抗评审并重写<br />
   权威 markdown：<code>docs/design/2026-08-05-dog-deployment-loop-plan.md</code>（开发以 md 为准，本页为可读版）<br />
   接替 v2（08-03）的路线图；v2 的接口事实（F/G 编号）与契约仍然有效
 </p>
+
+<div class="warn" style="border-left:6px solid #dc2626">
+  <strong>🔴 版本落后提示（2026-08-07 更新）</strong>：本页是 <strong>v3.1</strong> 的可读版，权威 markdown 已到 <strong>v3.4</strong>。
+  下列内容本页<strong>不完整或已被推翻</strong>，动手前必须回 markdown 看：
+  <ul>
+    <li><strong>集成商不建议第三方直连 DDS</strong>（md §1.5）——DDS 快通道已降为非生产路径，D0 的真机验收阻塞性质是<strong>政策</strong>而非现场排期；</li>
+    <li><strong>E4 已拆成 E4-S（只读）/ E4-C（命令）</strong>，且原第 ④ 步「平台侧同时活动时观察是否抢权」<strong>已废止</strong>——它要求两个控制器同时下发运动命令，正是集成商警告会导致运动异常的操作；</li>
+    <li><strong>「狗侧 deadman（E4③验证）」是错误陈述</strong>——该行为<strong>从未验证</strong>，且宇树无 <code>Move</code> 机器人侧超时的权威文档。本页下文凡出现此说法处均已就地标红；</li>
+    <li>到点判定改为<strong>平台 MQ 推送为主、HTTP 轮询兜底</strong>的双源交叉校验（推翻 v2 事实 F16）。</li>
+  </ul>
+  本页保留 v3.1 文字是为了不丢失术语解说；<strong>结论一律以 markdown v3.4 为准</strong>。
+</div>
 
 <div class="verdict">
   <strong>一句话</strong>：项目重心从「把狗接进任务编排」升级为「<strong>部署闭环</strong>」——
@@ -138,7 +150,7 @@ ProposalGate ┤
   <tr><td>4090 服务器</td><td>教师推理、<span class="term" tabindex="0" data-tip="伪标签＝用大模型（老师）自动给数据打的标注，代替昂贵的人工标注来训练小模型">伪标签</span>、<span class="term" tabindex="0" data-tip="蒸馏＝让小模型模仿大模型的输出来学习，把能力「浓缩」进小模型">蒸馏</span>训练、离线回归</td><td><strong>退出实时控制链</strong></td></tr>
   <tr><td>5×H100</td><td>仅当 4090 训不动时启用</td><td>不为小模型长期占用</td></tr>
 </table>
-<div class="warn">无 Jetson 时模型与哨兵同在 i7——只是<strong>进程隔离</strong>不是物理隔离，i7 整机故障是共享风险，靠狗侧 deadman（E4③验证）+ 实体急停兜底。文档里不许宣称「物理隔离」。</div>
+<div class="warn">无 Jetson 时模型与哨兵同在 i7——只是<strong>进程隔离</strong>不是物理隔离，i7 整机故障是共享风险。<span style="color:#b91c1c"><strong>【v3.4 更正】原文写「靠狗侧 deadman（E4③验证）+ 实体急停兜底」——deadman 从未验证，当前唯一兜底是实体急停/遥控器。</strong></span>文档里不许宣称「物理隔离」。</div>
 
 <h2 id="s2">2. 实验编号唯一权威表（v2 §8 编号作废）</h2>
 <p>以 <code>tools/topsee_probe.py</code> 代码编号为准（评审发现 v2 与探针两套编号互相矛盾，这里统一）。</p>
@@ -148,7 +160,7 @@ ProposalGate ┤
   <tr><td>E1</td><td><span class="tag red">动作</span></td><td>单点派单是否产生可查任务；<strong>顺带制造到达/取消/无效点位，采齐 E2 枚举</strong></td><td>D7 前（封闭场地）</td></tr>
   <tr><td>E2</td><td>只读</td><td>状态字符串取值采样——<strong>完整枚举依赖 E1 制造状态，D1 只交「已见值集合」</strong></td><td>D1 起持续</td></tr>
   <tr><td>E3</td><td>人工抓包</td><td>手动/自动巡检切换（平台无接口）</td><td>D7 前</td></tr>
-  <tr><td>E4</td><td><span class="tag red">真机·生死线</span></td><td><strong>四步协议（重设计）</strong>：①真实订阅后确认位姿流持续可读 ②围栏内极小幅 Move 并用速度回读确认执行 ③停发命令 ≥2s 确认狗自动零速（<span class="term" tabindex="0" data-tip="deadman＝失能保护：操作者/程序停止发令后设备自动停下，防止「没人管还在跑」">deadman</span> 行为）④平台侧同时活动时观察是否抢权</td><td>D7 前</td></tr>
+  <tr><td>E4</td><td><span class="tag red">真机·生死线</span></td><td><strong>四步协议（重设计）</strong>：①真实订阅后确认位姿流持续可读 ②围栏内极小幅 Move 并用速度回读确认执行 ③停发命令 ≥2s 确认狗自动零速（<span class="term" tabindex="0" data-tip="deadman＝失能保护：操作者/程序停止发令后设备自动停下，防止「没人管还在跑」">deadman</span> 行为）<span style="color:#b91c1c"><strong>④【v3.4 已废止】原为「平台侧同时活动时观察是否抢权」——该操作要求两个控制器同时下发运动命令，正是集成商警告的危险动作。新版改为：先在零速度下验证权属获取/拒绝是否原子；集成商无法提供原子交接即判 E4-C 负，不得改为「同时发试试」。E4 现已拆为 E4-S / E4-C，详见 markdown §2。</strong></span></td><td>D7 前</td></tr>
   <tr><td>E5–E10</td><td>只读</td><td>地图结构 / 气体时间格式 / 取流结构 / 会话有效期 / 告警结构 / 电量字段名</td><td>D1</td></tr>
 </table>
 <p>另有两项人工事务：部署形态问询（云端 :8001 vs 离线一体机 :8888，问厂商）；气体标定台账（已落地）。「置信度/实时位姿 HTTP 接口」已判死——平台全库 0 命中，人工确认 + DDS 位姿替代。</p>
@@ -261,8 +273,8 @@ GateVerdict:   proposal_session, proposal_seq,
 <table>
   <tr><th>失效</th><th>行为</th><th>兜底</th></tr>
   <tr><td>模型进程死/假死</td><td>Gate ≤100ms 检出 → HOLD/零速</td><td>Gate 独立进程</td></tr>
-  <tr><td>Gate 进程死</td><td>仲裁层命令看门狗超时→速度归零；租约到期→SAFE_HOLD</td><td>狗侧 deadman（E4③验证）</td></tr>
-  <tr><td>i7 整机死</td><td>狗侧 deadman + <strong>实体急停/遥控器</strong>（双人必备）</td><td>共享故障域的最终兜底</td></tr>
+  <tr><td>Gate 进程死</td><td>仲裁层命令看门狗超时→速度归零；租约到期→SAFE_HOLD</td><td style="color:#b91c1c"><strong>【v3.4 更正】狗侧 deadman <u>尚未验证</u>，不得据此声称硬件会自动停</strong></td></tr>
+  <tr><td>i7 整机死</td><td style="color:#b91c1c"><strong>软件侧全失效。当前唯一兜底＝实体急停/遥控器（双人必备）</strong></td><td>原文依赖的 deadman 未验证；DDS StopMove/Damp 亦因集成商政策不可用</td></tr>
   <tr><td>STOP 不确认</td><td>停止后 1s 内速度回读 &gt;0.1m/s → 升级 Damp + 现场告警</td><td>新增闭环确认</td></tr>
   <tr><td>日志 I/O 阻塞</td><td>异步有界队列，丢日志不丢命令</td><td>磁盘 &lt;10% 停录制</td></tr>
   <tr><td>电量/温度未知</td><td>fail-closed 拒绝放行</td><td>D0 修复</td></tr>

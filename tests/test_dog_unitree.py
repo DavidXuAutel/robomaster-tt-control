@@ -210,3 +210,173 @@ def test_body_and_gait_commands_forwarded():
     u.move_to_pos(1.0, 2.0, 0.5)
     sent = [api for api, _ in t.calls]
     assert sorted(sent) == sorted([1004, 1011, 1013, 1015, 1036])
+
+
+# ---------- 机型能力表（2026-08-07 实测 unitree_sdk2py 的欠账回归） ----------
+
+
+class _FakeSport:
+    """只实现 go2/b2 共有方法的假 SportClient。b2 独有方法故意缺席。"""
+
+    def __init__(self):
+        self.calls = []
+
+    def _rec(self, name, *args):
+        self.calls.append((name, args))
+        return 0
+
+    def Move(self, vx, vy, vyaw):
+        return self._rec("Move", vx, vy, vyaw)
+
+    def StopMove(self):
+        return self._rec("StopMove")
+
+    def Damp(self):
+        return self._rec("Damp")
+
+    def StandUp(self):
+        return self._rec("StandUp")
+
+    def SpeedLevel(self, level):
+        return self._rec("SpeedLevel", level)
+
+
+def _dds(family):
+    from adapters.dog_unitree import DdsTransport
+
+    t = DdsTransport(interface="eth0", family=family)
+    t._sport = _FakeSport()  # 跳过真机 connect，只测能力表派发
+    return t
+
+
+def test_dds_transport_defaults_to_b2_not_go2():
+    """目标机是 B2。默认值绝不能是「手边容易跑通的那个」。"""
+    from adapters.dog_unitree import DEFAULT_FAMILY, DdsTransport
+
+    assert DEFAULT_FAMILY == "b2"
+    assert DdsTransport(interface="eth0").family == "b2"
+
+
+def test_dds_transport_rejects_unknown_family():
+    from adapters.dog_unitree import DdsTransport
+
+    with pytest.raises(ValueError, match="未知机型"):
+        DdsTransport(interface="eth0", family="g1")
+
+
+def test_go2_rejects_b2_only_apis_cleanly():
+    """go2 的 SportClient 没有 SwitchGait/BodyHeight/MoveToPos。
+
+    实测坐实：过去导入 go2 客户端却调这三个方法，真机上是 AttributeError。
+    现在必须是可读的 UnitreeError。
+    """
+    from adapters.dog_unitree import (
+        API_BODY_HEIGHT,
+        API_MOVE_TO_POS,
+        API_SWITCH_GAIT,
+        UnitreeError,
+    )
+
+    t = _dds("go2")
+    for api in (API_SWITCH_GAIT, API_BODY_HEIGHT, API_MOVE_TO_POS):
+        with pytest.raises(UnitreeError, match="不支持"):
+            t.call(api, {"gait": 1, "height": 0.3, "x": 0.0, "y": 0.0, "yaw": 0.0})
+
+
+def test_common_apis_dispatch_on_both_families():
+    from adapters.dog_unitree import API_MOVE, API_STOP_MOVE
+
+    for family in ("go2", "b2"):
+        t = _dds(family)
+        t.call(API_MOVE, {"vx": 0.1, "vy": 0.0, "vyaw": 0.0})
+        t.call(API_STOP_MOVE, {})
+        assert [n for n, _ in t._sport.calls] == ["Move", "StopMove"]
+
+
+def test_b2_only_api_errors_when_sdk_lacks_method():
+    """能力表说支持、SDK 却没有 → 报版本不一致，不是静默失败。"""
+    from adapters.dog_unitree import API_SWITCH_GAIT, UnitreeError
+
+    t = _dds("b2")  # _FakeSport 故意没有 SwitchGait
+    with pytest.raises(UnitreeError, match="SDK 版本"):
+        t.call(API_SWITCH_GAIT, {"gait": 1})
+
+
+def test_unknown_api_id_rejected():
+    from adapters.dog_unitree import UnitreeError
+
+    with pytest.raises(UnitreeError, match="不支持"):
+        _dds("b2").call(9999, {})
+
+
+# ---------- 状态契约：设备时间戳 + 本体感受全量 ----------
+
+
+def test_sport_state_preserves_device_stamp():
+    """t_mono 是接收时刻，测不出「狗侧卡住」；必须另存设备钟。"""
+    from adapters.dog_unitree import sport_state_to_dict
+
+    d = sport_state_to_dict({"stamp": {"sec": 1700000000, "nanosec": 500_000_000}})
+    assert d["t_device"] == pytest.approx(1700000000.5)
+    assert d["t_mono"] != d["t_device"]
+    # 无 stamp 时如实为 None，不许拿接收时刻冒充设备钟
+    assert sport_state_to_dict({})["t_device"] is None
+
+
+def test_sport_state_keeps_full_imu_and_foot_force():
+    from adapters.dog_unitree import sport_state_to_dict
+
+    d = sport_state_to_dict(
+        {
+            "imu_state": {
+                "rpy": [0.1, 0.2, 0.3],
+                "quaternion": [1.0, 0.0, 0.0, 0.0],
+                "gyroscope": [0.01, 0.02, 0.03],
+                "accelerometer": [0.0, 0.0, 9.8],
+                "temperature": 41.0,
+            },
+            "foot_force": [10, 20, 30, 40],
+        }
+    )
+    imu = d["imu_state"]
+    assert imu["accelerometer"] == [0.0, 0.0, 9.8]
+    assert imu["gyroscope"] == [0.01, 0.02, 0.03]
+    assert len(imu["quaternion"]) == 4
+    assert imu["temperature"] == 41.0
+    assert d["foot_force"] == [10.0, 20.0, 30.0, 40.0]
+
+
+def test_low_state_keeps_full_proprioception():
+    """v2 §数据契约点名要 12 电机 + IMU + 足底力；只留 q 会打穿 D3。"""
+    from adapters.dog_unitree import _MOTOR_FIELDS, low_state_to_dict
+
+    d = low_state_to_dict(
+        {
+            "bms_state": {"soc": 55},
+            "motor_state": [{"q": 0.5, "dq": 0.1, "tau_est": 2.0, "temperature": 40, "lost": 0}]
+            * 12,
+            "foot_force": [1, 2, 3, 4],
+            "tick": 123456,
+        }
+    )
+    assert len(d["motor_state"]) == 12
+    for f in _MOTOR_FIELDS:
+        assert f in d["motor_state"][0], f"电机字段缺 {f}"
+    assert d["motor_state"][0]["tau_est"] == 2.0
+    assert d["foot_force"] == [1.0, 2.0, 3.0, 4.0]
+    assert d["tick"] == 123456
+    assert d["bms_state"]["soc"] == 55.0
+
+
+def test_loopback_and_dds_share_the_same_read_contract():
+    """loopback 缺字段而真机有 → 测试全绿但真机炸。两边键集必须一致。"""
+    from adapters.dog_unitree import (
+        TOPIC_LOW_STATE,
+        TOPIC_SPORT_STATE,
+        low_state_to_dict,
+        sport_state_to_dict,
+    )
+
+    _, t = _client()
+    assert set(t.read(TOPIC_SPORT_STATE)) == set(sport_state_to_dict({}))
+    assert set(t.read(TOPIC_LOW_STATE)) == set(low_state_to_dict({}))
