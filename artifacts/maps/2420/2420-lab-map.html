@@ -108,7 +108,7 @@
     <div id="list"></div>
     <h2>图例</h2>
     <div class="card">
-      <div>🔵 路标 (08)　🟢 巡检 (01)　🟡 充电 (03)</div>
+      <div>🟣 路标 (08)　🟠 巡检 (01)　🔵 充电 (03)　<b>（与平台大屏配色一致）</b></div>
       <div style="margin-top:6px;color:var(--muted);font-size:.85rem">红线：平台虚拟墙折线</div>
     </div>
   </aside>
@@ -158,9 +158,9 @@ function draw() {
   for (const p of DATA.points) {
     const xy = worldToCanvas(p.x, p.y);
     const x = xy[0], y = xy[1];
-    let fill = '#3d9cfd';
-    if (p.pointsType === '01') fill = '#3ecf8e';
-    if (p.pointsType === '03') fill = '#f5c542';
+    let fill = '#c04ad6';
+    if (p.pointsType === '01') fill = '#f59e0b';
+    if (p.pointsType === '03') fill = '#3d9cfd';
     if (showPlan && p.planRole === 'recommend') {
       ctx.beginPath(); ctx.arc(x,y,16,0,Math.PI*2);
       ctx.strokeStyle = 'rgba(62,207,142,0.9)'; ctx.lineWidth = 3; ctx.stroke();
