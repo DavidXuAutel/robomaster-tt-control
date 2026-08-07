@@ -150,3 +150,8 @@ server/
 8. 发布前扫描私人代号、绝对路径、凭据与敏感元数据，并核对 Markdown / HTML 等派生版本口径一致。
 
 狗侧当前开发权威：`docs/design/2026-08-05-dog-deployment-loop-plan.md`（当前只授权 D0；见该文 §0.3 / §0.4 / §3.0）。
+
+狗侧真机实测交接（**动手前必读**）：`docs/handover/2026-08-07-dog-first-navigate-loop-handover.md`
+——已验证的派单/重定位 SOP、10 个坑，以及对上述方案接口基线的实测修正（F8/E1 已有结论、
+F6 不可用、`relocate()` API 不生效、`result` 字段不可单独判成败）。该文 §2 界定了授权边界：
+E1 已实测不等于 `Move`／D7 闭环解禁。

@@ -449,8 +449,19 @@ class TopseeClient:
     def send_navigate(self, robot_id: str, points_id: str) -> Any:
         """POST point/sendNavigate — 单点拓扑派单。
 
-        F8：返回裸 `Result`，**不含任何任务标识**。是否会产生可查询任务
-        属于待验证假设 E1，调用方不得依赖。
+        F8：返回裸 `Result`，**不含任何任务标识**——这一点仍然成立。
+
+        E1 已于 2026-08-07 真机实测结论（见
+        `docs/handover/2026-08-07-dog-first-navigate-loop-handover.md`）：
+        **派单确实产生可查任务**。约 3 s 内 `getStateData().currentTaskId`
+        出现 taskId 且 `robotState` 由 02 转 03；结果详情在
+        `instrument/robotTask/getPagingRobotTask`。
+
+        调用方注意两条实测坑：
+        1. 未加载地图时派单**静默失败**——不产生任务，线索只在告警表。
+        2. 任务记录的 `result` 字段**不可单独作成败判据**（实测出现过
+           `result=成功` 而同秒告警表有「导航失败」），须与告警表交叉核对；
+           且平台会自动前插 `taskItemId="-10"` 的合成航点，解析须跳过。
         """
         return self.request(
             "POST",
@@ -461,8 +472,12 @@ class TopseeClient:
     def get_current_task(self, robot_id: str) -> Any:
         """GET instrument/robotTask/getCurrentByRobotId → ShowRobotTaskAllEntity（F6）。
 
-        字段是 `pointsId` / `currentState` / `totalState` / `taskId` / `taskItemId`，
+        声明字段是 `pointsId` / `currentState` / `totalState` / `taskId` / `taskItemId`，
         **没有** `currentPointsId` 与 `inspectionRate`（那两个在 getPagingRobotTask）。
+
+        **2026-08-07 实测：本接口不可用作进度源。** 任务执行中调用，
+        除 `keyName` 外全部字段返回 `null`。追踪任务请改用
+        `getStateData().currentTaskId` + `getPagingRobotTask`。
         """
         return self.request(
             "GET",
@@ -514,7 +529,17 @@ class TopseeClient:
         return self.request("POST", path, json_body=body)
 
     def relocate(self, robot_id: str, keyname: str, x: float, y: float, th: float) -> Any:
-        """mapUpdate 的重定位便捷封装（action=1）。"""
+        """mapUpdate 的重定位便捷封装（action=1）。
+
+        ⚠️ **2026-08-07 实测：本接口不生效，请勿使用。** 返回
+        `{"code":0,"message":"操作成功!"}` 但机器人位姿不变（试过弧度与
+        `keyNameMap`，均无效）。前端真正用的是 `POST /model/map-correct-pose`，
+        其错误文案要求 `robotId` + `mapId`（此处传的是 `destKeyname`），入参尚未逆出。
+
+        可靠路径是大屏 UI：Robot Monitoring → Map Settings →
+        Quick Operations → Redirect（两点法：先点位置，再点朝向）。
+        详见 `docs/handover/2026-08-07-dog-first-navigate-loop-handover.md` §3.2。
+        """
         return self.map_update(
             {
                 "action": 1,
