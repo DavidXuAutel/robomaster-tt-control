@@ -88,6 +88,35 @@ def _dog(out, nav=None, gas=None, **kw):
     )
 
 
+class _FakeArbiter:
+    def __init__(self):
+        self.releases = []
+
+    def force_release(self, reason, *, now=None):
+        self.releases.append(reason)
+
+
+def test_abort_calls_arbiter_force_release():
+    """D0：abort 在持有 Arbiter 时必须 force_release。"""
+    out = []
+    arb = _FakeArbiter()
+    dog = _dog(out, arbiter=arb)
+    dog.begin_inspect(_inspect())
+    dog.abort("mission_abort")
+    assert arb.releases == ["mission_abort"]
+    assert dog.abort_count == 1
+
+
+def test_abort_on_abort_hook_does_not_bypass_arbiter():
+    out = []
+    seen = []
+    arb = _FakeArbiter()
+    dog = _dog(out, arbiter=arb, on_abort=seen.append)
+    dog.abort("x")
+    assert seen == ["x"]
+    assert arb.releases == ["x"]  # 附加钩子，不能旁路 force_release
+
+
 # ---------- nav.poll_fault ----------
 
 

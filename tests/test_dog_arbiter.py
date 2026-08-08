@@ -10,6 +10,7 @@ import pytest
 
 from adapters.dog_arbiter import (
     PREFLIGHT_BATTERY_LOW,
+    PREFLIGHT_BATTERY_UNKNOWN,
     PREFLIGHT_CONFIDENCE_LOW,
     PREFLIGHT_CONFIDENCE_UNAVAILABLE,
     PREFLIGHT_CONTROLLER_BUSY,
@@ -50,6 +51,8 @@ def unitree():
 def _arb(client, unitree, **kw):
     kw.setdefault("robot_id", ROBOT)
     kw.setdefault("controller_state", "02")
+    # D0 Q4：电量 fail-closed，单测默认给健康电量（显式测 unknown 的用例除外）
+    kw.setdefault("battery_provider", lambda: 90.0)
     a = DogControlArbiter(client, unitree, **kw)
     return a
 
@@ -357,6 +360,36 @@ def test_battery_gate(client, unitree):
         arb.acquire_for_mission("m1")
 
 
+def test_battery_provider_missing_fail_closed(client, unitree, tmp_path):
+    """D0 Q4：provider 缺失一律拒绝，不再 fail-open。"""
+    arb = DogControlArbiter(
+        client, unitree, robot_id=ROBOT, controller_state="02", audit_dir=tmp_path
+    )
+    arb.ack_confidence(0.95, by="t")
+    with pytest.raises(ArbiterRejected, match=PREFLIGHT_BATTERY_UNKNOWN):
+        arb.acquire_for_mission("m1")
+
+
+def test_battery_none_or_nan_fail_closed(client, unitree):
+    for provider in (lambda: None, lambda: float("nan")):
+        arb = _arb(client, unitree, battery_provider=provider)
+        arb.ack_confidence(0.95, by="t")
+        with pytest.raises(ArbiterRejected, match=PREFLIGHT_BATTERY_UNKNOWN):
+            arb.acquire_for_mission("m1")
+
+
+def test_confidence_ack_rejects_nan_and_oob(client, unitree, tmp_path):
+    """D0 Q3：NaN / 越界不得写入，更不得绕过 ≥0.9 门禁。"""
+    arb = _arb(client, unitree, audit_dir=tmp_path)
+    for bad in (float("nan"), -0.1, 1.01, "x"):
+        with pytest.raises(ValueError, match=r"\[0,1\]"):
+            arb.ack_confidence(bad, by="t")  # type: ignore[arg-type]
+    arb.ack_confidence(0.95, by="operator_a")
+    assert arb.confidence_audit_path is not None
+    text = arb.confidence_audit_path.read_text(encoding="utf-8")
+    assert "operator_a" in text and "0.95" in text and "expiry" in text
+
+
 def test_controller_busy_blocks_mission(srv, client, unitree):
     srv.state.controller_busy = True
     arb = _arb(client, unitree)
@@ -377,7 +410,9 @@ def test_preflight_stops_preexisting_task(srv, client, unitree):
 
 def test_controller_takeover_skipped_when_values_unknown(srv, client, unitree):
     """G7：state/force 取值未抓包确认时跳过抢权，但绝不假装成功。"""
-    arb = DogControlArbiter(client, unitree, robot_id=ROBOT)
+    arb = DogControlArbiter(
+        client, unitree, robot_id=ROBOT, battery_provider=lambda: 90.0
+    )
     arb.ack_confidence(0.95, by="t")
     arb.acquire_for_mission("m1")
     assert srv.state.controller_calls == []

@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>机器狗部署闭环方案 v3.1 · 2026-08-05</title>
+<style>
+  body {
+    background: #fafafa;
+    color: #333;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    max-width: 740px;
+    margin: 0 auto;
+    padding: 24px 18px 64px;
+  }
+  h1, h2, h3 { color: #222; line-height: 1.3; }
+  h1 { font-size: 1.45rem; margin: 0 0 0.4em; }
+  h2 { font-size: 1.2rem; margin-top: 2em; border-bottom: 1px solid #e5e5e5; padding-bottom: 0.35em; }
+  h3 { font-size: 1.03rem; margin-top: 1.4em; }
+  p { margin: 0.75em 0; }
+  .meta { color: #666; font-size: 0.92rem; margin-bottom: 1.4em; }
+  .verdict { background: #fff; border: 1px solid #e8e8e8; border-left: 4px solid #2a6f6f; padding: 14px 16px; margin: 1.2em 0; }
+  .warn { background: #fffaf5; border: 1px solid #f0e0c8; border-left: 4px solid #c47a2c; padding: 14px 16px; margin: 1.2em 0; }
+  .ok { background: #f6fbf8; border: 1px solid #d7ebe0; border-left: 4px solid #3a8f6a; padding: 14px 16px; margin: 1.2em 0; }
+  ul, ol { padding-left: 1.25em; }
+  li { margin: 0.35em 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; margin: 1em 0; background: #fff; }
+  th, td { border: 1px solid #e5e5e5; padding: 7px 9px; text-align: left; vertical-align: top; }
+  th { background: #f3f3f3; color: #222; }
+  .tag { display: inline-block; font-size: 0.78rem; padding: 1px 7px; border-radius: 3px; margin-right: 4px; background: #eee; color: #444; }
+  .tag.red { background: #fdecea; color: #a33; }
+  .tag.orange { background: #fff3e0; color: #a65; }
+  .tag.green { background: #e8f5e9; color: #2e6b3a; }
+  .footnote { color: #777; font-size: 0.88rem; margin-top: 2.5em; }
+  a { color: #1a5f7a; word-break: break-word; }
+  .toc a { text-decoration: none; }
+  .toc li { margin: 0.2em 0; }
+  .term { border-bottom: 1px dashed #888; cursor: help; position: relative; }
+  .term::after {
+    content: attr(data-tip);
+    position: absolute; left: 0; top: 130%;
+    width: max-content; max-width: 260px;
+    padding: 8px 10px; background: #222; color: #fff;
+    font-size: 13px; line-height: 1.5; border-radius: 6px;
+    white-space: normal; opacity: 0; pointer-events: none;
+    transition: opacity .15s; z-index: 10;
+  }
+  .term:hover::after, .term:focus::after { opacity: 1; }
+  code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 0.88em; }
+  pre { background: #f5f5f5; border: 1px solid #e5e5e5; border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 0.82rem; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<h1>机器狗部署闭环方案 v3.1<span style="font-size:.5em;font-weight:400;color:#b45309"> · 可读版，已落后于权威文档</span></h1>
+<p class="meta">
+  2026-08-05 · 状态：<strong>可据此开发</strong>（其他 Agent 按 D0–D8 直接开工）· 已过 Codex 对抗评审并重写<br />
+  权威 markdown：<code>docs/design/2026-08-05-dog-deployment-loop-plan.md</code>（开发以 md 为准，本页为可读版）<br />
+  接替 v2（08-03）的路线图；v2 的接口事实（F/G 编号）与契约仍然有效
+</p>
+
+<div class="warn" style="border-left:6px solid #dc2626">
+  <strong>🔴 版本落后提示（2026-08-07 更新）</strong>：本页是 <strong>v3.1</strong> 的可读版，权威 markdown 已到 <strong>v3.4</strong>。
+  下列内容本页<strong>不完整或已被推翻</strong>，动手前必须回 markdown 看：
+  <ul>
+    <li><strong>集成商不建议第三方直连 DDS</strong>（md §1.5）——DDS 快通道已降为非生产路径，D0 的真机验收阻塞性质是<strong>政策</strong>而非现场排期；</li>
+    <li><strong>E4 已拆成 E4-S（只读）/ E4-C（命令）</strong>，且原第 ④ 步「平台侧同时活动时观察是否抢权」<strong>已废止</strong>——它要求两个控制器同时下发运动命令，正是集成商警告会导致运动异常的操作；</li>
+    <li><strong>「狗侧 deadman（E4③验证）」是错误陈述</strong>——该行为<strong>从未验证</strong>，且宇树无 <code>Move</code> 机器人侧超时的权威文档。本页下文凡出现此说法处均已就地标红；</li>
+    <li>到点判定改为<strong>平台 MQ 推送为主、HTTP 轮询兜底</strong>的双源交叉校验（推翻 v2 事实 F16）。</li>
+  </ul>
+  本页保留 v3.1 文字是为了不丢失术语解说；<strong>结论一律以 markdown v3.4 为准</strong>。
+</div>
+
+<div class="verdict">
+  <strong>一句话</strong>：项目重心从「把狗接进任务编排」升级为「<strong>部署闭环</strong>」——
+  服务器当老师 → 边端跑<span class="term" tabindex="0" data-tip="学生模型＝把大模型（老师）的能力压缩进的小模型，够小才能在机器人身上实时跑">学生模型</span> →
+  量化评测（时延/内存/功耗/成功率）→ 独立<span class="term" tabindex="0" data-tip="哨兵＝一个独立的守门程序：模型说什么它都要检查，不合格就拦下；模型崩了它还活着，能让狗停下">故障哨兵</span> →
+  <span class="term" tabindex="0" data-tip="影子部署＝模型全程实时运行并给出判断，但不控制机器人，只记录「如果听它的会怎样」，用来安全地考核模型">影子部署</span> → 受限闭环。<br /><br />
+  <strong>核心铁律</strong>：模型只出提议，执行权永远在独立哨兵/仲裁层手里；模型进程崩溃，狗必须能停。
+</div>
+
+<nav class="toc">
+  <h2>目录</h2>
+  <ol>
+    <li><a href="#s0">为什么改 &amp; Gate 两种作用域</a></li>
+    <li><a href="#s1">现状基线（已落地 / 欠账 / 未决）</a></li>
+    <li><a href="#s2">实验编号唯一权威表</a></li>
+    <li><a href="#s3">阶段计划 D0–D8</a></li>
+    <li><a href="#s4">接口契约</a></li>
+    <li><a href="#s5">安全论证</a></li>
+    <li><a href="#s6">红线与 Kill criteria</a></li>
+    <li><a href="#s7">评审记录</a></li>
+  </ol>
+</nav>
+
+<h2 id="s0">0. 为什么改 &amp; Gate 两种作用域</h2>
+<p><strong>改造理由</strong>：①远程 GPU（<span class="term" tabindex="0" data-tip="cloudflared＝把内网服务通过 Cloudflare 隧道暴露到公网的工具；走公网必然增加且不稳定延迟">cloudflared</span> 隧道 4090）在实时控制链里＝延迟污染+单点故障，只该做老师；②「记录了数据」≠「数据可训练」，丢帧/时钟漂移目前没人自动查；③让生成式模型直接控 60kg 真狗是错误顺序。</p>
+
+<h3>Gate 的两种作用域（解决 v3.0 的架构矛盾）</h3>
+<p>现有仲裁层规定：平台导航期间（<code>MISSION_NAV</code>）<strong>禁止</strong>发任何 DDS
+<span class="term" tabindex="0" data-tip="Move＝宇树 SDK 的连续速度控制命令 Move(vx,vy,vyaw)，直接驱动狗行走">Move</span>；
+平台又没有连续速度接口。所以「在原生导航上叠加减速」<strong>不可实现，明确放弃</strong>。哨兵（ProposalGate）按仲裁状态分两种角色：</p>
+<table>
+  <tr><th>仲裁状态</th><th>Gate 角色</th><th>能做什么</th></tr>
+  <tr><td><code>MISSION_NAV</code>（平台导航中）</td><td><strong>观察者</strong></td><td>只记录裁决+告警；风险持续超阈只能走<strong>任务级停止</strong>（平台 stopTask，这是 v2 已允许的路径），不发 Move</td></tr>
+  <tr><td><code>WAM_ACTIVE</code>（快通道段）</td><td><strong>命令闸</strong></td><td>对模型提议裁决 PASS/SLOW/STOP，经仲裁层发 Move——<strong>唯一的闭环作用域</strong></td></tr>
+  <tr><td>其余状态</td><td>硬 <span class="term" tabindex="0" data-tip="dry-run＝干跑：全流程照常运行但不产生真实控制输出，只记录">dry-run</span></td><td>零输出</td></tr>
+</table>
+
+<pre>传感器 → episode 落盘/QA → 异步边端推理 → RiskProposal
+                                       ↓
+             ┌── MISSION_NAV：观察者（告警 / 任务级停止）
+ProposalGate ┤
+             └── WAM_ACTIVE：命令闸 → Arbiter.move() → DDS Move</pre>
+
+<h2 id="s1">1. 现状基线</h2>
+
+<h3>1.1 已落地（不要重写）</h3>
+<table>
+  <tr><th>模块</th><th>文件</th><th>说明</th></tr>
+  <tr><td>平台 HTTP 会话</td><td><code>adapters/topsee_client.py</code></td><td><code>code:0</code> 语义、401 重登、后台轮询缓存</td></tr>
+  <tr><td>慢通道后端</td><td><code>adapters/dog_topsee.py</code></td><td>到点三态 + <code>poll_fault</code> / 感知 / 气体</td></tr>
+  <tr><td>气体台账</td><td><code>adapters/gas_ledger.py</code></td><td>人工标定台账，禁伪造</td></tr>
+  <tr><td>快通道骨架</td><td><code>adapters/dog_unitree.py</code></td><td>速度安全盒 <code>SpeedLimits</code>（默认 1.0/0.6/1.0 m/s，远低于 B2 极限 5m/s）+ 无硬件测试桩</td></tr>
+  <tr><td>仲裁层</td><td><code>adapters/dog_arbiter.py</code></td><td>8 状态机、<span class="term" tabindex="0" data-tip="租约（lease）＝限时控制许可证：谁拿到租约谁才能发命令，到期或被吊销就失效，防止两个来源同时控狗">租约</span>、<span class="term" tabindex="0" data-tip="preflight＝起飞前检查：控制权、电量、置信度等门禁全过才放行">preflight</span> 门禁、I1–I10 安全不变量测试</td></tr>
+  <tr><td>语义绑定</td><td><code>tools/export_dog_bindings.py</code></td><td>点位绑定导出 + 漂移检查</td></tr>
+  <tr><td>只读探针</td><td><code>tools/topsee_probe.py</code></td><td>E0/E2/E5–E10 只读；E1 动作需双确认</td></tr>
+</table>
+<p>软件自测：352 pytest 绿（详见 handover 文档）。</p>
+
+<h3>1.2 欠账（评审坐实，全部编入 D0 必修）</h3>
+<table>
+  <tr><th>#</th><th>欠账</th><th>后果</th></tr>
+  <tr><td>Q1</td><td><strong>真实 DDS 订阅没实现</strong>——<code>DdsTransport.read()</code> 恒返回 None，从未创建 subscriber</td><td>真机位姿/本体数据/E4 全部不可用</td></tr>
+  <tr><td>Q2</td><td><strong>生产接线缺失</strong>——这套库没接进任何运行时；abort 不会自动释放仲裁层</td><td>现在的架构图是纸面链路</td></tr>
+  <tr><td>Q3</td><td>置信度人工确认无持久审计、不校验 NaN/越界</td><td>NaN 可绕过 ≥0.9 门禁</td></tr>
+  <tr><td>Q4</td><td>电量门禁 <span class="term" tabindex="0" data-tip="fail-open＝故障时默认放行（危险）；fail-closed＝故障时默认拒绝（安全）。安全门禁必须 fail-closed">fail-open</span>：拿不到电量时直接放行</td><td>门禁形同虚设</td></tr>
+  <tr><td>Q5</td><td><code>probe_dds_authority()</code> 只发 StopMove+读一帧，<strong>证明不了 Move 权限</strong></td><td>E4 重设计（见 §2）</td></tr>
+  <tr><td>Q6</td><td>探针文件头/gap 标注有错</td><td>D0 顺手修正</td></tr>
+</table>
+
+<h3>1.3 算力分工</h3>
+<table>
+  <tr><th>计算单元</th><th>角色</th><th>禁令</th></tr>
+  <tr><td>B2 i5 平台机</td><td>厂商导航栈</td><td><strong>绝不动</strong></td></tr>
+  <tr><td>B2 i7 用户机</td><td>哨兵、仲裁、录制、DDS 客户端、CPU 推理基线</td><td>不跑训练</td></tr>
+  <tr><td>Jetson Orin NX（若有/增购）</td><td>学生模型 <span class="term" tabindex="0" data-tip="TensorRT＝NVIDIA 的推理加速引擎，把模型编译成目标设备上的最快形态，支持 FP16/INT8 量化">TensorRT</span> 推理、功耗实验</td><td>不擅自升 <span class="term" tabindex="0" data-tip="JetPack＝NVIDIA 给 Jetson 的官方系统包（Ubuntu+CUDA+TensorRT），升级不当可能变砖">JetPack</span></td></tr>
+  <tr><td>4090 服务器</td><td>教师推理、<span class="term" tabindex="0" data-tip="伪标签＝用大模型（老师）自动给数据打的标注，代替昂贵的人工标注来训练小模型">伪标签</span>、<span class="term" tabindex="0" data-tip="蒸馏＝让小模型模仿大模型的输出来学习，把能力「浓缩」进小模型">蒸馏</span>训练、离线回归</td><td><strong>退出实时控制链</strong></td></tr>
+  <tr><td>5×H100</td><td>仅当 4090 训不动时启用</td><td>不为小模型长期占用</td></tr>
+</table>
+<div class="warn">无 Jetson 时模型与哨兵同在 i7——只是<strong>进程隔离</strong>不是物理隔离，i7 整机故障是共享风险。<span style="color:#b91c1c"><strong>【v3.4 更正】原文写「靠狗侧 deadman（E4③验证）+ 实体急停兜底」——deadman 从未验证，当前唯一兜底是实体急停/遥控器。</strong></span>文档里不许宣称「物理隔离」。</div>
+
+<h2 id="s2">2. 实验编号唯一权威表（v2 §8 编号作废）</h2>
+<p>以 <code>tools/topsee_probe.py</code> 代码编号为准（评审发现 v2 与探针两套编号互相矛盾，这里统一）。</p>
+<table>
+  <tr><th>实验</th><th>类型</th><th>问题</th><th>挂在阶段</th></tr>
+  <tr><td>E0</td><td>只读</td><td>登录链路/授权有效</td><td>D1</td></tr>
+  <tr><td>E1</td><td><span class="tag red">动作</span></td><td>单点派单是否产生可查任务；<strong>顺带制造到达/取消/无效点位，采齐 E2 枚举</strong></td><td>D7 前（封闭场地）</td></tr>
+  <tr><td>E2</td><td>只读</td><td>状态字符串取值采样——<strong>完整枚举依赖 E1 制造状态，D1 只交「已见值集合」</strong></td><td>D1 起持续</td></tr>
+  <tr><td>E3</td><td>人工抓包</td><td>手动/自动巡检切换（平台无接口）</td><td>D7 前</td></tr>
+  <tr><td>E4</td><td><span class="tag red">真机·生死线</span></td><td><strong>四步协议（重设计）</strong>：①真实订阅后确认位姿流持续可读 ②围栏内极小幅 Move 并用速度回读确认执行 ③停发命令 ≥2s 确认狗自动零速（<span class="term" tabindex="0" data-tip="deadman＝失能保护：操作者/程序停止发令后设备自动停下，防止「没人管还在跑」">deadman</span> 行为）<span style="color:#b91c1c"><strong>④【v3.4 已废止】原为「平台侧同时活动时观察是否抢权」——该操作要求两个控制器同时下发运动命令，正是集成商警告的危险动作。新版改为：先在零速度下验证权属获取/拒绝是否原子；集成商无法提供原子交接即判 E4-C 负，不得改为「同时发试试」。E4 现已拆为 E4-S / E4-C，详见 markdown §2。</strong></span></td><td>D7 前</td></tr>
+  <tr><td>E5–E10</td><td>只读</td><td>地图结构 / 气体时间格式 / 取流结构 / 会话有效期 / 告警结构 / 电量字段名</td><td>D1</td></tr>
+</table>
+<p>另有两项人工事务：部署形态问询（云端 :8001 vs 离线一体机 :8888，问厂商）；气体标定台账（已落地）。「置信度/实时位姿 HTTP 接口」已判死——平台全库 0 命中，人工确认 + DDS 位姿替代。</p>
+
+<h2 id="s3">3. 阶段计划 D0–D8（总计约 12–14 周）</h2>
+<div class="warn"><strong>工期口径</strong>：单工程师 + 每周 2–3 天现场折算。评审判定原 6 周估计不诚实，已改。厂商答复、场地审批、采购属外部等待，单列不计入（见 md 附录 B）。每阶段交付＝代码+测试+一份 <code>artifacts/</code> 报告，无报告不算完成。</div>
+
+<h3>D0 地基修复与生产接线（第 1–2 周）★评审必修</h3>
+<ul>
+  <li>实现<strong>真实 DDS subscriber</strong>（位姿 <code>/sportmodestate</code>、本体 <code>/lowstate</code>；&gt;500ms 无样本判断流）；</li>
+  <li>新建 <code>runtime/dog_runtime.py</code>：唯一进程编排入口（装配全部组件+健康检查+日志轮转+磁盘水位）；</li>
+  <li>abort 链路闭合（abort 必须触发仲裁层 <code>force_release()</code>）；</li>
+  <li>Q3/Q4 修复：置信度校验+持久审计；电量门禁 fail-closed；</li>
+  <li>配置落位 <code>configs/dog/topsee.json</code>（E 回填六项唯一入口）。</li>
+</ul>
+<p><strong>验收</strong>：新增测试全绿；真实订阅在狗侧网络连跑 10 分钟无断流（需现场；未排期则先交离线全绿+现场清单）。</p>
+
+<h3>D1 现机盘点 + 只读探针 + 评测 harness（第 2–3 周）</h3>
+<ul>
+  <li><code>artifacts/b2_inventory.json</code>：狗上到底有几台计算机、有没有 Jetson、系统版本、视频流地址、网络拓扑——<strong>宇树官方标配是 i5+i7 双 x86 不带 Jetson，本机被拓普视改装过，必须盘点不许假设</strong>；</li>
+  <li>探针只读集（E0/E2/E5–E10）跑完回填配置；</li>
+  <li><code>tools/edge_bench.py</code> 评测工具：任意模型+任意输入源 → JSON 报告（<span class="term" tabindex="0" data-tip="P95/P99＝95%/99% 的请求都比这个值快；比平均值更能暴露最差情况的卡顿">P50/P95/P99</span> 时延、FPS、内存、温度、功耗、丢帧、降频）。计时边界写死：帧解码完成→推理返回，预热 100 帧不计。</li>
+</ul>
+<p><strong>验收</strong>：i7 与 Jetson（若有）各连跑 30 分钟零崩溃；周末给出算力决策（现有 NX / 增购 NX 16GB / 暂用 i7）。</p>
+
+<h3>D2a 狗版录制器 + 统一质检/回放（离线，第 3–4 周）</h3>
+<ul>
+  <li><code>adapters/dog_recorder.py</code>：深度帧主时钟落盘（v2 §6 规格）；深度不可得自动降级 RGB 主时钟并在 meta 声明；<strong>schema v2，与无人机旧格式不做兼容层</strong>；</li>
+  <li><code>tools/episode_qa.py</code>：机器可读质检清单，指标全部有公式——时钟单调性、跨流对齐误差（P99≤50ms）、动作标签延迟（真值＝命令下发时刻）、缺帧率（&lt;1%）、地图跳变；继承 v2 §6.7 全部旧门槛；</li>
+  <li><code>tools/episode_replay.py</code>：按原时序回放喂任意推理后端，确定性可校验。</li>
+</ul>
+<p><strong>验收</strong>：100 个注入损坏全检出零漏报；<strong>QA 失败的数据禁止进训练集，无人工豁免通道</strong>。</p>
+
+<h3>D2b 录制真机验收（第 4–5 周，半周现场）</h3>
+<p>真实视频+真实 DDS 位姿录 ≥5 段（每段 ≥120s），QA 全过；深度通道可用性给出正式结论。</p>
+
+<h3>D3 数据采集战役（第 5–6 周，现场）★新增</h3>
+<ul>
+  <li>≥6 条差异化路线（直行/转弯/坡道/窄道/动态行人区/弱纹理区）×各 ≥5 遍；</li>
+  <li><strong>≥40 段 QA 通过的 episode</strong>；训练/验证/测试按<strong>路线</strong>切分（4/1/1）防泄漏；</li>
+  <li>危险事件类别草案（供 D6 标注协议）。</li>
+</ul>
+
+<h3>D4 教师→学生模型产线（第 6–8 周）</h3>
+<ul>
+  <li>4090 教师（Depth Anything V2）产伪标签；<strong>可通行性规则写死并版本化</strong>：前方 1.5s 走廊最小障碍距离 → 三档（slow&lt;2.0m、stop&lt;1.0m 初值）；</li>
+  <li>学生模型（轻量级）：输入前向 RGB+速度 → 输出风险分、三档动作、速度修正（训练期即钳位在安全盒内）；</li>
+  <li>测试真值：≥500 帧<strong>人工复核标签</strong>（双人标注+仲裁），不拿老师自己当裁判；</li>
+  <li>导出链 <span class="term" tabindex="0" data-tip="ONNX＝开放的模型交换格式，训练框架导出后可在不同推理引擎上跑">ONNX</span>→TensorRT，<strong>引擎必须在目标 Jetson 上构建</strong>（服务器编的不可移植）；产物打包带数据版本+git SHA+依赖锁。</li>
+</ul>
+<p><strong>验收</strong>：人工真值集上 stop 二分类 <span class="term" tabindex="0" data-tip="AUC＝分类器把「危险」排在「安全」前面的概率，1.0 满分、0.5 等于瞎猜">AUC</span> ≥0.90、档位准确率 ≥85%；边端 60 分钟连跑 P95≤80ms、内存≤12GB、功耗≤25W；<span class="term" tabindex="0" data-tip="INT8/FP16＝把模型数字精度从 16 位降到 8 位，换取更快更省，代价是可能掉精度">INT8</span> 相对 FP16 掉点≤2pp。</p>
+
+<h3>D5 ProposalGate 哨兵（第 6–9 周，与 D4 并行）</h3>
+<ul>
+  <li>独立进程 50Hz 循环；模型经 <span class="term" tabindex="0" data-tip="UDS＝Unix Domain Socket，本机进程间通信通道，不走网卡，快且不受外网干扰">UDS</span> 单向发提议（带 session_id+seq，防重放/乱序）；</li>
+  <li>检查项全部有阈值且进 <code>configs/dog/gate.json</code>：提议 TTL≤200ms、观测年龄≤300ms、速度盒、加速度≤1.0m/s²、<span class="term" tabindex="0" data-tip="jerk＝加速度的变化率；限制它防止命令突变把狗「抽」一下">jerk</span>≤3.0m/s³、NaN 拒绝、模型静默&gt;500ms→HOLD、DDS 断流、温度&gt;85℃、电量&lt;25%（fail-closed）；</li>
+  <li><strong>SLOW 融合算术唯一定义</strong>：<code>v = clamp(v名义+Δv, 安全盒) × (1−risk)</code>，再过加速度/jerk 限幅；</li>
+  <li><strong>唯一命令出口机械保证</strong>：发令函数加 gate_token 私钥参数 + 静态扫描测试 <code>test_single_exit.py</code>，全仓库只允许 Gate 调用发令；</li>
+  <li>裁决与实发命令双落盘（异步有界队列，<strong>丢日志不丢命令</strong>）；</li>
+  <li><strong>dry-run 硬锁解锁流程</strong>：一个显式 PR 同时改运行时传值 + 勾选解锁清单（E1/E3/E4 结论+影子准入报告+双人签名）+ CI 校验，三缺一 CI 红。</li>
+</ul>
+<p><strong>验收</strong>：≥10,000 次故障注入——危险提议放行数＝0、检出≤100ms、计划零速≤250ms、干净数据误 STOP&lt;1%（分母＝裁决 tick 数）。</p>
+
+<h3>D6 影子部署（第 9–11 周）</h3>
+<ul>
+  <li>模型实时提议、Gate 实时裁决（dry-run 硬锁），三路同录：裁决流 / 平台导航状态 / 人工干预打点；</li>
+  <li><strong>标注协议写死</strong>：10s 不重叠窗口、危险类别定稿、双人独立标注+第三人仲裁、时间交叠≥50% 记命中；</li>
+  <li><strong>验收</strong>：≥2 小时 ≥10 路线段；可用率≥99.5%（定义：每 tick 有裁决且输入年龄达标的占比）；≥300 个窗口上危险召回≥95%、误停≤5%（分母＝无危险窗口数）；四项全绿出《闭环准入报告》。</li>
+  <li><span class="tag orange">诚实声明</span> 本阶段<strong>不做命令级对照</strong>——那需要 E1 与平台速度接口，做不到就不承诺。</li>
+</ul>
+
+<h3>D7 受限闭环 A/B（第 11–13 周 + 审批等待，硬门禁）</h3>
+<p><strong>准入六条缺一不可</strong>：E1 结论、E3 演练≥3 次、E4 四步全过、影子准入报告全绿、解锁 PR 合入、现场安全审批（封闭场地/实体急停/安全盒收紧至 0.5/0.3/0.5/电量&gt;25%/双人在场）。</p>
+<ul>
+  <li><strong>A 臂</strong>＝平台 <span class="term" tabindex="0" data-tip="teach-and-repeat＝先人工把狗开到目标位姿存成点位，之后让它重复走这些点位">teach-and-repeat</span> 原生导航走全程；</li>
+  <li><strong>B 臂</strong>＝同路线拆出 1 段 ≤20m 的 <code>WAM_ACTIVE</code> 走廊段：模型提议→Gate 裁决→仲裁发 Move；走廊两侧虚拟墙+实体围栏——<strong>闭环只发生在快通道段，不违反既有互斥契约</strong>；</li>
+  <li>配对设计 ≥60 次（30 对，顺序随机）；成功/干预/越界全部有操作定义；</li>
+  <li><strong>验收</strong>：零越界（一次即终止回 D5）；B 臂成功率≥90% 且干预率相对下降≥20%，<span class="term" tabindex="0" data-tip="bootstrap 置信区间＝对试验数据反复重抽样估计结果的不确定范围；区间下界>0 才说明改善不是运气">90% 置信区间下界&gt;0</span> 才算证实。</li>
+</ul>
+
+<h3>D8 复盘与交接（第 13–14 周）</h3>
+<p>全链路指标汇总、欠账滚动清单、下一期建议（只写清单不自动立项）。</p>
+
+<h3>依赖总览</h3>
+<pre>D0 地基 ──┬─→ D1 盘点+探针+harness ─→ D2a QA/回放(离线)
+          │                            ↓
+          └──────────→ D2b 真机录制 ─→ D3 数据采集(≥40段)
+                                       ↓
+        D5 Gate(离线并行) ←─ 回放器   D4 教师→学生产线
+                  ↓                    ↓
+                  └─→ D6 影子部署(dry-run) ←┘
+                          ↓ (E1+E3+E4+准入报告+解锁PR+安全审批)
+                    D7 受限闭环 A/B ─→ D8 复盘</pre>
+
+<h2 id="s4">4. 接口契约（摘要）</h2>
+<pre>RiskProposal:  session_id, seq, obs_t_mono_ms, issued_t_mono_ms,
+               risk_score[0,1], action(pass|slow|stop),
+               dvx dvy dvyaw(机体系,SI), model_ver
+GateVerdict:   proposal_session, proposal_seq,
+               decision(PASS|SLOW|STOP|DROP), reason(枚举),
+               applied_vx/vy/vyaw(实发命令,dry-run恒0), t_mono_ms</pre>
+<ul>
+  <li>传输：UDS datagram 单向（模型→Gate），Gate 不回包——模型不依赖 Gate 存活；</li>
+  <li>位姿/点云/图像<strong>永不</strong>进事件总线（既有红线延续）；</li>
+  <li>配置唯一入口：<code>configs/dog/topsee.json</code> / <code>gate.json</code> / <code>dataset_split.json</code>；</li>
+  <li>测试入口：<code>test_dog_runtime / test_edge_bench / test_episode_qa / test_proposal_gate / test_single_exit</code>。</li>
+</ul>
+
+<h2 id="s5">5. 安全论证（fail-safe 摘要）</h2>
+<table>
+  <tr><th>失效</th><th>行为</th><th>兜底</th></tr>
+  <tr><td>模型进程死/假死</td><td>Gate ≤100ms 检出 → HOLD/零速</td><td>Gate 独立进程</td></tr>
+  <tr><td>Gate 进程死</td><td>仲裁层命令看门狗超时→速度归零；租约到期→SAFE_HOLD</td><td style="color:#b91c1c"><strong>【v3.4 更正】狗侧 deadman <u>尚未验证</u>，不得据此声称硬件会自动停</strong></td></tr>
+  <tr><td>i7 整机死</td><td style="color:#b91c1c"><strong>软件侧全失效。当前唯一兜底＝实体急停/遥控器（双人必备）</strong></td><td>原文依赖的 deadman 未验证；DDS StopMove/Damp 亦因集成商政策不可用</td></tr>
+  <tr><td>STOP 不确认</td><td>停止后 1s 内速度回读 &gt;0.1m/s → 升级 Damp + 现场告警</td><td>新增闭环确认</td></tr>
+  <tr><td>日志 I/O 阻塞</td><td>异步有界队列，丢日志不丢命令</td><td>磁盘 &lt;10% 停录制</td></tr>
+  <tr><td>电量/温度未知</td><td>fail-closed 拒绝放行</td><td>D0 修复</td></tr>
+</table>
+
+<h2 id="s6">6. 红线与 Kill criteria</h2>
+<div class="warn">
+  <strong>红线（违者回退，无豁免）</strong>
+  <ol>
+    <li>模型永不直接发 Move——唯一出口＝Gate（静态扫描机械保证）；解锁走三件套 PR；</li>
+    <li>DDS 位姿只进落盘通道，绝不进事件总线；</li>
+    <li>速度安全盒由我们实现（遥控器软限位在直控路径不生效）；放宽须显式 PR+双人确认；</li>
+    <li>i5 平台机绝不动；Jetson 不擅自升 JetPack；</li>
+    <li>禁止伪造人工输入（气体台账/置信度）＝拆安全门禁；</li>
+    <li>QA 不过的数据禁止训练，无豁免通道；</li>
+    <li>平台导航期间 Gate 只做观察者与任务级停止，永不发 Move。</li>
+  </ol>
+</div>
+<ul>
+  <li>任一工作流两周无可运行工件+原始测量 → 停；</li>
+  <li>学生模型两轮优化仍超预算 → 换模型/再蒸馏，<strong>不靠买 AGX 解决</strong>；</li>
+  <li>E1/E3/E4 阻塞超两周 → 停在影子模式（影子本身已是可交付成果）；</li>
+  <li>Gate 一次危险放行或一次 STOP 未确认 → 闭环资格清零重跑全量注入；</li>
+  <li>平台要长期逆向私有 API → 降级为拓扑命令源，不再深耦合。</li>
+</ul>
+
+<h2 id="s7">7. 评审记录</h2>
+<div class="ok">
+  <strong>Codex 对抗评审（2026-08-05，只读全仓库交叉核验）</strong>：v3.0 初稿裁决 NEEDS REWORK。主要修正已全部吸收：
+  实验编号统一（§2）｜D7 对照臂重设计为走廊段闭环（§0/§3）｜Q1–Q6 地基欠账入 D0｜fail-safe 论证补全（§5）｜
+  测量与标注协议补全（D2a/D6）｜总工期调整为 12–14 周，并增加 2026-09-14 前阶段范围冻结。
+  本页不引用仓库外规划或评审材料。
+</div>
+<div class="warn">
+  <strong>近期阶段交付边界</strong>：完整 D0–D8 是工程路线图，不代表全部阶段已获授权。
+  当前只授权 D0；2026-09-14 前仅可按 Markdown 权威版 §3.0 执行明确列出的阶段切片。
+  D0 期间禁止发送 Move、执行 E1/E4 动作实验、连接真实命令 sink 或解除 dry-run。
+  后续阶段须经项目负责人按公司流程书面批准。本仓库公开可见，文档须遵守「公开仓库脱敏准则」（见 Markdown §0.4 与 <code>CLAUDE.md</code>）。
+</div>
+
+<p class="footnote">
+  开发以 markdown 版为准：<code>docs/design/2026-08-05-dog-deployment-loop-plan.md</code>。
+  v2（08-03）的接口事实 F1–F32/G1–G16 与契约变更仍有效；实现现状见 handover（08-03，M6–M11 已落地，352 pytest 绿）。
+</p>
+
+</body>
+</html>
