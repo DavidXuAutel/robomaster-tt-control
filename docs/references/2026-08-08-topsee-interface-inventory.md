@@ -162,31 +162,70 @@
 > 交接文档 §G4/G5 记「大屏位姿走另一条实时通道（未逆向，疑 MQTT/WebSocket）」——
 > **该通道已定位为本节的 STOMP 通道**；位姿字段是否在 `service_robot_status` 内需实际订阅确认。
 
-#### 3.4.1 只读订阅实测（2026-08-08）
+#### 3.4.1 ⚠️ 头号陷阱：按机器人分发的主题必须拼 SN 后缀
 
-工具：`tools/topsee_mq_probe.py`（零依赖，帧类型白名单锁死为
+前端 §3.4 常量表里的主题字符串**不是完整目的地**。订阅前会拼 `.<robotNum>`：
+
+```js
+subscribeToTopic([`${ROBOT_STATUS}.${robotNum}`, `${ROBOT_SCAN}.${robotNum}`, …])
+// → /topic/service_robot_status.<机器人SN>
+```
+
+**订裸主题（不带后缀）会静默收到 0 帧，且不返回任何 `ERROR` 帧。**
+初次实测正是踩了这个坑，一度误判为「平台没在推送」。
+连 `/topic/#` 通配也收不到 —— 该 broker 不按 RabbitMQ `#` 语义匹配，**通配探测不可作为反证**。
+
+| 主题 | 是否需 `.<robotNum>` |
+|---|---|
+| `service_robot_status` / `_scan` / `_velodyne_base_laser` / `_task_result` / `_map_base64` / `_taskItem` | ✅ **必须** |
+| `service_robot_event.>` / `service_robot_alarm.>` / `_obstacle_avoidance_topic` | ❌ 按原样 |
+
+#### 3.4.2 只读订阅实测结论（2026-08-08，已通过）
+
+工具：`tools/topsee_mq_probe.py`（零依赖；帧类型白名单锁死为
 `CONNECT`/`SUBSCRIBE`/心跳/`DISCONNECT`，**不具备下发控制指令的能力**）。
 
-| 项 | 结果 |
-|---|---|
-| WebSocket 升级 | ✅ `101` |
-| STOMP `CONNECTED` | ✅ 成功（用前端内置账号） |
-| 订阅 7 个业务主题，30 s | ⬜ **0 帧** |
-| 通配 `/topic/#`、`/exchange/amq.topic/#`，25 s | ⬜ **0 帧** |
-| `ERROR` 帧 | 无 |
-| 同时段狗侧硬件 | 可见光/红外相机均 ping 通、`554` 开放；平台 `robotState=02`（空闲） |
+| 主题 | 帧率 | 活性校验 |
+|---|---|---|
+| `service_robot_status.<SN>` | **2.00 Hz** | `x`/`y`/`th`/`matchProb` 40/40 帧取值互异，**确认在变**（非静态回填） |
+| `service_robot_scan.<SN>` | 2.00 Hz | 标准 ROS `sensor_msgs/LaserScan` |
+| `service_robot_velodyne_base_laser.<SN>` | 2.05 Hz | 含位姿字段 |
+| `service_robot_task_result.<SN>` | 事件型 | 20 s 内收到 1 帧 |
+| `service_robot_event.>` / `alarm.>` | 事件型 | 采样窗口内无事件，属正常 |
 
-**结论（严格版）**：通道存在且可连、可订阅、鉴权通过；但**采样窗口内发布端整体沉默**，
-连通配订阅都收不到任何消息。因此：
+### 3.4.3 `service_robot_status` 字段表（实测，2 Hz）
 
-- ✅ 已证：`/robot/mq/` 是真实可用的 STOMP 端点。
-- ❌ **未证**：`service_robot_status` 是否含位姿 —— **G4/G5 仍未解开，不得据此改方案。**
-- 待排除的两种解释（本次无法区分）：
-  1. 狗处于充电空闲态，ROS→MQ 桥未运行 / 按需启动（需开监控页或派单后复测）；
-  2. 平台发布到非默认 exchange，`/topic/#` 覆盖不到（需厂商给 exchange 与 routing key）。
+| 字段 | 含义 | 备注 |
+|---|---|---|
+| `position.x` / `.y` / `.z` | **地图系位姿** | 🎯 **G5 解开** |
+| `position.th` | 朝向 | 实测跨度 −0.04 ~ 1.45，**与弧度一致**（交接文档记「`th` 单位不明」，此处得解） |
+| `position.name_map` | 当前地图 ID | 可用于 `map-correct-pose` 的 `mapId` |
+| `position.mode_map` | 定位/导航模式 | 实测 `"navigating"` |
+| `position.device` | 定位源 | 实测 `"gps"` |
+| `position.gps` / `.rtk` / `.uwb` | 其它定位源 | 本现场全 `0`，未配置 |
+| **`matchProb`** | **定位置信度** | 🎯 **G4 解开**。即 UI「置信度」，实测 0.625~0.690 |
+| `robotState` | 机器人状态 | `02` 空闲 / `03` 任务中 / `07` 建图 等 |
+| `currentTaskId` | 当前任务 ID | 到点检测可用 |
+| `dogmode` / `doggait` / `bodyHeight` / `footHeight` | 姿态与步态 | 与 §3.2 动作 `type` 对应 |
+| `follow` / `obstacle` | 跟随 / 避障开关 | |
+| **`controllerUserName`** / **`robotControlUser`** | **当前控制人** | 🎯 仲裁层可据此观测控制权归属 |
+| `battery` / `isCharging` / `current` / `temperatures` | 电量与电气 | |
+| `speed` / `rpy` / `motorangle` / `odometer` | 运动量 | |
+| `delayTime` / `useCpu` / `useMemory` / `runningTime` / `runningDay` | 健康度 | |
+| `time` | 设备时间（Unix 秒） | ⚠️ **仅秒级分辨率**，2 Hz 下每两帧共用一个值 |
+| `connection` | 连接状态 | |
 
-**下次复测条件**：登录 Web 打开实时监控页并选中该机器人，**同时**跑本探针。
-若届时前端有数据而探针无数据 → 属解释 2，直接向厂商索要 exchange 定义。
+**工程结论**：
+
+1. 🎯 **G4 / G5 彻底解开**。位姿与置信度都能拿到，**完全不依赖 DDS**。
+   交接文档「无置信度、无实时位姿接口」的结论**仅对 HTTP 成立**，对 MQ 不成立。
+2. ✅ **E4-S（只读影子部署）的数据前提已齐备**：位姿 + 激光 + 点云 + 状态 + 控制权。
+3. ⚠️ **2 Hz 只够慢通道**。做影子部署、到点判定、评测足够；
+   **不足以支撑 10 Hz 级闭环快通道**，不要拿它当 WAM 控制回路的状态源。
+4. ⚠️ **`time` 秒级分辨率不可用于时序对齐**，必须以本地接收时刻（`t_mono`）为准 ——
+   与 DDS 侧 `t_device` / `t_mono` 的处理口径保持一致。
+5. ✅ `matchProb` 使人工 `ack_confidence` 可以自动化；注意手册要求发任务前 **≥ 0.9**，
+   而实测常态在 **0.63~0.69**，低于门槛，这本身是需要现场处理的问题。
 
 ---
 
@@ -202,9 +241,10 @@
    （这是我们能否上闭环的**唯一硬门槛**。）
 3. **`model/action type=3`（急停）是否等同断电**？是否存在**优雅停车**（减速至零并保持站立）的指令？
    若无，我们的安全设计只能依赖「停发 + 零速」，需要问题 2 的答案兜底。
-4. **STOMP 通道的对外契约**：`/robot/mq/` 是否允许第三方订阅？
-   请提供 `service_robot_status` 的**字段表**（是否含 `x/y/theta` 位姿与定位置信度？坐标系与单位？推送频率？）。
-   若允许，请为我们**单独开一个只读账号**（不要复用前端内置账号）。
+4. **STOMP 通道的对外授权**：`/robot/mq/` 是否允许第三方订阅？
+   请为我们**单独开一个只读账号**（不复用前端内置账号）。
+   字段与频率我们已实测清楚（§3.4.3），只需确认三点：
+   `position` 的坐标系定义、`matchProb` 与 UI「置信度」是否同一口径、2 Hz 是否可调高。
 5. **控制权与运控的关系**：`/edg` 下发运控前是否必须先 `updateControllerUser` 抢控 +
    切「手动巡检」？第三方持控期间平台侧如何**强制收回**？
 
@@ -214,15 +254,16 @@
    在「成功」判定上的一致性（实测 HTTP 侧 `result=成功` 与告警表冲突过）。
 7. `move-by-direction` 的速度上限与安全限幅在服务端还是客户端？超限如何处理？
 8. `model/map-correct-pose` 的完整参数与 `mapId` 取值来源（用于自动化重定位）。
-9. `getStateData` 是否有计划补位姿字段；若无，长期是否以 STOMP 为唯一位姿源。
-10. 平台版本升级时，§3 这些未文档化接口的兼容策略。
+9. 平台版本升级时，§3 这些未文档化接口的兼容策略。
 
 ### 已可自查、无需再问
 
 - 上位机地址 → `archivesMan/getDateById.localhostIp`（§1）
 - 机器人 SN / 型号 → 同上 `robotNum` / `robotModel`
-- MQ 主题清单 → §3.4（可自行订阅验证）
-- 是否有连续运控 → 有，见 §3.1（问的是「是否授权」，不是「有没有」）
+- MQ 主题清单与订阅方式 → §3.4 / §3.4.1（**注意 SN 后缀**）
+- **是否有实时位姿与置信度 → 有**，`service_robot_status` @2 Hz（§3.4.3）
+- **`th` 的单位 → 弧度**（§3.4.3，实测跨度佐证）
+- 是否有连续运控 → 有，见 §3.1（要问的是「是否授权」，不是「有没有」）
 
 ---
 

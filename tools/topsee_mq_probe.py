@@ -34,16 +34,24 @@ from collections import defaultdict
 from typing import Any, Iterator
 from urllib.parse import urlparse
 
-# 逆向自平台前端的 STOMP 目的地（见接口清单 §3.4）
-DESTINATIONS = {
+# 逆向自平台前端的 STOMP 目的地（见接口清单 §3.4）。
+# ⚠️ 关键：实测这些主题**必须拼 `.<robotNum>` 后缀**才收得到消息；
+#    订裸主题会静默收到 0 帧且无 ERROR 帧，极易误判为「平台没在推」。
+PER_ROBOT = {
     "status": "/topic/service_robot_status",
-    "task_result": "/topic/service_robot_task_result",
-    "task_item": "/topic/service_robot_taskItem",
     "scan": "/topic/service_robot_scan",
+    "velodyne": "/topic/service_robot_velodyne_base_laser",
+    "task_result": "/topic/service_robot_task_result",
+    "map": "/topic/service_robot_map_base64",
+    "task_item": "/topic/service_robot_taskItem",
+}
+# 前端以 `.>` 通配订阅的主题，按原样订阅
+GLOBAL = {
     "event": "/topic/service_robot_event.>",
     "alarm": "/topic/service_robot_alarm.>",
     "obstacle": "/topic/service_robot_obstacle_avoidance_topic",
 }
+DESTINATIONS = {**PER_ROBOT, **GLOBAL}
 
 # 位姿 / 置信度候选字段名，用于回答 G4/G5
 POSE_HINTS = re.compile(
@@ -213,6 +221,26 @@ class ReadOnlyStomp:
                 yield cmd, headers, body
 
 
+def _liveness(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """区分「字段存在」与「字段真的在动」——防 MuJoCo 式假绿。"""
+    if not rows:
+        return {}
+    out: dict[str, Any] = {}
+    for field in ("t", "x", "y", "th", "matchProb", "seq"):
+        vals = [r[field] for r in rows if r.get(field) is not None]
+        if not vals:
+            continue
+        distinct = len(set(vals))
+        out[field] = {
+            "samples": len(vals),
+            "distinct": distinct,
+            "constant": distinct == 1,
+            "first": vals[0],
+            "last": vals[-1],
+        }
+    return out
+
+
 def collect_keys(obj: Any, prefix: str = "", out: set[str] | None = None) -> set[str]:
     out = out if out is not None else set()
     if isinstance(obj, dict):
@@ -229,6 +257,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base-url", required=True, help="平台地址，如 http://<主机>:8888")
     ap.add_argument("--path", default="/robot/mq/", help="STOMP WebSocket 路径")
+    ap.add_argument("--robot-num", default=os.environ.get("TOPSEE_ROBOT_NUM"),
+                    help="机器人 SN；按机器人分发的主题会自动拼为 <topic>.<robotNum>")
     ap.add_argument("--seconds", type=float, default=30.0)
     ap.add_argument("--topics", default="status,task_result,task_item,event,alarm",
                     help=f"逗号分隔，可选：{','.join(DESTINATIONS)}")
@@ -254,7 +284,15 @@ def main() -> int:
         print(f"错误：未知主题 {unknown}，可选 {list(DESTINATIONS)}", file=sys.stderr)
         return 2
 
-    destinations = {t: DESTINATIONS[t] for t in wanted}
+    if not args.robot_num and any(t in PER_ROBOT for t in wanted):
+        print(f"错误：{sorted(set(wanted) & set(PER_ROBOT))} 为按机器人分发的主题，"
+              "必须提供 --robot-num（SN），否则必定 0 帧", file=sys.stderr)
+        return 2
+
+    destinations = {
+        t: (f"{DESTINATIONS[t]}.{args.robot_num}" if t in PER_ROBOT else DESTINATIONS[t])
+        for t in wanted
+    }
     for raw in (d.strip() for d in args.extra.split(",")):
         if raw:
             destinations[raw] = raw
@@ -271,6 +309,7 @@ def main() -> int:
     first_ts: dict[str, float] = {}
     last_ts: dict[str, float] = {}
     non_json: dict[str, int] = defaultdict(int)
+    series: dict[str, list[dict[str, Any]]] = defaultdict(list)
     errors: list[str] = []
     connected = False
 
@@ -309,6 +348,14 @@ def main() -> int:
                     keys[name] |= collect_keys(doc)
                     if len(samples[name]) < args.max_samples:
                         samples[name].append(doc)
+                    if isinstance(doc, dict):
+                        pos = doc.get("position") or {}
+                        series[name].append({
+                            "t": doc.get("time"),
+                            "x": pos.get("x"), "y": pos.get("y"), "th": pos.get("th"),
+                            "matchProb": doc.get("matchProb"),
+                            "seq": (doc.get("header") or {}).get("seq"),
+                        })
 
             if now - last_hb > 8:
                 stomp.heartbeat()
@@ -338,6 +385,7 @@ def main() -> int:
             "non_json_frames": non_json.get(name, 0),
             "keys": k,
             "pose_like_keys": [x for x in k if POSE_HINTS.match(x.split(".")[-1].rstrip("[]"))],
+            "liveness": _liveness(series.get(name, [])),
             "samples": samples.get(name, []),
         }
 
