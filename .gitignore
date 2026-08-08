@@ -27,3 +27,9 @@ _bak_*/
 .claude/
 .synced_from_git_rev
 docs/references/**/*.pdf
+
+# 狗侧现场产物：含客户内网地址与设备明文凭据，禁止进公开仓库。
+# 需要入库的证据请先脱敏，另存为 *.sample.json 或写进 docs/ 下的分析文档。
+artifacts/
+configs/dog/*
+!configs/dog/*.sample.json
