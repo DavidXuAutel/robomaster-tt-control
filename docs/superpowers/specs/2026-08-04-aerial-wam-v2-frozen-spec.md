@@ -95,7 +95,7 @@ connected ∧ real_rgb ∧ imu ∧ (baro∨gps) ∧ collision ∧ depth ∧ dept
 |---|---|---|---|
 | ① 非塌缩 | 训练曲线 + 深度重建见证 | `_wm_train_validate._check_learning`、`post_entropy_frac`、`loss_recon` | loss↓≥2%；recon 不劣化；min entropy-frac ≥ `collapse_entropy_frac`（默认 0.10）；深度 AbsRel 有界 |
 | ② 接近量上升 | sim rollout progress-vs-random | `NavigationReward.progress`、同起点对照 | N=16；mean progress_sum 优于随机 +5.0 **或** mean 终点距优于随机 ≥3.0 m |
-| ③ D̂ 尺度与 VIO 一致 | 相对尺度误差 | `vio.scale_relative_error` | 运动窗上 median 相对误差 ≤ 0.25 |
+| ③ D̂ 尺度与 VIO 一致 | 相对尺度误差 | `vio.reproject_scale_error` | 运动窗上 median 相对误差 ≤ 0.25 |
 | ④ 简单近障生效 | shield-on vs shield-off | `ThresholdSafetyShield`、`CollectStats.interventions` | 干预先于接触 ≥50%；近碰撞率 ≤ shield-off 的 80% |
 
 **④ 的接线**：`collector.py` 须在调 `safety.should_override` **之前**由深度头产出 `depth_min_pred`（今天两者皆空）。**评测期**用 CLI/`_v0_gate` 临时 `safety.kind=threshold` 跑 shield-on/off 对照，**不**改默认 `configs/aerial_rl.yaml` 直到四信号全过。
@@ -116,16 +116,18 @@ connected ∧ real_rgb ∧ imu ∧ (baro∨gps) ∧ collision ∧ depth ∧ dept
 | ②b | `progress_margin` | mean(progress_sum_policy) ≥ mean(progress_sum_random) + **5.0** | 同起点；随机动作为 `U(-1,1)` clip 到 body_delta_limits |
 | ②c | `dist_margin_m` | mean(final_dist_policy) ≤ mean(final_dist_random) − **3.0** | ②b ∨ ②c 任一即可过 ② |
 | ③a | `min_motion_m` | 窗内 ‖Δp‖ ≥ **0.5** m 才计入 | 静止窗不参与尺度比 |
-| ③b | `scale_rel_err_max` | median |ŝ_D − s_VIO| / max(s_VIO, ε) ≤ **0.25** | `vio.scale_relative_error`；ε=1e-3 |
-| ③c | `scale_depth_band_m` | **[1.0, 40.0]** m | 2026-08-05：ŝ_D 的 median 只在导航近/中场像素上取；排除开阔地平线 ~100 m+ 中位 |
+| ③b | `scale_rel_err_max` | median |Zpred − Zobs| / Zobs ≤ **0.25** | 2026-08-10：`vio.reproject_scale_error`（重投影，取代 band-median `scale_relative_error`）；阈值不变 |
+| ③c | `scale_depth_band_m` | **[1.0, 40.0]** m | 2026-08-05 定；2026-08-10 band 敏感性证明为 domain-of-interest 掩码而非偏置源（GT-oracle 在 40/80/200/∞ 恒≈0.002），冻结 [1,40]（D̂ 最坏档仍 0.122 PASS） |
 | ③d | `fwd_cos_min` | **0.7** | 2026-08-05：|cos∠(Δp, mean heading)|；取代 world-+x 前向代理 |
-| ③e | `scale_support_ratio` | **0.6** | 2026-08-05：仅当 ŝ_D ≥ 0.6·‖Δp‖ 才计入（贴墙平行/死代理窗剔除；0.5 在 resize 后 GT oracle 贴边 0.269） |
+| ③e | `scale_support_ratio` | **0.6**（采样器仍用；估计器不再依赖，DEPRECATED-in-place） | 2026-08-10：重投影无死代理失效模式，保留只为 `_sample_scale_windows` 选前向接近窗，不参与 ③ 判定 |
 | ③f | `min_scale_windows` | **≥ 8** | 2026-08-05：有效接近窗不足则 ③ FAIL（非放宽 0.25） |
 | ④a | `near_collision_depth_m` | GT `depth_min` < **1.5** m | 与 `ThresholdSafetyShield.min_depth_m` 对齐 |
 | ④b | `intervention_before_contact_min` | **≥ 0.50** | 在最终 `collided` 的 episode 中，首次 intervention 步号 < 首次 contact 步号 的比例 |
 | ④c | `near_coll_rate_ratio_max` | shield-on / shield-off ≤ **0.80** | near_coll 帧占比；同 N、同起点；**仅评测 CLI 开罩** |
 
 **③ 适用性注记（不改钉死值 0.25；协议修订 2026-08-05）**：③ 用的深度侧长度 `ŝ_D = |median_band D̂_last − median_band D̂_first|`（`vio.scale_from_depth_change`，median 限在 **[1, 40] m** 导航带）是一个**代理**，只在**窗内含前向接近分量**（相机大致沿运动方向、正对场景使视深随位移单调变化，且 ŝ_D ≥ 0.6·‖Δp‖）时才与度量位移 `s_VIO=‖Δp‖` 同尺度。纯侧移/纯偏航/纯升降/贴墙平行巡航/开阔地平线窗上该代理失真——`③a min_motion_m≥0.5 m` 只滤静止窗；`③d/③e/③c` 滤掉无物理意义的窗。采数应偏**朝向表面接近**的轨迹；V1 τ 通道用 FOE 散度独立复核。**`--signal3-diagnose`（2026-08-05）**在改定协议下拆 GT-oracle vs D̂：GT 仍失败 → 再修订或重采，禁止为过门放松 0.25；GT 过而 D̂ 不过 → 加时序/Δ-depth 监督重训深度头。
+
+**③ 估计器修订(2026-08-10；不改钉死值 0.25/0.30)**：③ 的深度侧长度由 band-median 差 `ŝ_D=|median_band D̂_last − median_band D̂_first|`(`vio.scale_from_depth_change`)**改为重投影** `vio.reproject_scale_error`：以内参 K(224²/hfov90→fx=fy=112, cx=cy=111.5)反投影首帧导航带 [1,40] m 像素→世界(GT proprio Δpos+Δyaw；AirSim NED body-fwd cam, DepthPlanar=Zc)→重投影至末帧，robust-median `|Zpred−Zobs|/Zobs`。**动因**：band-median 是代理，其自身几何偏置使 GT-oracle 前向窗=0.229–0.263(≈或超 0.25 线)，完美深度亦不可过门→测的是 band 像素构成 churn 而非尺度。重投影是几何恒等式，**GT-oracle→0.002** (Mac 0.005；H100 5 语料 0.002–0.004)，0.25 预算回归真实 D̂ 误差。**验证**(canonical `depth_step_5000`，H100 `mot-wam`)：同机同语料 OLD band-median GT-fwd 0.263 FAIL / D̂ 0.619 FAIL；NEW 重投影 GT-fwd 0.002 PASS / D̂ 0.122 PASS；5 语料 D̂ 0.112–0.148 全 PASS。band 扫描 [1,40..∞]：GT 恒≈0(非偏置旋钮)，D̂ 单调降(0.122→0.043)，[1,40] 是最坏档仍过关→冻结 [1,40]。`scale_support_ratio` 降级为采样器专用；`fwd_cos_min=0.7` 与 `min_scale_windows≥8` 不变。`--signal3-diagnose` 保留 band-median 腿作 A/B。依据 `docs/handover/2026-08-10-signal3-reprojection-estimator.md`。
 
 Shield 对照协议：默认 yaml 保持 `safety.kind: null`；`_v0_gate --shield-eval` 在进程内构造 on/off 两套 collector，不写回配置文件。
 
@@ -208,3 +210,4 @@ Shield 对照协议：默认 yaml 保持 `safety.kind: null`；`_v0_gate --shiel
 *本文冻结。修改须显式修订本节以上任一「钉死」条目并注明日期，否则以本文为准。*
 *修订 2026-08-04（评估落地）：§ glossary、§4.1 数值门禁、`vio`/`v0_metrics`/`_v0_gate` 落点。*
 *修订 2026-08-05（③ 协议）：钉死导航带 [1,40] m、heading-forward `fwd_cos_min=0.7`、approach-support `scale_support_ratio=0.6`、`min_scale_windows=8`；**不改** `scale_rel_err_max=0.25`。依据 `--signal3-diagnose`：旧 full-frame median + world-+x 采样在开阔地平线/贴墙平行上使 GT oracle 亦不可达；0.6 使 GT oracle 在 resize 语料上可达（med≈0.21），从而把失败归因到 D̂。*
+*修订 2026-08-10（③ 估计器）：band-median → 重投影 `vio.reproject_scale_error`（GT-oracle 0.26→0.002，canonical D̂ 0.122 PASS，5 语料佐证 + band 扫描）；band 冻结 [1,40]；`scale_support_ratio` 降级采样器专用；**不改** `scale_rel_err_max=0.25` / `depth_absrel_max=0.30`。*

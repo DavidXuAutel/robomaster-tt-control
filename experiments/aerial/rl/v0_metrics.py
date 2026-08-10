@@ -204,6 +204,45 @@ def check_scale_consistency(
     }
 
 
+def check_scale_consistency_reproj(
+    depth: np.ndarray,
+    positions: np.ndarray,
+    yaw: np.ndarray,
+    *,
+    fx: float, fy: float, cx: float, cy: float,
+    thr: V0GateThresholds = DEFAULT_THRESHOLDS,
+    max_depth_m: Optional[float] = None,
+    min_depth_m: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Signal ③ authoritative (§4.1 rev 2026-08-10) via ``vio.reproject_scale_error``.
+
+    Backproject each window's first frame through K, cam0→world→camN by the GT
+    metric pose (``positions``/``yaw``), reproject, robust-median |Zpred−Zobs|/Zobs.
+    GT-oracle bias ≈0.002 (band-median was ≈0.26). Band frozen [1,40] m;
+    ``scale_rel_err_max=0.25`` UNCHANGED. ``scale_support_ratio`` no longer used.
+    """
+    lo = thr.scale_depth_min_m if min_depth_m is None else min_depth_m
+    hi = thr.scale_depth_max_m if max_depth_m is None else max_depth_m
+    report = vio_lib.reproject_scale_error(
+        depth, positions, yaw, fx=fx, fy=fy, cx=cx, cy=cy,
+        min_depth_m=lo, max_depth_m=hi, min_motion_m=thr.min_motion_m,
+    )
+    med = float(report["median_rel_err"])
+    n_valid = int(report["n_valid"])
+    if n_valid < int(thr.min_scale_windows) or not np.isfinite(med):
+        return {
+            "ok": False, "median_rel_err": med, "n_valid": n_valid,
+            "reason": (f"need ≥{thr.min_scale_windows} approach windows "
+                       f"(got {n_valid}); corpus lacks approach geometry"),
+            "scale_depth_band_m": [float(lo), float(hi)], "estimator": "reprojection",
+        }
+    return {
+        "ok": bool(med <= thr.scale_rel_err_max),
+        "median_rel_err": med, "n_valid": n_valid, "rel_err": report["rel_err"],
+        "scale_depth_band_m": [float(lo), float(hi)], "estimator": "reprojection",
+    }
+
+
 def near_collision_frame_mask(
     depth_min: np.ndarray,
     *,

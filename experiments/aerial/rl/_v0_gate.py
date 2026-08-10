@@ -216,16 +216,22 @@ def _signal1d(
 
 def _signal3(
     pred_depth: Optional[np.ndarray],
-    vel: Optional[np.ndarray],
-    timestamps: Optional[np.ndarray],
+    positions: Optional[np.ndarray],
+    yaw: Optional[np.ndarray],
     thr: metrics.V0GateThresholds,
 ) -> Dict[str, Any]:
-    """③ — D̂-scale vs VIO. Must use PREDICTED depth; GT-only cannot pass V0."""
+    """③ — D̂-scale vs GT metric motion (reprojection, §4.1 rev 2026-08-10).
+    Must use PREDICTED depth; GT-only cannot pass V0."""
     if pred_depth is None:
         return {"ok": False, "reason": "③ needs predicted D̂ (pass --depth-ckpt); GT depth is plumbing-only"}
-    if vel is None or timestamps is None:
-        return {"ok": False, "reason": "dataset missing vel/timestamps for VIO scale"}
-    return metrics.check_scale_consistency(vel, timestamps, pred_depth, thr=thr)
+    if positions is None or yaw is None:
+        return {"ok": False, "reason": "dataset missing proprio pose (position/yaw) for ③ reprojection"}
+    from experiments.aerial.rl import vio as vio_lib
+    hh, ww = int(pred_depth.shape[-2]), int(pred_depth.shape[-1])
+    fx, fy, cx, cy = vio_lib.intrinsics_from_hfov(ww, hh, 90.0)
+    return metrics.check_scale_consistency_reproj(
+        pred_depth, positions, yaw, fx=fx, fy=fy, cx=cx, cy=cy, thr=thr,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -803,16 +809,16 @@ def _self_check(thr: metrics.V0GateThresholds) -> int:
         [20.0] * 16, [10.0] * 16, [30.0] * 16, [30.0] * 16, thr=thr
     )
     assert s2["ok"], s2
-    # ③ predicted depth-change matches motion (nav-band + approach-support).
-    B, L, H, W = 8, 8, 4, 4
-    ts = np.linspace(0.0, 1.0, L, dtype=np.float32)
-    timestamps = np.stack([ts] * B, axis=0)
-    vel = np.zeros((B, L, 3), dtype=np.float32)
-    vel[..., 0] = 1.0
+    # ③ predicted depth-change matches metric motion (reprojection).
+    # Straight-in approach: 1 m forward (North), depth 5 m → 4 m in step → rel≈0.
+    B, L, H, W = 8, 8, 16, 16
+    positions = np.zeros((B, L, 3), dtype=np.float64)
+    positions[..., 0] = np.linspace(0.0, 1.0, L)
+    yaw = np.zeros((B, L), dtype=np.float64)
     depth = np.ones((B, L, H, W), dtype=np.float32) * 5.0
     for t in range(L):
-        depth[:, t] = 5.0 - ts[t]
-    s3 = _signal3(depth, vel, timestamps, thr)
+        depth[:, t] = 5.0 - positions[0, t, 0]
+    s3 = _signal3(depth, positions, yaw, thr)
     assert s3["ok"], s3
     s4 = metrics.check_shield_effectiveness(
         interventions_on=[[False, True, False, False]],
@@ -922,6 +928,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     gt_depth: Optional[np.ndarray] = None
     vel: Optional[np.ndarray] = None
     timestamps: Optional[np.ndarray] = None
+    pos_s3: Optional[np.ndarray] = None
+    yaw_s3: Optional[np.ndarray] = None
     s1d_holdout: Optional[Dict[str, Any]] = None
     if need_dataset_depth:
         if not args.dataset:
@@ -977,6 +985,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             gt_depth = arr.get("depth")
             vel = arr.get("vel")
             timestamps = arr.get("timestamps")
+            # ③ (reprojection, §4.1 rev 2026-08-10): GT metric pose over the
+            # scored frames (skip the n_context prefix stripped off pred_full).
+            L_score = int(pred_full.shape[1])
+            pos_s3 = np.asarray(
+                [[np.asarray(windows[b][n_context + t].obs.position, dtype=np.float64).reshape(3)
+                  for t in range(L_score)] for b in range(len(windows))], dtype=np.float64)
+            yaw_s3 = np.asarray(
+                [[float(windows[b][n_context + t].obs.yaw) for t in range(L_score)]
+                 for b in range(len(windows))], dtype=np.float64)
 
     # --- score only the requested signals ------------------------------------ #
     signals: Dict[str, Dict[str, Any]] = {}
@@ -991,7 +1008,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             s1d = _signal1d(None, None, thr)
         signals["1"] = {"ok": bool(s1abc.get("ok") and s1d.get("ok")), "abc": s1abc, "d": s1d}
     if "3" in req:
-        signals["3"] = _signal3(pred_depth, vel, timestamps, thr)
+        signals["3"] = _signal3(pred_depth, pos_s3, yaw_s3, thr)
 
     if need_rollout and ({"2", "4"} & req):
         import yaml as _yaml
