@@ -55,7 +55,7 @@
 | 接口 | 生产者 → 消费者 | 语义 | 代码落点 |
 |---|---|---|---|
 | `z_t` | `[1]` → `[2][4][5]` | 当前视觉状态 | `dynamics_torch.py`（RSSM `[h‖z]` 特征） |
-| `D̂_t, σ_t` | `[1b]` → `[5]`/安全 | 局部深度 + 不确定度 | **待建** `_DepthHead`（Step 3） |
+| `D̂_t, σ_t` | `[1b]` → `[5]`/安全 | 局部深度 + 不确定度 | `_DepthHead`（from-scratch，canonical）**或** `DA3DepthHead`（DA3 骨干，①d 加固）经 `build_depth_head` 工厂分派（`backbone` 键：`scratch` 默认 / `da3`）；接口语义不变（见 2026-08-10 §3 修订） |
 | `vio` | `[1c]` → `[2][3][5]` | 局部度量位移/速度/尺度/高度 | **`vio.py` 数学已落**（Step 3 Mac）；学习头仍待 4090 语料 |
 | `τ` | `[1d]` → 安全罩 | 碰撞时间（独立于 `D̂`） | **V1 组件，本期只定义** |
 | `mem` | `[2]` → 高层 | 局部占据 + 拓扑 | **V2，本期不做** |
@@ -171,6 +171,8 @@ Shield 对照协议：默认 yaml 保持 `safety.kind: null`；`_v0_gate --shiel
 
 4090 采集：git checkout `aerial-rl-skeleton`（**禁 scp 热补丁**），`env_bridge.py` 常驻，`collect_v1.sh --airsim --host 127.0.0.1 grab_depth=true` 写 4090 本地目录，`rsync` npz（仅数据）到 H100 `experiments/aerial/rl/artifacts/`。重测 loopback + `grab_depth=true` 闭环 Hz，置 `env.step_hz` 于实测地板下，并同步更新 `_wm_train_validate._refuse_v0` 阈值（当前 8 Hz / `>8.5` 是**跨网** RGB-only 地板，对 4090-local+depth 已过时）——**该数值须实测得到，不得臆测**。
 
+**①d 深度骨干（Step 5 子选项；2026-08-10 修订）**：`[1b]` 深度头有两个后端，经 `build_depth_head`（`backbone` 键）分派：`scratch`（默认，from-scratch `_DepthHead`，canonical `depth_step_5000.pt`）与 `da3`（`DA3DepthHead`：冻结 DINOv2-ViT-L + 可训练 DPT，从 Apache-2.0 `depth-anything/DA3METRIC-LARGE` warm-start，在我方 GT 上微调学 metric 尺度）。动因：from-scratch 头 ①d 封顶（代表性 0.281 薄余量、approach 0.31 FAIL），DA3 加固至 0.1x。DA3 仅动 ①d，**不动 ③**（③ 已由重投影估计器解决）。`da3` 路径 `delta_weight=0`/`nll_weight=0`（DPT 只出 depth）、默认冻结 encoder；纯 torch 子集 vendor 在 `experiments/aerial/rl/third_party/depth_anything_3/`（锁 commit `3d835ec`），权重仅训练机需要、ckpt 自包含。跑权威 `_v0_gate --signals 1,3` 于代表性+approach 两语料，①d 有余量 + ③ 仍过。护栏不变：canonical 不覆盖（DA3 ckpt stem `_da3`）；yaml `depth_head.enable`/`safety.kind` 四信号全过前保持关闭；四全过前不启动 4090 ②/④。依据 `docs/handover/2026-08-10-da3-depth-backbone.md`。
+
 ---
 
 ## 7. 当前实现状态（截至 2026-08-04，含评估落地补丁）
@@ -203,7 +205,7 @@ Shield 对照协议：默认 yaml 保持 `safety.kind: null`；`_v0_gate --shiel
 ## 9. 文件清单
 
 **改**：`configs/aerial_rl.yaml`（复原 gate；加 `world_model.depth_head`；`safety.kind: threshold`；重导 `step_hz`）· `dataset.py`（schema v2 + loader）· `dynamics_torch.py`（深度头；清洁重训）· `collector.py`（产 `depth_min_pred`，把 `wm_out` 传给罩）· `sim_verify/{probes/t2_capability.py, lib/sanity.py, verdict.py}`（depth-rate gate）· `_wm_train_validate.py`（`_refuse_v0` 阈值）。
-**新**：`perception_data.py`（✅）· `vio.py`（✅ 数学）· `v0_metrics.py`（✅）· `_v0_gate.py`（✅ 骨架；完整评测待语料）· `docs/handover/2026-08-04-v0-4090-local-collect-runbook.md`（✅）。
+**新**：`perception_data.py`（✅）· `vio.py`（✅ 数学）· `v0_metrics.py`（✅）· `_v0_gate.py`（✅ 骨架；完整评测待语料）· `docs/handover/2026-08-04-v0-4090-local-collect-runbook.md`（✅）· `dynamics_torch.py::DA3DepthHead` + `build_depth_head` 工厂（✅ 代码；①d DA3 骨干）· `experiments/aerial/rl/third_party/depth_anything_3/`（✅ vendored 纯 torch 子集，锁 commit `3d835ec`，含 `VENDOR.md`）· `train_depth_head.py --backbone da3`（✅ 训练路径）· `docs/handover/2026-08-10-da3-depth-backbone.md`（✅）。
 
 ---
 
@@ -211,3 +213,4 @@ Shield 对照协议：默认 yaml 保持 `safety.kind: null`；`_v0_gate --shiel
 *修订 2026-08-04（评估落地）：§ glossary、§4.1 数值门禁、`vio`/`v0_metrics`/`_v0_gate` 落点。*
 *修订 2026-08-05（③ 协议）：钉死导航带 [1,40] m、heading-forward `fwd_cos_min=0.7`、approach-support `scale_support_ratio=0.6`、`min_scale_windows=8`；**不改** `scale_rel_err_max=0.25`。依据 `--signal3-diagnose`：旧 full-frame median + world-+x 采样在开阔地平线/贴墙平行上使 GT oracle 亦不可达；0.6 使 GT oracle 在 resize 语料上可达（med≈0.21），从而把失败归因到 D̂。*
 *修订 2026-08-10（③ 估计器）：band-median → 重投影 `vio.reproject_scale_error`（GT-oracle 0.26→0.002，canonical D̂ 0.122 PASS，5 语料佐证 + band 扫描）；band 冻结 [1,40]；`scale_support_ratio` 降级采样器专用；**不改** `scale_rel_err_max=0.25` / `depth_absrel_max=0.30`。*
+*修订 2026-08-10（①d 深度骨干）：§3 `D̂_t,σ_t` 落点加 `DA3DepthHead`（DA3METRIC-LARGE 冻结 DINOv2-ViT-L + 可训 DPT）作 `_DepthHead` 之外的 `build_depth_head` 分派后端，仅加固 ①d 薄/失败余量（代表性 0.281 / approach 0.31 → 目标 0.1x）；§6 加 Step 5 深度骨干子选项，§9 加 vendored `third_party/depth_anything_3/` + `DA3DepthHead`/`build_depth_head` + `--backbone da3`。**接口语义、gate 数学、③ 估计器均不变；不改** `depth_absrel_max=0.30` / `scale_rel_err_max=0.25`。DA3 仅动 ①d，不动 ③。依据 `docs/handover/2026-08-10-da3-depth-backbone.md`。*

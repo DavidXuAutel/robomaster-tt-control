@@ -26,7 +26,9 @@ import yaml
 from experiments.aerial.rl import dataset as ds
 from experiments.aerial.rl.buffer import ReplayBuffer
 from experiments.aerial.rl.dynamics_torch import (
+    DA3DepthHead,
     _DepthHead,
+    build_depth_head,
     depth_delta_scale_loss,
     depth_head_loss,
 )
@@ -294,6 +296,43 @@ def _holdout_absrel(
     )
 
 
+def _fetch_da3_metric_state(source: str, device: torch.device) -> Dict[str, Any]:
+    """Fetch DA3METRIC-LARGE pretrained state for warm-starting DA3DepthHead.
+
+    Training-machine only (never imported at gate/runtime). ``source`` is either
+    an HF repo id (e.g. ``depth-anything/DA3METRIC-LARGE``) or a local path to a
+    ``.safetensors`` / ``.pt`` file. Returns the raw upstream state dict whose
+    keys are prefixed ``model.backbone.*`` / ``model.head.*``; DA3DepthHead's
+    ``load_da3_pretrained`` strips the prefixes and loads strict=False.
+    """
+    path = Path(source)
+    if path.is_file():
+        weights = path
+    elif path.is_dir():
+        cands = sorted(path.glob("*.safetensors")) or sorted(path.glob("*.pt"))
+        if not cands:
+            raise FileNotFoundError(
+                f"--da3-weights dir {path} has no .safetensors/.pt weights"
+            )
+        weights = cands[0]
+    else:
+        # Treat as an HF repo id and download the metric weights once.
+        from huggingface_hub import hf_hub_download
+
+        weights = Path(
+            hf_hub_download(repo_id=source, filename="model.safetensors")
+        )
+    if str(weights).endswith(".safetensors"):
+        from safetensors.torch import load_file
+
+        state = load_file(str(weights), device="cpu")
+    else:
+        blob = torch.load(str(weights), map_location="cpu", weights_only=False)
+        state = blob["model"] if isinstance(blob, dict) and "model" in blob else blob
+    print(f"[depth-train] DA3 warm-start: loaded {len(state)} tensors from {weights}")
+    return state
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dataset", required=True, type=Path)
@@ -402,6 +441,21 @@ def main(argv: Optional[List[str]] = None) -> int:
              "uses 64; canonical AbsRel-PASS ckpt is base=32 — arch mismatch "
              "refuses --init-ckpt (strict load). Default keeps yaml (32).",
     )
+    p.add_argument(
+        "--backbone",
+        choices=("scratch", "da3"),
+        default="scratch",
+        help="Depth-head backbone. 'scratch' = from-scratch _DepthHead (canonical, "
+             "default, unchanged). 'da3' = DA3DepthHead (frozen DINOv2-ViT-L + "
+             "trainable DPT), warm-started from DA3METRIC-LARGE — targets ①d margin.",
+    )
+    p.add_argument(
+        "--da3-weights",
+        default="depth-anything/DA3METRIC-LARGE",
+        help="DA3 warm-start source for --backbone da3: HF repo id (downloaded once "
+             "and cached) or a local .safetensors/.pt path. Ignored unless "
+             "--backbone da3 and --init-ckpt is not set (finetune resumes from ckpt).",
+    )
     args = p.parse_args(argv)
     if args.eval_every < 0:
         p.error("--eval-every must be >= 0")
@@ -436,6 +490,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[depth-train] NOTE: --base {args.base} overrides yaml "
               f"base={dh_cfg.get('base')}", file=sys.stderr)
         dh_cfg["base"] = int(args.base)
+    backbone = str(args.backbone).lower()
+    if backbone == "da3":
+        # ③ is solved (reprojection estimator); DA3 trains pure metric depth for
+        # ①d. Force the Δ term and heteroscedastic NLL off (DPT emits depth only
+        # → zero log_sigma), and freeze the DINOv2 backbone by default (train DPT
+        # head only) unless the user explicitly opts out.
+        if float(dh_cfg.get("delta_weight", 0.0)) != 0.0:
+            print("[depth-train] NOTE: --backbone da3 forces delta_weight=0 "
+                  "(③ solved via reprojection; DA3 trains metric depth only)",
+                  file=sys.stderr)
+        dh_cfg["delta_weight"] = 0.0
+        dh_cfg["nll_weight"] = 0.0
+        if not args.no_freeze_encoder and not args.freeze_encoder:
+            dh_cfg["freeze_encoder"] = True
     if args.no_freeze_encoder:
         dh_cfg["freeze_encoder"] = False
     elif args.freeze_encoder:
@@ -474,40 +542,66 @@ def main(argv: Optional[List[str]] = None) -> int:
         holdout_eps = train_eps  # in-sample fallback, explicitly flagged above
     buf = _buffer_from(train_eps, tag="train", window=args.window)
     print(f"[depth-train] holdout: {len(holdout_eps)} eps reserved for ①d AbsRel")
-    model = _DepthHead(
-        image_size=int(dh_cfg["image_size"]),
-        n_frames=int(dh_cfg["n_frames"]),
-        base=int(dh_cfg["base"]),
-        motion_channels=bool(dh_cfg.get("motion_channels", False)),
-        scale_factorized=bool(dh_cfg.get("scale_factorized", False)),
-    ).to(device)
-    if args.init_ckpt is not None:
-        ckpt_path = Path(args.init_ckpt)
-        blob = torch.load(ckpt_path, map_location=device, weights_only=False)
-        state = blob["model"] if isinstance(blob, dict) and "model" in blob else blob
-        # strict=True is deliberate: refuse to finetune from a checkpoint whose
-        # architecture doesn't match the configured DepthHead (n_frames / base /
-        # image_size). On mismatch load_state_dict raises — there is no
-        # (missing, unexpected) tuple to report (that only comes back non-empty
-        # with strict=False), so surface a clean, actionable FAIL instead.
-        if args.adapt_init:
-            state, notes = _adapt_state_dict(state, model)
-            for note in notes:
-                print(f"[depth-train] adapt-init {note}")
-            if not notes:
-                print("[depth-train] adapt-init: nothing to adapt (arch already matches)")
-        try:
+    if backbone == "da3":
+        # Frozen DINOv2-ViT-L + trainable DPT. Warm-start the whole net from
+        # DA3METRIC-LARGE (backbone+head), then finetune the DPT head on our GT
+        # to learn metric scale. `base` is inert for DA3 (arch is fixed by the
+        # DINOv2/DPT config), so it does not enter the DA3 construction.
+        model = DA3DepthHead(
+            image_size=int(dh_cfg["image_size"]),
+            n_frames=int(dh_cfg["n_frames"]),
+            motion_channels=bool(dh_cfg.get("motion_channels", False)),
+            scale_factorized=bool(dh_cfg.get("scale_factorized", False)),
+        ).to(device)
+        if args.init_ckpt is not None:
+            # Resume a previously-finetuned, self-contained DA3 ①d ckpt.
+            ckpt_path = Path(args.init_ckpt)
+            blob = torch.load(ckpt_path, map_location=device, weights_only=False)
+            state = blob["model"] if isinstance(blob, dict) and "model" in blob else blob
             model.load_state_dict(state, strict=True)
-        except RuntimeError as e:
-            print(f"[depth-train] FAIL: --init-ckpt {ckpt_path} arch mismatch vs "
-                  f"configured DepthHead (n_frames={dh_cfg['n_frames']} "
-                  f"base={dh_cfg['base']} image_size={dh_cfg['image_size']} "
-                  f"motion_channels={dh_cfg.get('motion_channels', False)} "
-                  f"scale_factorized={dh_cfg.get('scale_factorized', False)}): {e}",
-                  file=sys.stderr)
-            return 1
-        prior = blob.get("holdout_absrel") if isinstance(blob, dict) else None
-        print(f"[depth-train] init from {ckpt_path} (prior_holdout={prior})")
+            prior = blob.get("holdout_absrel") if isinstance(blob, dict) else None
+            print(f"[depth-train] DA3 resume from {ckpt_path} (prior_holdout={prior})")
+        else:
+            # Fresh warm-start from the pretrained DA3METRIC weights (strict=False:
+            # our head has no cam/gs/sky branches, and the load maps only
+            # backbone→encoder + head→decoder).
+            state = _fetch_da3_metric_state(args.da3_weights, device)
+            model.load_da3_pretrained(state)
+    else:
+        model = _DepthHead(
+            image_size=int(dh_cfg["image_size"]),
+            n_frames=int(dh_cfg["n_frames"]),
+            base=int(dh_cfg["base"]),
+            motion_channels=bool(dh_cfg.get("motion_channels", False)),
+            scale_factorized=bool(dh_cfg.get("scale_factorized", False)),
+        ).to(device)
+        if args.init_ckpt is not None:
+            ckpt_path = Path(args.init_ckpt)
+            blob = torch.load(ckpt_path, map_location=device, weights_only=False)
+            state = blob["model"] if isinstance(blob, dict) and "model" in blob else blob
+            # strict=True is deliberate: refuse to finetune from a checkpoint whose
+            # architecture doesn't match the configured DepthHead (n_frames / base /
+            # image_size). On mismatch load_state_dict raises — there is no
+            # (missing, unexpected) tuple to report (that only comes back non-empty
+            # with strict=False), so surface a clean, actionable FAIL instead.
+            if args.adapt_init:
+                state, notes = _adapt_state_dict(state, model)
+                for note in notes:
+                    print(f"[depth-train] adapt-init {note}")
+                if not notes:
+                    print("[depth-train] adapt-init: nothing to adapt (arch already matches)")
+            try:
+                model.load_state_dict(state, strict=True)
+            except RuntimeError as e:
+                print(f"[depth-train] FAIL: --init-ckpt {ckpt_path} arch mismatch vs "
+                      f"configured DepthHead (n_frames={dh_cfg['n_frames']} "
+                      f"base={dh_cfg['base']} image_size={dh_cfg['image_size']} "
+                      f"motion_channels={dh_cfg.get('motion_channels', False)} "
+                      f"scale_factorized={dh_cfg.get('scale_factorized', False)}): {e}",
+                      file=sys.stderr)
+                return 1
+            prior = blob.get("holdout_absrel") if isinstance(blob, dict) else None
+            print(f"[depth-train] init from {ckpt_path} (prior_holdout={prior})")
     freeze_enc = bool(dh_cfg.get("freeze_encoder", False))
     trainable = _apply_freeze_encoder(model, freeze_enc)
     if not trainable:
@@ -552,6 +646,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # pre-existing unless --overwrite is explicit; point re-runs at a fresh
     # --checkpoint-dir instead.
     stem = f"depth_step_{args.steps}"
+    # DA3 checkpoints are a distinct architecture family — never collide with the
+    # from-scratch canonical stem (depth_step_N.pt) so canonical stays untouched.
+    if backbone == "da3":
+        stem += "_da3"
     # Capacity-lift / non-canonical width: keep base-32 canonical stem untouched
     # (depth_step_N.pt) and park wider ckpts under an explicit _base{N} suffix.
     base_w = int(dh_cfg["base"])
@@ -737,6 +835,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 # what the gate and DepthMinPredictor rebuild from.
                 "motion_channels": bool(dh_cfg.get("motion_channels", False)),
                 "scale_factorized": bool(dh_cfg.get("scale_factorized", False)),
+                # backbone routes build_depth_head at load time ("scratch" default
+                # → _DepthHead; "da3" → DA3DepthHead). da3_arch round-trips the
+                # DINOv2/DPT config so DA3DepthHead.from_payload rebuilds exactly.
+                "backbone": backbone,
+                "da3_arch": model.arch if backbone == "da3" else None,
                 "holdout_absrel": holdout,
                 "depth_cfg": dh_cfg,
                 "init_ckpt": str(args.init_ckpt) if args.init_ckpt else None,

@@ -37,11 +37,14 @@ class DepthMinPredictor:
         device: str = "cpu",
     ) -> "DepthMinPredictor":
         import torch
-        from experiments.aerial.rl.dynamics_torch import _DepthHead
+        from experiments.aerial.rl.dynamics_torch import build_depth_head
 
         payload = torch.load(str(path), map_location="cpu")
         n_frames = int(payload.get("n_frames", 4))
-        model = _DepthHead.from_payload(payload)
+        # Factory dispatches on payload["backbone"] ("scratch" default → _DepthHead;
+        # "da3" → DA3DepthHead). Canonical depth_step_5000.pt has no backbone key →
+        # rebuilds as scratch, unchanged.
+        model = build_depth_head(payload)
         model.load_state_dict(payload["model"], strict=True)
         model.to(device)
         model.eval()

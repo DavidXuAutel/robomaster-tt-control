@@ -398,7 +398,7 @@ def _score_1d_holdout(
     """
     import torch  # lazy: H100 only
 
-    from experiments.aerial.rl.dynamics_torch import _DepthHead
+    from experiments.aerial.rl.dynamics_torch import build_depth_head
     from experiments.aerial.rl.train_depth_head import (
         _holdout_absrel,
         _load_depth_cfg,
@@ -422,16 +422,20 @@ def _score_1d_holdout(
     # Must go through from_payload: ①d and ③ load the SAME checkpoint, so a
     # loader that forgets an architecture flag crashes ①d on any net the other
     # loader can read.
-    model = _DepthHead.from_payload(
+    model = build_depth_head(
         {
-            key: payload.get(key, dh_cfg.get(key, default))
-            for key, default in (
-                ("image_size", 224),
-                ("n_frames", 4),
-                ("base", 32),
-                ("motion_channels", False),
-                ("scale_factorized", False),
-            )
+            "backbone": payload.get("backbone", dh_cfg.get("backbone", "scratch")),
+            "da3_arch": payload.get("da3_arch", None),
+            **{
+                key: payload.get(key, dh_cfg.get(key, default))
+                for key, default in (
+                    ("image_size", 224),
+                    ("n_frames", 4),
+                    ("base", 32),
+                    ("motion_channels", False),
+                    ("scale_factorized", False),
+                )
+            },
         }
     )
     model.load_state_dict(payload["model"], strict=True)
@@ -470,11 +474,11 @@ def _predict_depth_over_windows(
     """
     import torch  # lazy: H100 only
 
-    from experiments.aerial.rl.dynamics_torch import _DepthHead
+    from experiments.aerial.rl.dynamics_torch import build_depth_head
     from experiments.aerial.rl.perception_data import windows_to_perception_arrays
 
     payload = torch.load(str(ckpt_path), map_location="cpu")
-    model = _DepthHead.from_payload(payload)
+    model = build_depth_head(payload)  # payload["backbone"] selects scratch/da3
     model.load_state_dict(payload["model"], strict=True)
     model.eval().to(device)
 

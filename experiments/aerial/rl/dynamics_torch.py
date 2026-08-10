@@ -28,6 +28,7 @@ SEARCH regime, not CTBR racing. ``MAX_IMAGINATION_HORIZON`` stays 15.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -396,6 +397,221 @@ class _DepthHead(nn.Module):
                 rgb_nhwc, self.n_frames, motion_channels=self.motion_channels
             )
         )
+
+
+# ============================================================================
+# [1b′] DA3 pretrained-backbone depth head (frozen §3 rev 2026-08-10)
+# ============================================================================
+# ImageNet stats — DA3 does NOT normalize internally (see da3 api.py preprocess).
+_DA3_IMAGENET_MEAN = (0.485, 0.456, 0.406)
+_DA3_IMAGENET_STD = (0.229, 0.224, 0.225)
+# Vendored pure-torch DA3 subset (see third_party/depth_anything_3/VENDOR.md,
+# upstream commit 3d835ec). Weightless: fine-tuned ckpts are self-contained.
+_DA3_VENDOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party")
+
+
+def _import_da3():
+    """Lazy import of the vendored ``DinoV2`` + ``DPT`` (adds ``third_party`` to
+    ``sys.path`` once). Kept lazy so importing this module never requires DA3 to
+    resolve for the scratch path — only ``DA3DepthHead`` construction touches it."""
+    import sys
+
+    if _DA3_VENDOR_DIR not in sys.path:
+        sys.path.insert(0, _DA3_VENDOR_DIR)
+    from depth_anything_3.model.dinov2.dinov2 import DinoV2  # noqa: E402
+    from depth_anything_3.model.dpt import DPT  # noqa: E402
+
+    return DinoV2, DPT
+
+
+class DA3DepthHead(nn.Module):
+    """RGB single-frame → dense metric ``D̂`` via a DA3METRIC-LARGE backbone (§3′).
+
+    A drop-in sibling of :class:`_DepthHead` (same public surface —
+    ``predict_from_window`` / ``from_payload`` / ``state_dict`` / ``.encoder`` /
+    ``.decoder`` / ``new_pathway_parameters``) selected by the ``backbone="da3"``
+    key through :func:`build_depth_head`. ``_DepthHead`` is left byte-for-byte
+    unchanged so canonical ``depth_step_5000.pt`` still rebuilds via the default
+    ``"scratch"`` path.
+
+    Wraps a DINOv2-ViT-L encoder (``.encoder``, **frozen**, warm-started from
+    DA3METRIC) + a DPT depth decoder (``.decoder``, **trainable**). It bypasses
+    the ``DepthAnything3Net`` wrapper (which drags omegaconf/alignment/geometry)
+    and replicates only the metric-large depth forward — for metric-large
+    ``alt_start=-1`` so the reference-view / cam-token branch is inert and N=1 is
+    safe (VENDOR.md).
+
+    ①d is now a pure metric depth regression (③ is solved by the reprojection
+    estimator, so no Δ-loss / motion channels / scale factorization here — those
+    kwargs are accepted for payload/interface parity and are inert). ``log_σ`` is
+    returned as zeros; DA3 training runs ``nll_weight=0`` and runtime
+    ``depth_min_pred`` uses depth only. ``224 % 14 == 0`` → no resize.
+    """
+
+    # DA3METRIC-LARGE architecture (configs/da3metric-large.yaml). Persisted in
+    # the ckpt payload under ``da3_arch`` so ``from_payload`` rebuilds exactly.
+    DEFAULT_ARCH: Dict[str, Any] = {
+        "dino_name": "vitl",
+        "out_layers": [4, 11, 17, 23],
+        "dim_in": 1024,
+        "dpt_features": 256,
+        "dpt_out_channels": [256, 512, 1024, 1024],
+    }
+
+    def __init__(
+        self,
+        *,
+        image_size: int = 224,
+        n_frames: int = 1,
+        motion_channels: bool = False,
+        scale_factorized: bool = False,
+        arch: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__()
+        if int(image_size) < 14 or int(image_size) % 14 != 0:
+            raise ValueError(
+                f"DA3 requires image_size a multiple of the ViT patch size 14 "
+                f"(got {image_size}); 224 = 16×14 is the aerial default."
+            )
+        self.image_size = int(image_size)
+        # Inert for DA3 (single-frame backbone); kept so payloads / freeze logic /
+        # holdout code that read these attributes behave uniformly across heads.
+        self.n_frames = int(n_frames)
+        self.motion_channels = bool(motion_channels)
+        self.scale_factorized = bool(scale_factorized)
+        self.arch = {**self.DEFAULT_ARCH, **(dict(arch) if arch else {})}
+
+        DinoV2, DPT = _import_da3()
+        self.encoder = DinoV2(
+            name=self.arch["dino_name"],
+            out_layers=list(self.arch["out_layers"]),
+            alt_start=-1,
+            qknorm_start=-1,
+            rope_start=-1,
+            cat_token=False,
+        )
+        self.decoder = DPT(
+            dim_in=int(self.arch["dim_in"]),
+            output_dim=1,
+            features=int(self.arch["dpt_features"]),
+            out_channels=list(self.arch["dpt_out_channels"]),
+        )
+        # ImageNet normalization applied in ``predict_from_window`` (non-persistent
+        # so they never bloat / clash with a strict ckpt load).
+        self.register_buffer(
+            "_imagenet_mean",
+            torch.tensor(_DA3_IMAGENET_MEAN, dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_imagenet_std",
+            torch.tensor(_DA3_IMAGENET_STD, dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
+
+    @classmethod
+    def from_payload(cls, payload: Dict[str, Any]) -> "DA3DepthHead":
+        """Rebuild the architecture recorded in a ``--backbone da3`` checkpoint."""
+        return cls(
+            image_size=int(payload.get("image_size", 224)),
+            n_frames=int(payload.get("n_frames", 1)),
+            motion_channels=bool(payload.get("motion_channels", False)),
+            scale_factorized=bool(payload.get("scale_factorized", False)),
+            arch=payload.get("da3_arch", None),
+        )
+
+    def load_da3_pretrained(self, state_dict: Dict[str, torch.Tensor]) -> Dict[str, list]:
+        """Warm-start encoder+decoder from a DA3METRIC-LARGE state dict.
+
+        DA3 keys are prefixed ``model.backbone.*`` (→ our ``encoder`` = ``DinoV2``,
+        whose ViT lives under ``pretrained.*``) and ``model.head.*`` (→ our
+        ``decoder`` = ``DPT``). Strip the prefix, load ``strict=False`` (the sky
+        head / any GS keys are dropped harmlessly). Runs on the training machine
+        only; the fine-tuned ①d ckpt is self-contained thereafter.
+        """
+        bk, hk = {}, {}
+        for k, v in state_dict.items():
+            if k.startswith("model.backbone."):
+                bk[k[len("model.backbone."):]] = v
+            elif k.startswith("model.head."):
+                hk[k[len("model.head."):]] = v
+        mb = self.encoder.load_state_dict(bk, strict=False)
+        mh = self.decoder.load_state_dict(hk, strict=False)
+        return {
+            "backbone_loaded": len(bk),
+            "backbone_missing": list(mb.missing_keys),
+            "backbone_unexpected": list(mb.unexpected_keys),
+            "head_loaded": len(hk),
+            "head_missing": list(mh.missing_keys),
+            "head_unexpected": list(mh.unexpected_keys),
+        }
+
+    def _prep_last_frame(self, rgb_nhwc: torch.Tensor) -> torch.Tensor:
+        """``rgb [B,L,H,W,3]`` uint8/float → ImageNet-normalized ``[B,3,H,W]``.
+
+        Takes the window's **last** frame (matches ①d "last frame" + ③ per-frame
+        reprojection). uint8 → [0,1]; float assumed already in [0,1] (mirrors
+        :meth:`_DepthHead.pack_rgb_nhwc`)."""
+        if rgb_nhwc.dim() != 5 or rgb_nhwc.shape[-1] != 3:
+            raise ValueError(f"rgb must be [B,L,H,W,3], got {tuple(rgb_nhwc.shape)}")
+        x = rgb_nhwc[:, -1].permute(0, 3, 1, 2).contiguous()  # [B,3,H,W]
+        if x.dtype == torch.uint8:
+            x = x.float() / 255.0
+        else:
+            x = x.float()
+        return (x - self._imagenet_mean) / self._imagenet_std
+
+    def forward(self, x_bchw: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """ImageNet-normalized single frame ``[B,3,H,W]`` → ``(D̂, log_σ)`` each ``[B,H,W]``.
+
+        ``log_σ`` is a zeros tensor (DA3 trains ``nll_weight=0``)."""
+        B, C, H, W = x_bchw.shape
+        # DA3 backbone expects (B, N, 3, H, W); N=1 single view. alt_start=-1 →
+        # cam_token / ref-view logic inert, so pass the safe defaults verbatim.
+        feats, _aux = self.encoder(
+            x_bchw.unsqueeze(1), cam_token=None, export_feat_layers=[]
+        )
+        out = self.decoder(feats, H, W, patch_start_idx=0)
+        depth = out["depth"][:, 0]  # (B, S=1, H, W) → (B, H, W); exp-activated > 0
+        if depth.shape[-2:] != (self.image_size, self.image_size):
+            depth = F.interpolate(
+                depth.unsqueeze(1),
+                size=(self.image_size, self.image_size),
+                mode="bilinear",
+                align_corners=False,
+            )[:, 0]
+        log_sigma = torch.zeros_like(depth)
+        return depth, log_sigma
+
+    def new_pathway_parameters(self) -> list:
+        """No zero-init adapter pathway — the DPT decoder trains under one lr from
+        the DA3METRIC warm-start. Returned empty for interface parity with
+        :meth:`_DepthHead.new_pathway_parameters`."""
+        return []
+
+    def predict_from_window(self, rgb_nhwc: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Convenience: window RGB → ``(D̂, log_σ)`` for the **last** frame."""
+        return self.forward(self._prep_last_frame(rgb_nhwc))
+
+
+def build_depth_head(spec: Optional[Dict[str, Any]]):
+    """Construct a depth head from a fresh config dict OR a checkpoint payload.
+
+    Dispatches on the ``backbone`` key: ``"scratch"`` (default → :class:`_DepthHead`)
+    or ``"da3"`` (→ :class:`DA3DepthHead`). An absent key resolves to ``"scratch"``
+    so every pre-existing checkpoint — including canonical ``depth_step_5000.pt`` —
+    rebuilds byte-identically. Both head classes read their arch keys via ``.get``,
+    so the same factory serves fresh construction and ``from_payload`` loading.
+    """
+    spec = spec or {}
+    backbone = str(spec.get("backbone", "scratch")).lower()
+    if backbone in ("", "scratch"):
+        return _DepthHead.from_payload(spec)
+    if backbone == "da3":
+        return DA3DepthHead.from_payload(spec)
+    raise ValueError(
+        f"unknown depth-head backbone {backbone!r} (expected 'scratch' or 'da3')"
+    )
 
 
 def depth_head_loss(
