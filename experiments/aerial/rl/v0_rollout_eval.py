@@ -49,23 +49,40 @@ def make_start_episodes(
     *,
     seed: int = 0,
     goal_dist_m: float = 30.0,
-    z_scale: float = 0.2,
+    cruise_alt_m: float = 20.0,
 ) -> List[Dict[str, np.ndarray]]:
-    """N deterministic start/goal episode dicts (``pos`` = [start, goal]).
+    """N deterministic *airborne, level* start/goal episode dicts.
 
-    ``env.reset(episode)`` reads ``pos[0]`` as the start and ``pos[-1]`` as the
-    goal (see ``MockAirSimDroneEnv.reset`` / airsim path). Directions are drawn
-    once from a seeded RNG so policy and random see identical starts.
+    ``pos`` = [start, goal]; ``env.reset(episode)`` reads ``pos[0]`` as the start
+    and ``pos[-1]`` as the goal (see ``MockAirSimDroneEnv.reset`` / airsim path).
+    Positions are +up world — the airsim ``reset`` negates z into NED. Starts sit
+    at a fixed cruising altitude over the origin and goals are ``goal_dist_m``
+    away *in the same horizontal plane*: a pure level-navigation task. This
+    geometry is deliberate — the earlier ``start=zeros`` + vertical-goal draw
+    produced two harness bugs that FAILED ②/④ on their first real airsim run:
+
+      * A ground start (z=0) teleports onto the PlayerStart floor. The airsim
+        ``reset`` does NOT take off, so ``has_collided`` latches on ground
+        contact and every episode reads as a spawn crash (near_coll_rate_off=0,
+        contacts sticky) — not a frontal-obstacle signal.
+      * A goal with a vertical component (``direction[2]``) put ~half the goals
+        below ground (z<0), unreachable, pinning final-distance high.
+
+    ``cruise_alt_m`` defaults to ≈ the median start altitude (19.5 m) of the
+    proven ``dataset_v1_rgb`` collection — an altitude the drone is known to hold
+    and fly clear at in ``env_airsim_16``, and low enough that 30 m of level
+    flight meets buildings (so ④ has real obstacles to avoid). Headings are drawn
+    once from a seeded RNG so policy/random and shield on/off see identical
+    starts.
     """
     rng = np.random.default_rng(int(seed))
     episodes: List[Dict[str, np.ndarray]] = []
+    start = np.array([0.0, 0.0, float(cruise_alt_m)], dtype=np.float64)
     for _ in range(int(n)):
-        start = np.zeros(3, dtype=np.float64)
-        direction = rng.normal(size=3)
-        direction[2] *= float(z_scale)  # keep goals roughly in-plane
-        norm = float(np.linalg.norm(direction))
-        direction = direction / norm if norm > 1e-9 else np.array([1.0, 0.0, 0.0])
-        goal = start + direction * float(goal_dist_m)
+        heading = rng.normal(size=2)  # horizontal only — level navigation
+        norm = float(np.linalg.norm(heading))
+        heading = heading / norm if norm > 1e-9 else np.array([1.0, 0.0])
+        goal = start + np.array([heading[0], heading[1], 0.0]) * float(goal_dist_m)
         episodes.append(
             {"pos": np.stack([start, goal]), "yaw": np.array([0.0, 0.0])}
         )
