@@ -1,0 +1,43 @@
+# Aerial WAM v2 — V0 signals ②/④ live-rollout config (NOT the frozen training config).
+#
+# _v0_gate --rollout-eval (signals 2/4) reads ONLY the `env` and `reward` blocks
+# from this file (see _v0_gate._run_signals_2_4). Kept SEPARATE from
+# configs/aerial_rl.yaml so the ②/④ rollout can force env.backend=airsim +
+# grab_depth=true WITHOUT writing those back into the frozen training config
+# (plan red line: "②④ 经 4090 sim rollout … 不写回 config").
+#
+# ② = goal-seeking HeuristicPolicy vs RandomActionPolicy progress over N=16
+#     synthetic start/goal episodes (make_start_episodes, 30 m goals — no
+#     annotation file needed).
+# ④ = shield-on vs shield-off near-collision rate; the shield reads predicted D̂
+#     from the DA3 depth head (--depth-ckpt), and near-collisions are scored
+#     against the env's GT depth → grab_depth MUST be true here.
+#
+# Nothing here flips a safety/enable flag; depth_head.enable / safety.kind /
+# corrector.enable_wm_update stay OFF in the frozen config until all four V0
+# signals pass. This file only selects which env ②/④ roll out on.
+
+env:
+  backend: airsim          # REQUIRED for authoritative ②/④ (gate fails-closed on mock)
+  host: 10.229.20.125      # 4090 renderer (works from H100 client AND from the 4090 itself)
+  port: 41451
+  camera: front_custom
+  vehicle: drone_1
+  width: 224               # Fork A working resolution
+  height: 224
+  step_hz: 5.0             # Plan-A serial rate; sets action duration (1/step_hz)
+  health_check: true       # sanity-gate IMU + depth on reset
+  grab_depth: true         # ④ scores near-collisions against GT depth — must be on
+
+# ② progress telescopes from positions and is weight-independent, but the
+# collector still needs a RewardConfig; mirror the frozen training reward so the
+# online success/termination radius matches.
+reward:
+  w_progress: 1.0
+  w_collision: 10.0
+  w_maneuver: 0.01
+  success_bonus: 10.0
+  success_dist_m: 3.0
+  w_maneuver_final: 0.01
+  maneuver_curriculum_threshold: 0.0
+  maneuver_curriculum_ramp: 1.0
