@@ -185,6 +185,13 @@ def main(argv: List[str] | None = None) -> int:
         action="store_true",
         help="on PASS, write world_model.checkpoint_dir/wm_step_<N>.pt (runbook §3)",
     )
+    p.add_argument(
+        "--checkpoint-dir",
+        default=None,
+        help="override world_model.checkpoint_dir: dir for wm_train.jsonl and the "
+        "saved ckpt. Point at a dated dir (e.g. artifacts/wm_ckpt_v2clean_<date>) "
+        "to keep a clean retrain from clobbering the invalidated wm_ckpt/ log+ckpt.",
+    )
     args = p.parse_args(argv)
 
     root = Path(args.dataset)
@@ -193,6 +200,10 @@ def main(argv: List[str] | None = None) -> int:
 
     wm_cfg = _load_world_model_cfg(Path(args.config))
     wm_cfg.setdefault("device", args.device)
+    # CLI override wins over config so a clean retrain writes to a dated dir and
+    # never touches the invalidated wm_ckpt/ (log is unlink+rewritten each run).
+    if args.checkpoint_dir:
+        wm_cfg["checkpoint_dir"] = args.checkpoint_dir
     # Match the model's image size to the actual frame (defaults to 224).
     sample_obs = buf.sample_windows(1, 1)[0][0].obs
     wm_cfg["image_size"] = int(np.asarray(sample_obs.rgb).shape[0])
