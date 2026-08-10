@@ -605,8 +605,16 @@ def _run_signal3_diagnose(
     max_windows: int,
     cos_min: float,
     allow_incomplete: bool,
+    reproj_band_min: Optional[float] = None,
+    reproj_band_max: Optional[float] = None,
 ) -> int:
-    """Print D̂-vs-GT ③ rel under the §4.1 (2026-08-05) protocol. Read-only."""
+    """Print D̂-vs-GT ③ rel under the §4.1 (2026-08-05) protocol. Read-only.
+
+    ``reproj_band_min`` / ``reproj_band_max`` (read-only A/B): override the
+    reprojection leg's depth band [1, 40] m to probe band-sensitivity of the
+    candidate §4.1 estimator (e.g. drop the ceiling to see far-field D̂ error).
+    ``None`` keeps the frozen thresholds. Never touches the authoritative verdict.
+    """
     if not dataset or not depth_ckpt:
         print("[v0-gate] ③-diagnose needs --dataset and --depth-ckpt", file=sys.stderr)
         return 2
@@ -712,16 +720,20 @@ def _run_signal3_diagnose(
             dtype=np.float64,
         )
 
+        band_lo = float(thr.scale_depth_min_m if reproj_band_min is None else reproj_band_min)
+        band_hi = float(thr.scale_depth_max_m if reproj_band_max is None else reproj_band_max)
+
         def _reproj_row(tag: str, depth_arr: np.ndarray, mask: np.ndarray) -> str:
             rr = vio_lib.reproject_scale_error(
                 depth_arr, pos_gt, yaw, fx=fx, fy=fy, cx=cx, cy=cy,
-                min_depth_m=thr.scale_depth_min_m, max_depth_m=thr.scale_depth_max_m,
+                min_depth_m=band_lo, max_depth_m=band_hi,
                 min_motion_m=thr.min_motion_m,
             )
             return _row(tag, np.asarray(rr["rel_err"], dtype=np.float64),
                         np.asarray(rr["valid"], dtype=bool), mask)
 
-        lines.append("  ─ reprojection (read-only A/B; §4.1 candidate) ─")
+        _band_txt = f"[{band_lo:g}, {band_hi:g}] m" if band_hi < 1e8 else f"[{band_lo:g}, inf) m"
+        lines.append(f"  ─ reprojection (read-only A/B; §4.1 candidate; band {_band_txt}) ─")
         lines.append(_reproj_row("D̂  reproj-fwd", pred, fwd))
         if gt is not None:
             lines.append(_reproj_row("GT  reproj-fwd", gt, fwd))
@@ -865,6 +877,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="read-only: D̂-vs-GT ③ rel on all-motion vs forward-only windows (never affects verdict)")
     p.add_argument("--fwd-cos-min", type=float, default=0.7,
                    help="forward-window threshold |cos∠(Δp,heading)| (③-diagnose only)")
+    p.add_argument("--reproj-band-min", type=float, default=None,
+                   help="read-only A/B: override reprojection-leg depth band floor (m); "
+                        "None keeps the frozen 1.0 m (③-diagnose only, never gates)")
+    p.add_argument("--reproj-band-max", type=float, default=None,
+                   help="read-only A/B: override reprojection-leg depth band ceiling (m); "
+                        "use e.g. 80/200/inf to probe far-field D̂; None keeps the frozen 40 m "
+                        "(③-diagnose only, never gates)")
     args = p.parse_args(argv)
     thr = metrics.DEFAULT_THRESHOLDS
 
@@ -877,6 +896,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             device=args.device, window=int(args.window),
             max_windows=int(args.max_windows), cos_min=float(args.fwd_cos_min),
             allow_incomplete=args.allow_incomplete,
+            reproj_band_min=args.reproj_band_min,
+            reproj_band_max=args.reproj_band_max,
         )
 
     if args.merge:
