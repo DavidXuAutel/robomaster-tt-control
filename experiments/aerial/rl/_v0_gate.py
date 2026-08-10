@@ -694,6 +694,40 @@ def _run_signal3_diagnose(
         lines.append("  GT  (absent)         GT depth not in corpus — oracle leg skipped")
 
     dhat_fwd_med, dhat_fwd_n = _median_over(rel_p, valid_p & fwd)
+
+    # -- read-only reprojection leg (candidate §4.1 revision 2026-08-10) -------
+    # Correspondence-based ③ (backproject frame-0 depth → GT pose → reproject).
+    # GT-oracle ~0.005 vs band-median ~0.24 on local approach probes → returns the
+    # 0.25 budget to real D̂ error. A/B ONLY; does NOT feed the verdict/rc/yaml.
+    # See docs/handover/2026-08-10-signal3-reprojection-estimator.md.
+    try:
+        hh, ww = int(pred.shape[-2]), int(pred.shape[-1])
+        fx, fy, cx, cy = vio_lib.intrinsics_from_hfov(ww, hh, 90.0)
+        pos_gt = np.asarray(
+            [
+                [np.asarray(windows[b][n_context + t].obs.position,
+                            dtype=np.float64).reshape(3) for t in range(L)]
+                for b in range(len(windows))
+            ],
+            dtype=np.float64,
+        )
+
+        def _reproj_row(tag: str, depth_arr: np.ndarray, mask: np.ndarray) -> str:
+            rr = vio_lib.reproject_scale_error(
+                depth_arr, pos_gt, yaw, fx=fx, fy=fy, cx=cx, cy=cy,
+                min_depth_m=thr.scale_depth_min_m, max_depth_m=thr.scale_depth_max_m,
+                min_motion_m=thr.min_motion_m,
+            )
+            return _row(tag, np.asarray(rr["rel_err"], dtype=np.float64),
+                        np.asarray(rr["valid"], dtype=bool), mask)
+
+        lines.append("  ─ reprojection (read-only A/B; §4.1 candidate) ─")
+        lines.append(_reproj_row("D̂  reproj-fwd", pred, fwd))
+        if gt is not None:
+            lines.append(_reproj_row("GT  reproj-fwd", gt, fwd))
+    except Exception as exc:  # never break the authoritative diagnose
+        lines.append(f"  reprojection leg skipped ({type(exc).__name__}: {exc})")
+
     lines.append("  ─ interpretation ─")
     # rc mirrors the D̂ verdict so the diagnostic is scriptable: 0 only when D̂
     # passes on approach-support windows, 1 for any not-green outcome (matching

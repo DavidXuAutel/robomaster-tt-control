@@ -171,6 +171,160 @@ def scale_relative_error(
     }
 
 
+# --------------------------------------------------------------------------- #
+# Reprojection scale-consistency estimator (candidate §4.1 revision 2026-08-10) #
+#                                                                             #
+# The band-median proxy above (ŝ_D = |Δ median depth|) equates "change in     #
+# band-median depth" with "forward displacement", true only for fronto-parallel #
+# axial translation into a band-filling surface. Band pixel churn injects a    #
+# per-window bias that eats the whole 0.25 budget: on local approach corpora   #
+# the GT-oracle (perfect depth) forward-only median is ~0.24 — no depth model  #
+# can win. This estimator replaces aggregate medians with per-pixel geometric  #
+# correspondence: backproject frame-0 depth to 3D via intrinsics, transform by #
+# the GT metric pose (Δposition, Δyaw), reproject into frame N, and compare the #
+# predicted planar depth against the observed depth at the matched pixel. With #
+# GT depth + GT pose this is a geometric identity → GT-oracle → 0 (validated at #
+# ~0.005 on d12/d18/d25 probe corpora, vs 0.19–0.36 for the band-median proxy). #
+# It therefore returns the 0.25 budget to the depth model's real error; the     #
+# 0.25 red line is UNCHANGED — what is fixed is that the proxy wasn't measuring #
+# scale. Feeding predicted D̂ (instead of GT) tests whether D̂'s metric scale is #
+# consistent with metric camera motion, which is exactly V0 signal ③.          #
+#                                                                             #
+# NOT yet wired into the authoritative gate — dormant until a dated §4.1        #
+# spec revision + re-freeze. Old helpers above are untouched for A/B.           #
+# --------------------------------------------------------------------------- #
+def intrinsics_from_hfov(
+    width: int, height: int, hfov_deg: float = 90.0
+) -> Tuple[float, float, float, float]:
+    """Pinhole (fx, fy, cx, cy) from image size + horizontal FOV.
+
+    AirSim square capture (224×224, hfov 90°) → fx=fy=112, cx=cy=111.5.
+    Vertical FOV assumed equal for a square sensor (fy=fx).
+    """
+    fx = (float(width) / 2.0) / np.tan(np.radians(float(hfov_deg)) / 2.0)
+    fy = fx * (float(height) / float(width)) if width != height else fx
+    return float(fx), float(fx if height == width else fy), (width - 1) / 2.0, (height - 1) / 2.0
+
+
+def _R_body_to_world(yaw: float) -> np.ndarray:
+    """AirSim NED yaw (about Down axis): body(fwd,right,down) → world(N,E,D)."""
+    c, s = np.cos(yaw), np.sin(yaw)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+
+
+def reproject_pair_rel_err(
+    depth0: np.ndarray,
+    pos0: np.ndarray,
+    yaw0: float,
+    depth_n: np.ndarray,
+    pos_n: np.ndarray,
+    yaw_n: float,
+    *,
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    min_depth_m: float = 1.0,
+    max_depth_m: float = 40.0,
+    min_matched: int = 50,
+) -> float:
+    """Robust-median relative depth error between two posed frames.
+
+    Backproject navigational-band pixels of ``depth0`` to 3D (camera 0 → world),
+    transform into camera N by the GT metric pose, reproject to pixels, and
+    compare the predicted planar depth (Z in camera N) against the observed
+    ``depth_n`` at the matched pixel. Camera is body-forward: camera axes
+    (right X, down Y, forward Z) map to body (fwd x, right y, down z) as
+    Xc=y_body, Yc=z_body, Zc=x_body; DepthPlanar is Zc. Returns NaN if fewer
+    than ``min_matched`` band-valid correspondences survive bounds/occlusion.
+    """
+    d0 = np.asarray(depth0, dtype=np.float64)
+    dn = np.asarray(depth_n, dtype=np.float64)
+    hh, ww = d0.shape[-2], d0.shape[-1]
+    vv, uu = np.mgrid[0:hh, 0:ww]
+    m = np.isfinite(d0) & (d0 >= min_depth_m) & (d0 <= max_depth_m)
+    if int(np.count_nonzero(m)) < int(min_matched):
+        return float("nan")
+    u = uu[m].astype(np.float64)
+    v = vv[m].astype(np.float64)
+    z = d0[m]
+    # backproject: pixel → camera 0 → body 0 (fwd,right,down) → world
+    body0 = np.stack([z, (u - cx) / fx * z, (v - cy) / fy * z], axis=1)
+    xw = np.asarray(pos0, dtype=np.float64)[None, :] + body0 @ _R_body_to_world(yaw0).T
+    # world → body N (multiply by R on the right == R^T on the left)
+    body_n = (xw - np.asarray(pos_n, dtype=np.float64)[None, :]) @ _R_body_to_world(yaw_n)
+    z_pred = body_n[:, 0]                                  # forward = planar depth in N
+    good = z_pred > 1e-3
+    if int(np.count_nonzero(good)) < int(min_matched):
+        return float("nan")
+    un = cx + fx * body_n[good, 1] / z_pred[good]
+    vn = cy + fy * body_n[good, 2] / z_pred[good]
+    zp = z_pred[good]
+    ui, vi = np.round(un).astype(int), np.round(vn).astype(int)
+    inb = (ui >= 0) & (ui < ww) & (vi >= 0) & (vi < hh)
+    if int(np.count_nonzero(inb)) < int(min_matched):
+        return float("nan")
+    z_obs = dn[vi[inb], ui[inb]]
+    zp = zp[inb]
+    ok = np.isfinite(z_obs) & (z_obs >= min_depth_m) & (z_obs <= max_depth_m)
+    if int(np.count_nonzero(ok)) < int(min_matched):
+        return float("nan")
+    return float(np.median(np.abs(zp[ok] - z_obs[ok]) / z_obs[ok]))
+
+
+def reproject_scale_error(
+    depth: np.ndarray,
+    positions: np.ndarray,
+    yaw: np.ndarray,
+    *,
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    min_depth_m: float = 1.0,
+    max_depth_m: float = 40.0,
+    min_motion_m: float = 0.5,
+    min_matched: int = 50,
+) -> Dict[str, np.ndarray]:
+    """Batched ③ reprojection estimator over windows ``[B, L, H, W]``.
+
+    ``positions [B,L,3]`` and ``yaw [B,L]`` are the GT metric camera poses
+    (proprio). Reprojects each window's first frame into its last frame. Pass =
+    median of valid ``rel_err`` ≤ ``scale_rel_err_max`` (0.25, unchanged); the
+    estimator's own GT-oracle bias is ~0.005, so the budget belongs to D̂ error.
+    """
+    depth = np.asarray(depth, dtype=np.float64)
+    positions = np.asarray(positions, dtype=np.float64)
+    yaw = np.asarray(yaw, dtype=np.float64)
+    if depth.ndim != 4:
+        raise ValueError(f"depth must be [B,L,H,W], got {depth.shape}")
+    b = depth.shape[0]
+    rel = np.full(b, np.nan, dtype=np.float64)
+    valid = np.zeros(b, dtype=bool)
+    for i in range(b):
+        c0, cn = positions[i, 0], positions[i, -1]
+        motion = float(np.linalg.norm(cn - c0))
+        if motion < float(min_motion_m):
+            continue
+        r = reproject_pair_rel_err(
+            depth[i, 0], c0, float(yaw[i, 0]),
+            depth[i, -1], cn, float(yaw[i, -1]),
+            fx=fx, fy=fy, cx=cx, cy=cy,
+            min_depth_m=min_depth_m, max_depth_m=max_depth_m, min_matched=min_matched,
+        )
+        if np.isfinite(r):
+            rel[i] = r
+            valid[i] = True
+    return {
+        "rel_err": rel.astype(np.float32),
+        "valid": valid,
+        "median_rel_err": (
+            np.float32(np.nanmedian(rel[valid])) if np.any(valid) else np.float32(np.nan)
+        ),
+        "n_valid": np.int32(np.count_nonzero(valid)),
+    }
+
+
 def window_scale_report(
     vel: np.ndarray,
     timestamps: np.ndarray,
