@@ -33,3 +33,9 @@ docs/references/**/*.pdf
 artifacts/
 configs/dog/*
 !configs/dog/*.sample.json
+
+# 本地会话与运行时/现场证据（默认不入库）
+.context/
+.workbuddy/
+runtime/
+data/mission_evidence/
