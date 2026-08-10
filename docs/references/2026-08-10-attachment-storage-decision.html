@@ -71,6 +71,25 @@
   接口清单 <code>2026-08-08-topsee-interface-inventory.md</code> §8.2
 </p>
 
+<div class="bad">
+  <strong>🔴 决策已下达（2026-08-10 项目负责人）：整体 HOLD，不向对方表达偏好。</strong>
+  <br /><br />
+  <strong>理由</strong>：本项目在客户侧属<strong>搭载验证</strong>性质、非独立立项，
+  我方不具备向集成商提出配合性要求的立场（选型偏好、分区加盘、书面约定均同）。
+  <br />
+  <strong>处置</strong>：§6 的四项决策全部 HOLD；但<strong>风险不随诉求 HOLD 而消失</strong>，
+  已逐条转为我方自主可控的技术缓解——
+  ①episode 落<strong>我方自备外置存储</strong>，完全不碰一体机系统盘（替代「要分区」，且更干净）；
+  ②做 <strong>URL 形态基线快照 + 漂移检测</strong>，自己发现变更（替代「要知会」，且更可靠）；
+  ③端口依赖走<strong>我司正式项目方的内部路径</strong>同步（替代「对外申报」）。
+  <br />
+  <strong>已确认事实</strong>：我司<strong>有</strong>可离线部署的附件存储组件——选项④技术上成立，
+  但当前不主动推进。
+  <br /><br />
+  📌 <strong>本报告的技术分析仍然有效</strong>，保留供项目转正后直接启用。
+  方案侧落点见 <code>2026-08-05-dog-deployment-loop-plan.md</code> §1.6-F8 与 §3.0-V。
+</div>
+
 <div class="verdict">
   <strong>结论先行</strong>：对方答的是「<strong>可以不用 MinIO</strong>」，并给了三条替代路。
   小昭建议选 <strong>本地化存储</strong>——它同时解决<strong>许可风险</strong>和<strong>端口收敛</strong>两件事，

@@ -73,7 +73,11 @@
     <li><strong>没有优雅停车</strong>（md §1.6-A3）：零速即常规刹车；软件急停只是电机断电、狗会塌，不是安全动作；</li>
     <li><strong>B2 无身高/步态能力</strong>（仅 B1 有）；<code>th</code> 为弧度但「右为 0、顺时针为正」，与 ROS 相反；</li>
     <li>🔴 <strong>两项外部变更进入跟踪</strong>（md §1.6-F）：客户侧正在<strong>收敛端口清单</strong>——我方须申报最小端口集合（<code>8888</code> + 视频取流端口），否则依赖端口可能被砍，且<strong>取流被波及会直接打穿 D2b/D3 数据采集</strong>；集成商<strong>MinIO 许可整改</strong>可能替换对象存储，依赖面待 D1 核实。二者共同把 <strong>D1 的 E7 抬为关键路径</strong>；</li>
-    <li><strong>MQ 中间件定性为 ActiveMQ</strong>，部署形态（云端 <code>8001</code> vs 离线 <code>8888</code>）已闭合为离线一体机，该问询销项（md §1.6-E）。</li>
+    <li><strong>MQ 中间件定性为 ActiveMQ</strong>，部署形态（云端 <code>8001</code> vs 离线 <code>8888</code>）已闭合为离线一体机，该问询销项（md §1.6-E）；</li>
+    <li>🔴 <strong>项目地位约束（md §1.6-F8，最新且影响最大）</strong>：本项目属<strong>搭载验证、非正式立项</strong>，我方不具备向集成商提配合要求的立场。
+      对外诉求<strong>整体 HOLD</strong>，风险转为我方自主缓解（自带外置存储、URL 漂移自检、端口依赖走内部路径）。
+      <strong>后果：D7 因组织约束事实上不可达</strong>，动作类实验 E1/E3/E4-C 一并挂起（<u>非判负，是不具备执行条件</u>）。
+      近期目标锚定 <strong>D6 只读影子</strong>，并先执行 <strong>§3.0-V 最小价值验证切片</strong>：取流 → 视频+遥测同步录制 → QA 可训练性。</li>
   </ul>
   本页保留 v3.1 文字是为了不丢失术语解说；<strong>结论一律以 markdown v3.5 为准</strong>。
 </div>
