@@ -473,3 +473,76 @@ def test_forwardness_backward_is_axis_aligned():
     # moving backward along heading still changes |Δ median depth| → keep it.
     f = _forwardness(np.array([[-5.0, 0.0, 0.0]]), np.zeros((1, 4)))
     assert f[0] > 0.95
+
+
+# --------------------------------------------------------------------------- #
+# probe-verify accept must match the ④ eval's FULL-FIELD near mask, not a      #
+# centre crop (2026-08-11: head-on collisions whose contact geometry sat       #
+# outside the 0.3 centre crop were all rejected → accepted 0).                 #
+# --------------------------------------------------------------------------- #
+class _ApproachEnv:
+    """Steps a probe straight toward a frontal wall. The wall reads as a
+    high-but-in-range depth in the CENTRE crop (floors at ~1.6 m, never < 1.5)
+    while a corner pixel — outside the centre crop, inside the full field —
+    drops below 1.5 m as the drone closes. This is the real failure geometry:
+    a central-crop probe rejects it, a full-field probe (matching the eval)
+    accepts it. Advances ``travel`` by the horizontal action magnitude/step.
+    """
+
+    class _Cfg:
+        step_hz = 5.0
+
+    def __init__(self, *, wall_at_m=8.0, size=8):
+        self.config = self._Cfg()
+        self._wall = float(wall_at_m)
+        self._size = int(size)
+        self._pos = np.zeros(3)
+        self._yaw = 0.0
+        self._goal = None
+        self._travel = 0.0
+
+    @property
+    def goal(self):
+        return self._goal
+
+    def _obs(self):
+        rem = max(self._wall - self._travel, 0.0)
+        d = np.full((self._size, self._size), 60.0, dtype=np.float32)
+        c = self._size // 2
+        d[c, c] = float(max(rem + 1.6, 0.05))   # centre crop floors at ~1.6 m
+        d[0, 0] = float(max(rem, 0.05))          # corner (full-field only) → < 1.5
+        collided = rem <= 0.3
+        state = np.array([self._pos[0], self._pos[1], self._pos[2],
+                          0.0, 0.0, 0.0, self._yaw], dtype=np.float32)
+        return Observation(rgb=np.zeros((self._size, self._size, 3), np.uint8),
+                           state=state, depth=d, collided=collided, info={})
+
+    def reset(self, episode=None):
+        pos = np.asarray(episode["pos"], dtype=np.float64)
+        self._pos = pos[0].copy()
+        self._goal = pos[-1].copy()
+        self._yaw = float(np.asarray(episode["yaw"]).reshape(-1)[0])
+        self._travel = 0.0
+        return self._obs()
+
+    def step(self, action):
+        a = np.asarray(action, dtype=np.float64).reshape(-1)
+        d = float(np.linalg.norm(a[:2]))
+        self._travel += d
+        self._pos = self._pos + np.array([np.cos(self._yaw), np.sin(self._yaw), 0.0]) * d
+        return self._obs(), {}
+
+
+def test_probe_accepts_on_full_field_not_centre_crop():
+    env = _ApproachEnv(wall_at_m=8.0)
+    cand = np.array([[0.0, 0.0, 20.0]])
+    policy = HeuristicPolicy(goal_getter=lambda: getattr(env, "goal", None))
+    eps, diag = rollout.make_obstacle_facing_episodes(
+        env, 1, cand, seed=0, center_frac=0.3,
+        probe_policy=policy, probe_near_m=1.5, probe_steps=40,
+    )
+    # Full-field reaches < 1.5 (corner) → accepted, even though the centre crop
+    # never drops below ~1.6 (would have been rejected by the old central test).
+    assert diag["accepted"] == 1, diag
+    assert diag["probe"]["reached_full_m"]["min"] < 1.5, diag["probe"]
+    assert diag["probe"]["reached_fwd_m"]["min"] >= 1.5, diag["probe"]

@@ -224,12 +224,18 @@ def make_obstacle_facing_episodes(
          unscorable (observed 2026-08-11: 16/16 accepted on the proxy, all
          near_coll_off==0). So after the proxy passes, roll ``probe_policy`` from
          this start for ``probe_steps`` (shield OFF, no predictor) and keep the
-         start ONLY if the GT-depth min actually drops below ``probe_near_m``
-         (= near-collision depth). Because the shield-OFF eval arm later runs the
-         SAME policy from the SAME start, this makes ``near_coll_rate_off > 0`` by
-         construction — ④'s ratio becomes measurable instead of NaN. ② still
-         passes on these starts: even blocked, the goal-seeker out-progresses the
-         random policy before it stalls at the obstacle.
+         start ONLY if it reproduces what the ④ eval scores: the **full-field**
+         GT-depth min drops below ``probe_near_m`` (= near-collision depth) OR the
+         probe **collides**. Both are read the same way by ``_episode_masks`` on
+         the shield-OFF arm (near mask = full-field min < near_m; ``collided`` from
+         ``next_obs``), so an accepted start makes ``near_coll_rate_off > 0`` by
+         construction. NOTE the probe test must MATCH the eval's full-field near
+         mask: an earlier central-crop (0.3) test was strictly stricter and
+         rejected genuine head-on starts whose contact geometry sat outside the
+         centre crop (2026-08-11 head-on corpus: reached_fwd p50 4.0 m, collided
+         10/22, accepted 0 — the drone rammed obstacles the centre crop never
+         registered below 1.5 m). ② still passes on these starts: even blocked,
+         the goal-seeker out-progresses the random policy before it stalls.
 
     This is a ②/④ *harness* geometry fix (selecting valid episodes for the
     shield comparison), NOT a §4.1 change: env / thresholds / model / flags are
@@ -293,8 +299,9 @@ def make_obstacle_facing_episodes(
     # actually reached, how far it flew, and whether it collided. Distinguishes
     # "threshold just missed (reached ~1.8 m)" from "never approached (~12 m)"
     # from "flew nowhere (travel ~0)" without another blind 4090 cycle.
-    probe_reached: List[float] = []   # min forward central-crop depth over the probe
-    probe_travel: List[float] = []    # ‖end pos − start pos‖ (m actually flown)
+    probe_reached: List[float] = []      # min forward central-crop depth (diagnostic)
+    probe_reached_full: List[float] = []  # min FULL-FIELD depth — matches ④ eval near mask
+    probe_travel: List[float] = []       # ‖end pos − start pos‖ (m actually flown)
     probe_collided = 0
     n_scanned = 0
     do_probe = probe_policy is not None and probe_near_m is not None and int(probe_steps) > 0
@@ -360,7 +367,8 @@ def make_obstacle_facing_episodes(
             # "hit" 1.08 m off-axis, eval near_coll_off==0). A head-on frontal wall
             # is jitter-robust and makes both the eval near mask (full-field <1.5)
             # and the ④ ratio reproduce by construction.
-            probe_min = float("inf")
+            probe_min = float("inf")   # central-crop min (diagnostic only)
+            probe_full = float("inf")  # full-field min — the quantity the ④ eval scores
             collided_here = False
             for tr in probe_ep:
                 if getattr(tr.obs, "collided", False) or (
@@ -370,22 +378,40 @@ def make_obstacle_facing_episodes(
                 d = getattr(tr.obs, "depth", None)
                 if d is None:
                     continue
-                fwd_min = _forward_min_depth(np.asarray(d, dtype=np.float64), center_frac=center_frac)
+                arr = np.asarray(d, dtype=np.float64)
+                fwd_min = _forward_min_depth(arr, center_frac=center_frac)
                 if math.isfinite(fwd_min):
                     probe_min = min(probe_min, float(fwd_min))
+                full_min = _full_min_depth(arr)
+                if math.isfinite(full_min):
+                    probe_full = min(probe_full, float(full_min))
             # Telemetry for every proxy-OK probe (before the accept/reject branch).
             if math.isfinite(probe_min):
                 probe_reached.append(probe_min)
+            if math.isfinite(probe_full):
+                probe_reached_full.append(probe_full)
             if probe_ep:
                 p0 = np.asarray(probe_ep[0].obs.position, dtype=np.float64)
                 p1 = np.asarray(probe_ep[-1].obs.position, dtype=np.float64)
                 probe_travel.append(float(np.linalg.norm(p1 - p0)))
             if collided_here:
                 probe_collided += 1
-            if not (probe_min < float(probe_near_m)):
+            # Accept iff the shield-OFF goal-seeker enters the SAME near mask the ④
+            # eval scores — full-field GT < near_m (``_episode_masks`` uses the
+            # full-field min, not a centre crop) — OR physically collides. Both
+            # reproduce near_coll_off>0 on the eval's shield-off arm (same policy,
+            # same start, same full-field mask + collided flag). The old test used
+            # the 0.3 centre crop, strictly stricter than the eval, so it rejected
+            # all 22 head-on starts whose contact geometry sat outside the centre
+            # crop (2026-08-11: reached_fwd p50 4.0 m, full-field unmeasured,
+            # collided 10/22, accepted 0). Collision is the most jitter-robust
+            # proof the start faces reachable geometry.
+            if not (probe_full < float(probe_near_m) or collided_here):
                 rej["probe_no_hit"] += 1
                 continue
-            probe_hit_depths.append(probe_min)
+            hit_val = probe_full if math.isfinite(probe_full) else probe_min
+            if math.isfinite(hit_val):
+                probe_hit_depths.append(hit_val)
         rej["obstacle_ok"] += 1
         accepted_fwd.append(fwd)
         episodes.append(epi)
@@ -415,6 +441,14 @@ def make_obstacle_facing_episodes(
                 "min": float(np.min(probe_reached)) if probe_reached else None,
                 "p50": float(np.median(probe_reached)) if probe_reached else None,
                 "max": float(np.max(probe_reached)) if probe_reached else None,
+            },
+            # Full-field nearest depth reached — the quantity the ④ eval near mask
+            # thresholds against (< near_m). This, not reached_fwd_m, is the accept
+            # test now; p50 here ≈ what near_coll_off will see on the shield-off arm.
+            "reached_full_m": {
+                "min": float(np.min(probe_reached_full)) if probe_reached_full else None,
+                "p50": float(np.median(probe_reached_full)) if probe_reached_full else None,
+                "max": float(np.max(probe_reached_full)) if probe_reached_full else None,
             },
             "travel_m": {
                 "min": float(np.min(probe_travel)) if probe_travel else None,

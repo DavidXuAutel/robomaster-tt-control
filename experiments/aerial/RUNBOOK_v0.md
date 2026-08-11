@@ -24,7 +24,7 @@
 | **①d** | 深度 AbsRel ≤0.30 | H100 离线(DA3 ckpt) | ✅ 0.132 代表 / 0.167 approach OOD |
 | **②** | 接近量↑(N=16 rollout vs random) | **4090 sim rollout** | ✅ 决定性通过:progress 24.13 vs random −5.11;final_dist 5.01m vs 34.99m |
 | **③** | D̂ 尺度一致(reprojection,GT-proprio 位移) | H100 离线 | ✅ 0.05–0.12(重投影估计器,GT-oracle 0.002) |
-| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 晚⁷ 深度头 near-band 重训消除感知层根因(D̂ 6.4→0.65m、①d 0.0483);晚⁸ 修 scan 用采集记录航向(probe_no_hit=19→0 预期),**待用新头+头对头语料 `dataset_v0_headon_20260811` 重跑 4090 rollout** |
+| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 晚⁷ 深度头 near-band 重训消除感知层根因(D̂ 6.4→0.65m、①d 0.0483);晚⁸ scan 用记录航向;晚⁹ probe 判据对齐评测臂(中心裁剪→全画面+碰撞即接受,修 proxy_ok=22/accepted=0),**待用新头+`dataset_v0_headon_20260811` 重跑 4090 rollout(预期 accepted>0)** |
 
 > ④ `near_coll_rate_off=0`(2026-08-11 rollout)根因:`HeuristicPolicy` 是纯 proprio 直线奔 goal、
 > **不看 depth 不避障**;宽锥深度代理(`center_frac=0.5`)只证明"视野里有障碍",直线策略从旁 >1.5m 擦过。
@@ -110,6 +110,16 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚⁹) —— ④ probe 判据对齐评测臂(中心裁剪→全画面 + 碰撞即接受);修 probe/eval 不匹配。**
+  晚⁸ 上记录航向优先只把 proxy_ok 19→22,`accepted` 仍 0。加只读遥测(每个 proxy-OK probe 记
+  `reached_fwd_m`/`reached_full_m`/`travel_m`/`collided`)后一轮定论:`travel_m` p50=**24.8m**(飞得动、到位),
+  `collided`=**10/22**(真撞墙),但 `reached_fwd_m`(中心裁剪 0.3)最低只 **1.63m** 从没 <1.5。**根因**:probe 接受用
+  `_forward_min_depth(中心裁剪)<1.5`,而 ④ 评测臂 `_episode_masks` 的 `near_coll_off` 用 `_full_min_depth(**全画面**)<1.5`
+  —— probe 严过评测,头对头碰撞几何落在中心裁剪外(中心停 1.63m 但全画面必 <1.5),22 个真起点(含 10 碰撞)全被误杀。
+  **修法(对齐 harness、不碰 §4.1 的 1.5m)**:probe 接受改为 **全画面 `_full_min_depth<near_m` 或 `collided`**
+  (二者都被评测臂 `near_coll_off`/`collided_on` 同款读取 → near_coll_off>0 可复现;碰撞是最抗 RPC 抖动的铁证)。
+  补 `reached_full_m` 遥测;新增 probe 单测(中心裁剪触底 1.6m 但角落 <1.5 → 全画面接受、旧中心判据会拒),19 测全过。
+  **待**:4090 重跑 ④,预期 `accepted>0`(全画面/碰撞判据)→ `--merge` 四信号权威判决。flags 仍全关。commits 4eab52f/cf6de28/本次待 push。
 - **2026-08-11(晚⁸) —— ④ scan 用采集记录航向(修 probe_no_hit=19/accepted=0);待 4090 用新头对头语料重跑。**
   晚⁷ 深度头修好后,4090 ④ rollout 仍找不到近障起点。专采头对头语料 `dataset_v0_headon_20260811`(34/34 可用)
   后扫 656 对:`candidates=82 / proxy_ok=19 / probe_no_hit=19 / accepted=0` —— **19 个朝障候选全被 probe 判否**。
