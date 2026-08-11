@@ -138,6 +138,77 @@ def test_signal4_shield_reduces_near_collision_on_wall():
     assert s4["near_coll_rate_on"] < s4["near_coll_rate_off"]
 
 
+class _ScanEnv:
+    """Teleport-only env for the obstacle-facing scan: forward depth depends on
+    the (start position, yaw) an episode resets to.
+
+    A single obstacle sits ``obs_dist`` metres ahead of exactly one candidate
+    position (index ``obstacle_pos_idx``) when facing yaw 0; every other pose is
+    open (forward depth = ``far``). Full-field min is ``floor_m`` everywhere
+    (a benign 'ground' well beyond the near-zone) so start_clearance never trips.
+    """
+
+    def __init__(self, *, obstacle_at, obs_dist=8.0, far=60.0, floor_m=30.0, size=8):
+        self._obstacle_at = np.asarray(obstacle_at, dtype=np.float64)
+        self._obs_dist = float(obs_dist)
+        self._far = float(far)
+        self._floor = float(floor_m)
+        self._size = int(size)
+        self._pos = np.zeros(3)
+        self._yaw = 0.0
+        self._goal = None
+
+    @property
+    def goal(self):
+        return self._goal
+
+    def reset(self, episode=None):
+        pos = np.asarray(episode["pos"], dtype=np.float64)
+        self._pos = pos[0].copy()
+        self._goal = pos[-1].copy()
+        self._yaw = float(np.asarray(episode["yaw"]).reshape(-1)[0])
+        facing_x = abs(self._yaw) < 1e-6  # yaw 0 → +x heading
+        at_obstacle = bool(np.allclose(self._pos, self._obstacle_at, atol=1e-6))
+        fwd = self._obs_dist if (facing_x and at_obstacle) else self._far
+        # Central pixel carries the forward reading; borders carry the floor.
+        d = np.full((self._size, self._size), self._floor, dtype=np.float32)
+        c = self._size // 2
+        d[c, c] = fwd
+        return Observation(rgb=np.zeros((self._size, self._size, 3), np.uint8),
+                           state=np.array([self._pos[0], self._pos[1], self._pos[2],
+                                           0, 0, 0, self._yaw], dtype=np.float32),
+                           depth=d, collided=False, info={})
+
+
+def test_make_obstacle_facing_episodes_keeps_only_forward_obstacle():
+    obstacle_pos = np.array([10.0, 0.0, 20.0])
+    cand = np.array([[10.0, 0.0, 20.0], [500.0, 0.0, 20.0], [-300.0, 40.0, 15.0]])
+    env = _ScanEnv(obstacle_at=obstacle_pos, obs_dist=8.0)
+    eps, diag = rollout.make_obstacle_facing_episodes(
+        env, 4, cand, seed=0, goal_dist_m=30.0,
+        obstacle_min_m=5.0, obstacle_max_m=25.0,
+    )
+    # Only the (obstacle position, yaw 0) pose has a mid-range forward obstacle.
+    assert diag["accepted"] == 1, diag
+    assert len(eps) == 1
+    start = eps[0]["pos"][0]
+    goal = eps[0]["pos"][-1]
+    assert np.allclose(start, obstacle_pos), start
+    # goal is 30 m straight ahead along the accepted heading (yaw 0 → +x).
+    assert np.allclose(goal, obstacle_pos + np.array([30.0, 0.0, 0.0])), goal
+    assert 5.0 <= diag["accepted_fwd_depth_m"]["min"] <= 25.0, diag
+
+
+def test_make_obstacle_facing_episodes_reports_zero_in_open_scene():
+    """No obstacle anywhere → accepted 0 (caller fails ④ closed, no false pass)."""
+    cand = np.array([[0.0, 0.0, 20.0], [50.0, 50.0, 20.0]])
+    env = _ScanEnv(obstacle_at=np.array([9999.0, 0.0, 0.0]))  # never matched
+    eps, diag = rollout.make_obstacle_facing_episodes(env, 4, cand, seed=0)
+    assert eps == []
+    assert diag["accepted"] == 0
+    assert diag["rejections"]["open_ahead"] == diag["scanned"]
+
+
 def test_episode_masks_collided_reads_post_step_obs():
     """④ ``collided`` is a post-step event: it lands on ``next_obs`` of the
     terminal transition, never on any ``obs``. Reading pre-step ``tr.obs`` (the

@@ -16,6 +16,7 @@ goal-seeking ``HeuristicPolicy`` genuinely closes distance while random does not
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -87,6 +88,151 @@ def make_start_episodes(
             {"pos": np.stack([start, goal]), "yaw": np.array([0.0, 0.0])}
         )
     return episodes
+
+
+def _forward_min_depth(depth: np.ndarray, *, center_frac: float) -> float:
+    """Min finite+positive depth over the central ``center_frac`` box (forward).
+
+    The front camera faces body-forward (the episode yaw), so the image centre
+    is the flight direction. Restricting the obstacle test to a centre crop is
+    what makes "is there something *ahead*" distinct from "is there ground far
+    below / a wall off to the side" — a full-field min at cruise altitude is
+    almost always the ground, which never triggers a 1.5 m near-collision.
+    """
+    h, w = depth.shape[-2], depth.shape[-1]
+    cf = float(np.clip(center_frac, 0.05, 1.0))
+    dh, dw = int(h * cf), int(w * cf)
+    r0, c0 = (h - dh) // 2, (w - dw) // 2
+    crop = np.asarray(depth[r0 : r0 + dh, c0 : c0 + dw], dtype=np.float64)
+    finite = crop[np.isfinite(crop) & (crop > 0)]
+    return float(np.min(finite)) if finite.size else float("inf")
+
+
+def _full_min_depth(depth: np.ndarray) -> float:
+    d = np.asarray(depth, dtype=np.float64)
+    finite = d[np.isfinite(d) & (d > 0)]
+    return float(np.min(finite)) if finite.size else float("inf")
+
+
+def make_obstacle_facing_episodes(
+    env: Any,
+    n: int,
+    candidate_positions: np.ndarray,
+    *,
+    seed: int = 0,
+    goal_dist_m: float = 30.0,
+    yaw_candidates_deg: Optional[List[float]] = None,
+    obstacle_min_m: float = 5.0,
+    obstacle_max_m: float = 25.0,
+    start_clearance_m: float = 3.0,
+    center_frac: float = 0.5,
+    max_scans: Optional[int] = None,
+) -> tuple[List[Dict[str, np.ndarray]], Dict[str, Any]]:
+    """Build N obstacle-facing start/goal episodes by *live scanning* the renderer.
+
+    ④ needs the policy to actually approach an obstacle when the shield is off,
+    so the start/goal geometry must point at real geometry. ``env_airsim_16`` is
+    mostly OPEN at cruise altitude (a level goal over the origin meets nothing →
+    ``near_coll_rate_off == 0`` → ④ vacuously fails), so we cannot synthesise
+    starts blindly like :func:`make_start_episodes`. Instead:
+
+      1. Take ``candidate_positions`` (+up world) — trajectory positions from a
+         real collection (``--rollout-dataset``); the drone flew *there*, so the
+         renderer's own geometry is nearby by construction. Using the exact
+         collection coordinates side-steps every world-frame ambiguity: we never
+         reason about where obstacles "should" be, we teleport and *ask*.
+      2. For each (position, yaw) candidate, teleport (``env.reset``) and read GT
+         depth. Keep it only when the *forward* depth (central crop) sits in
+         ``[obstacle_min_m, obstacle_max_m]`` — a real obstacle in the flight
+         path, mid-range so the goal-seeker still makes ② progress before it
+         arrives — AND the full-field min clears ``start_clearance_m`` (not
+         spawned already inside the 1.5 m near-zone) AND the spawn did not latch
+         a collision. The goal is ``goal_dist_m`` straight along that heading, so
+         a goal-seeking policy flies *into* the obstacle (shield-off → near-
+         collision; shield-on → brake) and a random policy does not.
+
+    This is a ②/④ *harness* geometry fix (selecting valid episodes for the
+    shield comparison), NOT a §4.1 change: env / thresholds / model / flags are
+    untouched, and the obstacle-selection bounds here are episode filters, not
+    gate thresholds. Returns ``(episodes, diag)``; ``diag`` reports the scan so a
+    short run surfaces "found K/N obstacle-facing starts" up front rather than
+    after a 40-min blind rollout.
+    """
+    rng = np.random.default_rng(int(seed))
+    cand = np.asarray(candidate_positions, dtype=np.float64).reshape(-1, 3)
+    if cand.shape[0] == 0:
+        raise ValueError("make_obstacle_facing_episodes: no candidate_positions")
+    yaws = (
+        [float(y) for y in yaw_candidates_deg]
+        if yaw_candidates_deg is not None
+        else [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
+    )
+    # (position, yaw) scan order: shuffle positions, and each position tries its
+    # yaws in a shuffled order, so the accepted set spreads across the map rather
+    # than exhausting one spot. Deterministic under ``seed``.
+    order = rng.permutation(cand.shape[0])
+    pairs: List[tuple[int, float]] = []
+    for pi in order:
+        ys = list(yaws)
+        rng.shuffle(ys)
+        for y in ys:
+            pairs.append((int(pi), float(y)))
+    budget = int(max_scans) if max_scans is not None else len(pairs)
+
+    episodes: List[Dict[str, np.ndarray]] = []
+    accepted_fwd: List[float] = []
+    n_scanned = 0
+    rej = {"no_depth": 0, "spawn_collision": 0, "too_close": 0,
+           "open_ahead": 0, "obstacle_ok": 0}
+    for pi, yaw_deg in pairs:
+        if len(episodes) >= int(n) or n_scanned >= budget:
+            break
+        n_scanned += 1
+        start = cand[pi].copy()
+        yaw = math.radians(yaw_deg)
+        heading = np.array([math.cos(yaw), math.sin(yaw), 0.0], dtype=np.float64)
+        goal = start + heading * float(goal_dist_m)
+        epi = {"pos": np.stack([start, goal]),
+               "yaw": np.array([yaw, yaw], dtype=np.float64)}
+        obs = env.reset(epi)
+        if getattr(obs, "collided", False):
+            rej["spawn_collision"] += 1
+            continue
+        depth = getattr(obs, "depth", None)
+        if depth is None:
+            rej["no_depth"] += 1
+            continue
+        if _full_min_depth(depth) < float(start_clearance_m):
+            rej["too_close"] += 1
+            continue
+        fwd = _forward_min_depth(depth, center_frac=center_frac)
+        if not (float(obstacle_min_m) <= fwd <= float(obstacle_max_m)):
+            rej["open_ahead"] += 1
+            continue
+        rej["obstacle_ok"] += 1
+        accepted_fwd.append(fwd)
+        episodes.append(epi)
+
+    diag = {
+        "requested": int(n),
+        "accepted": len(episodes),
+        "scanned": n_scanned,
+        "candidates": int(cand.shape[0]),
+        "rejections": rej,
+        "accepted_fwd_depth_m": {
+            "min": float(np.min(accepted_fwd)) if accepted_fwd else None,
+            "max": float(np.max(accepted_fwd)) if accepted_fwd else None,
+            "mean": float(np.mean(accepted_fwd)) if accepted_fwd else None,
+        },
+        "params": {
+            "goal_dist_m": float(goal_dist_m),
+            "obstacle_min_m": float(obstacle_min_m),
+            "obstacle_max_m": float(obstacle_max_m),
+            "start_clearance_m": float(start_clearance_m),
+            "center_frac": float(center_frac),
+        },
+    }
+    return episodes, diag
 
 
 def _goal_of(env: Any) -> Optional[np.ndarray]:

@@ -510,6 +510,25 @@ def _predict_depth_over_windows(
 # --------------------------------------------------------------------------- #
 # ② / ④ via paired rollouts (mock env by default; airsim for a real ④ pass)   #
 # --------------------------------------------------------------------------- #
+def _obstacle_candidate_positions(dataset_dir: Path, *, stride: int = 5) -> np.ndarray:
+    """+up world positions sampled from a real collection's trajectories.
+
+    ④'s obstacle-facing generator teleports to these and keeps the yaws with a
+    forward obstacle. Using collection trajectory positions (the drone flew
+    *there*) guarantees the renderer's geometry is nearby AND side-steps every
+    world-frame ambiguity — we scan the exact coordinates the data was logged
+    at, never a guessed obstacle location.
+    """
+    episodes = ds.load_dataset(Path(dataset_dir), skip_quarantined=True)
+    pts: List[np.ndarray] = []
+    for ep in episodes:
+        for i in range(0, len(ep), max(1, int(stride))):
+            pts.append(np.asarray(ep[i].obs.position, dtype=np.float64))
+    if not pts:
+        raise ValueError(f"no positions in dataset {dataset_dir}")
+    return np.stack(pts)
+
+
 def _signals_2_4_from_rollouts(
     config_path: Path,
     thr: metrics.V0GateThresholds,
@@ -519,6 +538,7 @@ def _signals_2_4_from_rollouts(
     n_episodes: int,
     max_steps: int,
     seed: int,
+    rollout_dataset: Optional[Path] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     import yaml
 
@@ -529,7 +549,29 @@ def _signals_2_4_from_rollouts(
     cfg = yaml.safe_load(config_path.read_text()) or {}
     env = _build_env(cfg.get("env", {}) or {})
     reward_cfg = RewardConfig(**(cfg.get("reward", {}) or {})) if cfg.get("reward") else None
-    starts = rollout.make_start_episodes(int(n_episodes), seed=int(seed))
+
+    # ④ is only meaningful when the start/goal geometry points at real obstacles.
+    # With a collection dataset (--rollout-dataset) we scan its trajectory
+    # positions live and keep obstacle-facing (start, heading) pairs; the SAME
+    # set drives ② and ④ (frozen §4.1). Without a dataset we fall back to level
+    # over-origin starts — fine for ② and the --allow-mock dev smoke, but ④ will
+    # honestly degenerate in open airspace (near_coll_rate_off == 0).
+    if rollout_dataset is not None:
+        cand = _obstacle_candidate_positions(Path(rollout_dataset))
+        starts, scan_diag = rollout.make_obstacle_facing_episodes(
+            env, int(n_episodes), cand, seed=int(seed),
+        )
+        print(f"[v0-gate] obstacle-facing scan: {json.dumps(scan_diag)}")
+        if not starts:
+            reason = ("④ found 0 obstacle-facing starts scanning "
+                      f"{scan_diag['scanned']} (pos,yaw) pairs from {rollout_dataset} "
+                      "— scene open at these coords / bounds too tight; ④ cannot be "
+                      "scored (fails closed)")
+            s2 = {"ok": False, "reason": reason, "scan": scan_diag}
+            s4 = {"ok": False, "reason": reason, "scan": scan_diag}
+            return s2, s4
+    else:
+        starts = rollout.make_start_episodes(int(n_episodes), seed=int(seed))
 
     # ② progress-vs-random (goal-seeking HeuristicPolicy is the V0 baseline policy).
     policy = HeuristicPolicy(goal_getter=lambda: getattr(env, "goal", None))
@@ -862,6 +904,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--depth-ckpt", default=None, help="trained _DepthHead .pt (①d/③/④ depth pillar)")
     p.add_argument("--config", default="configs/aerial_rl.yaml", help="for ②/④ rollout env")
     p.add_argument("--rollout-eval", action="store_true", help="run ②/④ paired rollouts")
+    p.add_argument("--rollout-dataset", default=None,
+                   help="collection dir (e.g. dataset_v1_rgb) whose trajectory positions "
+                        "seed ④'s live obstacle-facing scan; omit → level over-origin starts "
+                        "(② only; ④ degenerates in open airspace)")
     p.add_argument("--signals", default=None,
                    help="subset to score, e.g. '1,3' (H100 offline) or '2,4' (4090 renderer); "
                         "default = all four. A subset emits a PARTIAL verdict, not the gate.")
@@ -1042,6 +1088,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 n_episodes=thr_eff.n_eval_episodes,
                 max_steps=int(args.max_steps),
                 seed=int(args.seed),
+                rollout_dataset=Path(args.rollout_dataset) if args.rollout_dataset else None,
             )
         if "2" in req:
             signals["2"] = s2
