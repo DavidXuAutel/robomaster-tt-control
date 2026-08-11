@@ -182,21 +182,39 @@ def test_corrector_sets_dynamics_goal_before_imagine():
 
 # -- safety shield p_coll / depth trigger (test gap) --------------------
 def test_threshold_shield_triggers_on_p_coll():
-    shield = ThresholdSafetyShield(max_p_coll=0.5)
+    # should_override LATCHES per instance, so use a fresh shield per case
+    # (a triggered instance stays engaged — see the latch/hold test below).
     hi = DynamicsOutput(z_next=np.zeros(8), p_coll=0.9, progress=0.0, done=False)
     lo = DynamicsOutput(z_next=np.zeros(8), p_coll=0.1, progress=0.0, done=False)
-    assert shield.should_override(_obs(), hi)
-    assert not shield.should_override(_obs(), lo)
+    assert ThresholdSafetyShield(max_p_coll=0.5).should_override(_obs(), hi)
+    assert not ThresholdSafetyShield(max_p_coll=0.5).should_override(_obs(), lo)
 
 
 def test_threshold_shield_triggers_on_predicted_depth():
-    shield = ThresholdSafetyShield(min_depth_m=1.5)
+    # Fresh instance per case: the trigger latches (see latch/hold test below).
     near = _obs(info={"depth_min_pred": 1.0})   # < 1.5 -> brake
     far = _obs(info={"depth_min_pred": 5.0})
-    assert shield.should_override(near)
-    assert not shield.should_override(far)
+    assert ThresholdSafetyShield(min_depth_m=1.5).should_override(near)
+    assert not ThresholdSafetyShield(min_depth_m=1.5).should_override(far)
 
 
 def test_threshold_shield_safe_when_no_predictions():
     # No D̂ / τ / p_coll populated -> never override (safe to install early).
     assert not ThresholdSafetyShield().should_override(_obs())
+
+
+def test_threshold_shield_holds_not_retreats_after_latch():
+    # 晚¹⁰: blind body −x retreat backed the vehicle into rear geometry
+    # (coll_after_latch=9/9). Latched override must now HOLD (zero body-delta),
+    # never retreat, so there is no un-sensed backward travel. The latch also
+    # keeps the shield engaged after D̂ recovers (no re-approach).
+    shield = ThresholdSafetyShield(min_depth_m=3.0)
+    assert shield.should_override(_obs(info={"depth_min_pred": 1.0}))  # trip + latch
+    act = shield.override_action(_obs(info={"depth_min_pred": 1.0}))
+    assert np.allclose(act, np.zeros(4)), f"latched override must hover, got {act}"
+    # Latched: stays engaged even when the predictor now reads clear.
+    assert shield.should_override(_obs(info={"depth_min_pred": 99.0}))
+    assert np.allclose(shield.override_action(_obs(info={"depth_min_pred": 99.0})), np.zeros(4))
+    # reset() clears the latch for the next episode.
+    shield.reset()
+    assert not shield.should_override(_obs(info={"depth_min_pred": 99.0}))

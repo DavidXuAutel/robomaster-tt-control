@@ -24,7 +24,7 @@
 | **①d** | 深度 AbsRel ≤0.30 | H100 离线(DA3 ckpt) | ✅ 0.132 代表 / 0.167 approach OOD |
 | **②** | 接近量↑(N=16 rollout vs random) | **4090 sim rollout** | ✅ 决定性通过:progress 24.13 vs random −5.11;final_dist 5.01m vs 34.99m |
 | **③** | D̂ 尺度一致(reprojection,GT-proprio 位移) | H100 离线 | ✅ 0.05–0.12(重投影估计器,GT-oracle 0.002) |
-| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🔴 scan 已修(晚⁹→晚¹⁰ accepted=11);**④c FAIL**:near_coll ratio on/off=**1.24**>0.80 且 shield 开启臂 11 集全碰撞 —— 与闩锁+单调后退设计矛盾,晚¹⁰ 加 `_shield_diag` 只读遥测定位(闩锁太晚 vs 后退失效),**待 4090 重跑取 diag 后据实修**(不 gaming) |
+| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 scan 已修(accepted=10/11);晚¹⁰ `_shield_diag` 定位=盲目后退撞后墙(coll_after_latch=9/9,非闩锁晚);晚¹¹ **shield 连续后退→闩锁保持(悬停)**(晚⁷ 已消除逼出后退的乐观预测器前提;re-freeze),**待 4090 重跑预期 coll_after_latch→0、ratio≤0.80、④ PASS** |
 
 > ④ `near_coll_rate_off=0`(2026-08-11 rollout)根因:`HeuristicPolicy` 是纯 proprio 直线奔 goal、
 > **不看 depth 不避障**;宽锥深度代理(`center_frac=0.5`)只证明"视野里有障碍",直线策略从旁 >1.5m 擦过。
@@ -109,6 +109,14 @@
 ## 8. 变更记录
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
+
+- **2026-08-11(晚¹¹) —— ④ shield:连续后退→闩锁保持(悬停);修盲目倒退撞后墙(coll_after_latch=9/9)。re-freeze。**
+  晚¹⁰ 机制遥测决定性:`near_before_latch=0`(闩锁不晚)、`coll_after_latch=9/9`(闩锁后全撞)、`first_interv` p50≈0 vs `first_coll` p50≈33、`steps_on` 34 vs `steps_off` 10.5。
+  根因:`override_action` 每步 body −x **无后向感知**,策略被 latch 关掉后盲目倒退,封闭场景退进后墙 —— 活久 3 倍但仍 9/10 撞 = 把碰撞**转移**到后方,非避障。
+  **前提已消失**:逼出"连续后退"的是**乐观预测器**(approach AbsRel 0.167),而 **晚⁷** 已消除(前向 D̂ 6.4→0.65m、近带 P(trigger)=1.0、近带准/欠读)。
+  **修法**:`override_action` latch 后**保持(返回 `np.zeros(4)` 悬停)**、删 `retreat_step_m`。触发 `min_depth_m=3.0`+欠读 → 真 ≈3m(带外)闩锁 → latch 使策略不顶入、零 delta 无前冲无盲退 → 前向稳 ≥standoff(near_rate_on≈0)、无后墙撞(coll_after_latch→0)、~3m 先于接触介入(④b)。
+  保持优于纯悬停(有 latch,不再逼近)、优于后退(晚⁷ 移除了后退所补偿的乐观偏差)。冻结 spec §④a 追加"后退→保持 修订(re-freeze 晚¹⁰)"。新单测 `test_threshold_shield_holds_not_retreats_after_latch`;顺修 2 个 latch 前的顺序依赖老测(负例用新实例)。全 shield/rollout/metric 测通过。
+  **待**:4090 同命令重跑 ④,预期 `coll_after_latch→0`、`ratio≤0.80`、④ PASS → `--merge` 四信号权威判决。flags 仍全关。commit 本次待 push。
 
 - **2026-08-11(晚¹⁰) —— scan 修复生效(accepted=11);② PASS;④ 仍 FAIL(near_coll ratio=1.24>0.80),加只读机制遥测定位。**
   晚⁹ 全画面/碰撞判据把 `accepted` 0→**11**、`probe hits`=11、`obstacle_ok`=11 —— scan 阻塞彻底解除。权威 rollout:

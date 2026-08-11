@@ -45,22 +45,32 @@ class ThresholdSafetyShield:
     Reads optional predictions off ``obs.info`` / ``wm_out`` — if none are
     present it degrades to never-override, so it is safe to install early.
 
-    **Latch + continuous retreat** (V2, re-freeze 2026-08-11). Two prior designs
-    failed ④ under an *optimistic* depth predictor (approach AbsRel ≈0.167 ⇒ ``D̂``
-    reads FARTHER than GT near the band):
-      * pure hover (return zeros) parks the vehicle inside the near-collision band
-        (goal-seeker keeps pushing forward, shield keeps cancelling) →
-        near_coll_rate_on ≫ off, ④'s ratio inverts;
-      * "retreat until ``D̂`` ≥ ``safe_depth_m`` then hover" *also* parks it there,
-        because ``D̂`` recovers past ``safe`` while GT is still <1.5 m (ratio 6.10,
-        observed 2026-08-11).
-    Fix: on the first breach we *latch* for the rest of the episode and retreat
-    (body −x) **every step, never hovering** — monotonic backward travel drives GT
-    clearance strictly up regardless of predictor bias, so near_coll_rate_on ≈ 0 by
-    construction. Paired with a *reaction margin* (``min_depth_m`` set ABOVE the
-    1.5 m near-collision metric, default 3.0 m) the shield triggers BEFORE the band,
-    so it also intervenes before contact (④b). ``reset()`` clears the latch between
-    episodes (the eval reuses one instance). See frozen-spec ④a re-freeze note.
+    **Latch + hold (brake-to-hover)** (V2, re-freeze 2026-08-11 晚¹⁰). History:
+      1. pure *pre-latch* hover (return zeros, no latch): the goal-seeker keeps
+         pushing forward while the shield cancels it → oscillates in/out of the
+         band → near_coll_rate_on ≫ off, ratio inverts.
+      2. latch + *continuous retreat* (body −x every step): fixed (1)'s oscillation
+         and, under an *optimistic* predictor (approach AbsRel ≈0.167 ⇒ ``D̂`` reads
+         FARTHER than GT), drove GT clearance monotonically up regardless of bias.
+         BUT the 2026-08-11 晚¹⁰ 4090 rollout showed it *relocates* the crash: with
+         the policy latched off, the vehicle retreats body −x **blindly with no rear
+         sensing** and, in enclosed scenes, backs into the rear/side wall — telemetry
+         ``coll_after_latch=9/9``, ``near_before_latch=0`` (front band never entered
+         before the latch), collisions ~33 steps AFTER an immediate latch. A shield
+         that survives 3× longer but still crashes 9/10 is not avoidance.
+      3. latch + **hold (hover, return zeros)** — current. The whole premise that
+         forced (2)'s retreat was the *optimistic* predictor; 晚⁷ eliminated it (DA3
+         near-band retrain: forward ``D̂`` 6.4→0.65 m, near-band P(trigger)=1.0, now
+         accurate/slightly conservative near the band). With the ``min_depth_m``=3.0
+         reaction standoff the shield trips at true ≈3 m (``D̂`` under-reads near the
+         band ⇒ trips EARLY, above the band), then the *latch* holds position — the
+         policy is ignored so nothing pushes it in, and zero body-delta means no
+         blind backward travel. Front clearance stays ≥ standoff (near_coll_rate_on
+         ≈ 0), no rear crash (coll_after_latch → 0), and it intervenes before contact
+         (④b). Hold beats hover-*only* precisely because of the latch (no re-approach)
+         and beats retreat precisely because 晚⁷ removed the optimism that retreat
+         compensated for. ``reset()`` clears the latch between episodes (the eval
+         reuses one instance). See frozen-spec ④a re-freeze note (2026-08-11 晚¹⁰).
     """
 
     # Reaction standoff (NOT the near-collision metric): trigger when predicted
@@ -70,7 +80,6 @@ class ThresholdSafetyShield:
     min_tau_s: float = 1.0            # brake if time-to-contact < this
     max_p_coll: float = 0.5           # brake if WM collision prob > this
     brake_gain: float = 1.0
-    retreat_step_m: float = 3.0       # backward body-delta request (collector re-clips to the rate cap)
     _engaged: bool = field(default=False, init=False, repr=False)
 
     def reset(self) -> None:
@@ -92,9 +101,10 @@ class ThresholdSafetyShield:
         return False
 
     def should_override(self, obs: Observation, wm_out: Optional[Any] = None) -> bool:
-        # Latch for the rest of the episode once breached, so we retreat clear of
-        # the band and hold — rather than oscillating in/out of it, which would
-        # keep sampling near-collision frames on the shield-on arm.
+        # Latch for the rest of the episode once breached, so we hold clear of the
+        # band — rather than oscillating in/out of it (which would keep sampling
+        # near-collision frames on the shield-on arm) or re-approaching once the
+        # predicted clearance nominally recovers.
         if self._engaged:
             return True
         if self._breached(obs, wm_out):
@@ -103,12 +113,15 @@ class ThresholdSafetyShield:
         return False
 
     def override_action(self, obs: Observation) -> np.ndarray:
-        # Latched → retreat every step (body −x) for the rest of the episode; do
-        # NOT hover once ``D̂`` "recovers". The predictor is optimistic near the
-        # band (reads farther than GT), so any hover-at-safe branch parks the
-        # vehicle INSIDE the GT near-collision band and inflates near_coll_rate_on
-        # (④ ratio inverted, observed 2026-08-11). Monotonic retreat makes GT
-        # clearance strictly increase regardless of predictor bias. The collector
-        # re-clips to ``body_delta_limits(1/step_hz)`` so this is a steady per-step
-        # backward increment, not a teleport.
-        return np.array([-abs(float(self.retreat_step_m)), 0.0, 0.0, 0.0], dtype=np.float64)
+        # Latched → HOLD (hover) for the rest of the episode: zero body-delta. Do
+        # NOT retreat body −x. The blind backward retreat had no rear sensing and,
+        # in enclosed scenes, backed the vehicle into the rear/side wall (晚¹⁰:
+        # coll_after_latch=9/9, crash ~33 steps after latching) — it relocated the
+        # crash instead of avoiding it. Holding at the ``min_depth_m`` (3.0 m)
+        # reaction standoff is safe now that 晚⁷ removed the near-band predictor
+        # optimism that retreat was compensating for: the trip fires at true ≈3 m
+        # (D̂ under-reads near the band ⇒ trips early, above the 1.5 m metric), the
+        # latch keeps the policy from pushing back in, and zero delta means no
+        # forward creep and no blind backward travel. The collector re-clips this
+        # through ``body_delta_limits(1/step_hz)`` (0 → 0), so it is a true hold.
+        return np.zeros(4, dtype=np.float64)
