@@ -65,6 +65,12 @@ PY
   echo "[env] installing gate deps (numpy/pyyaml + airsim RPC client) ..."
   python -m pip install "numpy==1.26.4" "pyyaml" \
     "airsim>=1.8.1" "opencv-python-headless>=4.6" "msgpack-rpc-python>=0.4.1"
+  # airsim pulls the NON-headless opencv-python, which needs libGL.so.1 (absent
+  # on GPU pods) and shadows the headless build. Force headless-only so `import
+  # cv2` works without apt/libgl1.
+  echo "[env] enforcing headless OpenCV (drop non-headless opencv that airsim pulled) ..."
+  python -m pip uninstall -y opencv-python opencv-contrib-python 2>/dev/null || true
+  python -m pip install --force-reinstall "opencv-python-headless>=4.6"
   echo "[env] bootstrap done."
 fi
 
