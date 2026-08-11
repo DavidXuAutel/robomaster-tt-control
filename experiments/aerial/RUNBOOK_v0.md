@@ -24,7 +24,7 @@
 | **①d** | 深度 AbsRel ≤0.30 | H100 离线(DA3 ckpt) | ✅ 0.132 代表 / 0.167 approach OOD |
 | **②** | 接近量↑(N=16 rollout vs random) | **4090 sim rollout** | ✅ 决定性通过:progress 24.13 vs random −5.11;final_dist 5.01m vs 34.99m |
 | **③** | D̂ 尺度一致(reprojection,GT-proprio 位移) | H100 离线 | ✅ 0.05–0.12(重投影估计器,GT-oracle 0.002) |
-| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 scan 已修(accepted=10/11);晚¹⁰ `_shield_diag` 定位=盲目后退撞后墙(coll_after_latch=9/9,非闩锁晚);晚¹¹ **shield 连续后退→闩锁保持(悬停)**(晚⁷ 已消除逼出后退的乐观预测器前提;re-freeze),**待 4090 重跑预期 coll_after_latch→0、ratio≤0.80、④ PASS** |
+| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 scan 已修(accepted=10/11);晚¹⁰ `_shield_diag` 定位盲目后退撞后墙(coll_after_latch=9/9);晚¹¹ 保持(悬停)反致惯性滑进带并停留(near_count_on 200/200、ratio 12.96);晚¹² **shield 有界状态反馈后退**(D̂<standoff 后退刹动量、D̂≥standoff 保持不撞后墙;re-freeze),**待 4090 重跑预期 coll_after_latch→0、ratio≤0.80、④ PASS** |
 
 > ④ `near_coll_rate_off=0`(2026-08-11 rollout)根因:`HeuristicPolicy` 是纯 proprio 直线奔 goal、
 > **不看 depth 不避障**;宽锥深度代理(`center_frac=0.5`)只证明"视野里有障碍",直线策略从旁 >1.5m 擦过。
@@ -110,6 +110,11 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚¹²) —— ④ shield:保持(悬停)→有界状态反馈后退;修惯性滑进带停留(near_count_on 200/200、ratio 12.96)。re-freeze。**
+  晚¹¹ 4090 权威 rollout 推翻晚¹⁰"保持"假设:零 body-delta **不刹前向动量** → latch 关掉策略后机体**惯性滑进 1.5m 带并停在里面** —— `near_count_on` 达 200/200、`near_coll_rate_on=0.385`、`ratio=12.96`(比后退设计 1.24 更差)、`coll_after_latch=4`、`first_coll_step max=8`、`first_near_on max=15`。**分析错误定位**:晚¹⁰ 误以为零 delta 能定住位置;实际设计 (2) 的后退**身兼两职** —— 抵消乐观预测器 + 刹前向动量;晚⁷ 消除了乐观偏差,但**动量刹车仍需要**,悬停把它一起丢了。
+  **修法**:`override_action` 恢复 `retreat_step_m=3.0`,`D̂ < min_depth_m`(反应 standoff)时后退 body −x(刹动量+退出带),`D̂ ≥ standoff` 时保持零 delta(**不再后退**→不盲目倒进后墙)。晚⁷ 使 D̂ 近带准确/欠读(前向 6.4→0.65m)故 `D̂≥standoff ⟺ 真 ≈3m 净空`(先前"退到 D̂ 安全再悬停"停带里正因乐观 D̂ 在 GT 仍<1.5 时就过 standoff,该前提已消失);latch 使 standoff 稳定后策略不再逼近。综合了后退(晚¹⁰前)刹动量 + 保持(晚¹¹)不撞后墙两者的正确部分。collector.py:158-163 在 `depth_min_pred` 填入后、`override_action` 前调用 → 状态反馈拿得到当前步 D̂(已核 wiring)。
+  **治理**:改的只是 shield **保持→有界状态反馈后退**控制律(shield 是被测系统);**④a 1.5 / ④b 0.50 / ④c 0.80 钉死值不动**;env/模型/flags 未动。冻结 spec §④a 追加"保持→有界状态反馈后退 更正(re-freeze 晚¹²)"。单测 `test_threshold_shield_holds_not_retreats_after_latch`→`test_threshold_shield_bounded_state_feedback_retreat_after_latch`;shield 4 + collector/rollout/metric 34 = 38 全通过。
+  **待**:4090 同命令重跑 ④,预期 `coll_after_latch→0`、`ratio≤0.80`、④ PASS → `--merge` 四信号权威判决。flags 仍全关。commit 本次待 push。
 - **2026-08-11(晚¹¹) —— ④ shield:连续后退→闩锁保持(悬停);修盲目倒退撞后墙(coll_after_latch=9/9)。re-freeze。**
   晚¹⁰ 机制遥测决定性:`near_before_latch=0`(闩锁不晚)、`coll_after_latch=9/9`(闩锁后全撞)、`first_interv` p50≈0 vs `first_coll` p50≈33、`steps_on` 34 vs `steps_off` 10.5。
   根因:`override_action` 每步 body −x **无后向感知**,策略被 latch 关掉后盲目倒退,封闭场景退进后墙 —— 活久 3 倍但仍 9/10 撞 = 把碰撞**转移**到后方,非避障。

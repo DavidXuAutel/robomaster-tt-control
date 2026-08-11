@@ -203,18 +203,21 @@ def test_threshold_shield_safe_when_no_predictions():
     assert not ThresholdSafetyShield().should_override(_obs())
 
 
-def test_threshold_shield_holds_not_retreats_after_latch():
-    # 晚¹⁰: blind body −x retreat backed the vehicle into rear geometry
-    # (coll_after_latch=9/9). Latched override must now HOLD (zero body-delta),
-    # never retreat, so there is no un-sensed backward travel. The latch also
+def test_threshold_shield_bounded_state_feedback_retreat_after_latch():
+    # 晚¹²: bounded state-feedback retreat. While inside the standoff (D̂ < 3.0)
+    # the latched override RETREATS body −x (a pure hold coasts into the band on
+    # momentum — 晚¹¹). Once D̂ ≥ standoff it HOLDS (zeros) — it must NOT keep
+    # retreating, or the blind body −x backs into the rear wall (晚¹⁰). The latch
     # keeps the shield engaged after D̂ recovers (no re-approach).
-    shield = ThresholdSafetyShield(min_depth_m=3.0)
+    shield = ThresholdSafetyShield(min_depth_m=3.0, retreat_step_m=3.0)
     assert shield.should_override(_obs(info={"depth_min_pred": 1.0}))  # trip + latch
+    # Still breached (D̂ 1.0 < 3.0) → retreat body −x (negative x, no lateral/yaw).
     act = shield.override_action(_obs(info={"depth_min_pred": 1.0}))
-    assert np.allclose(act, np.zeros(4)), f"latched override must hover, got {act}"
-    # Latched: stays engaged even when the predictor now reads clear.
+    assert act[0] < 0.0 and np.allclose(act[1:], 0.0), f"expected −x retreat, got {act}"
+    # Latched: stays engaged when D̂ recovers, but now HOLDS (stops retreating).
     assert shield.should_override(_obs(info={"depth_min_pred": 99.0}))
-    assert np.allclose(shield.override_action(_obs(info={"depth_min_pred": 99.0})), np.zeros(4))
+    assert np.allclose(shield.override_action(_obs(info={"depth_min_pred": 99.0})), np.zeros(4)), \
+        "clear of standoff → hold, must not keep retreating into the rear wall"
     # reset() clears the latch for the next episode.
     shield.reset()
     assert not shield.should_override(_obs(info={"depth_min_pred": 99.0}))
