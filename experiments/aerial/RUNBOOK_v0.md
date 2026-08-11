@@ -24,7 +24,7 @@
 | **①d** | 深度 AbsRel ≤0.30 | H100 离线(DA3 ckpt) | ✅ 0.132 代表 / 0.167 approach OOD |
 | **②** | 接近量↑(N=16 rollout vs random) | **4090 sim rollout** | ✅ 决定性通过:progress 24.13 vs random −5.11;final_dist 5.01m vs 34.99m |
 | **③** | D̂ 尺度一致(reprojection,GT-proprio 位移) | H100 离线 | ✅ 0.05–0.12(重投影估计器,GT-oracle 0.002) |
-| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🔴 rollout 完成但**不可测**:④b 干预=1.0 ✅,但 `near_coll_rate_off=0` / `n_contact=0` → ratio=NaN fail |
+| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 2026-08-11(晚³)harness 修已落地(后退罩+修 step bug+正前 probe+近障优先候选),**待 H100 pull + 重跑**;上一版不可测(`near_coll_rate_off=0`→ratio NaN) |
 
 > ④ `near_coll_rate_off=0`(2026-08-11 rollout)根因:`HeuristicPolicy` 是纯 proprio 直线奔 goal、
 > **不看 depth 不避障**;宽锥深度代理(`center_frac=0.5`)只证明"视野里有障碍",直线策略从旁 >1.5m 擦过。
@@ -109,6 +109,28 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚³) —— ④ 后退罩 + 修 step 双夹 bug + 正前 probe + 近障优先候选(修 `near_coll_off=0`/ratio NaN)。**
+  用户批准方向"后退罩+细step"。诊断链:上一版 `near_coll_off=0` 的真根因有三层,全修:
+  1. **`HeuristicPolicy` 双重夹取 bug**(`train_rl.py`):`act` 里 `clip_body_delta` 用默认 30Hz
+     上限 `[0.167,…]`,把 `step_m` 彻底废掉 → 5Hz rollout 实际每步只走 ~0.167m(而非物理上限
+     1.0m=5m/s÷5Hz),probe/eval 永远够不到障碍。改:`act` 返回 `step_m`-缩放的**原始** delta,
+     由 collector `act_delta` 用 `body_delta_limits(1/step_hz)` 正确按速率夹取(删孤儿 import)。
+  2. **probe 命中判据 全图最小 → 正前中心裁剪**(`v0_rollout_eval.make_obstacle_facing_episodes`):
+     旧判据 `_full_min_depth` 会把侧向擦碰/下沉见地当命中(docstring 自陈"巡航全图最小往往是
+     地面")→ 跨网 RPC 抖动下 eval 复跑不复现(`fwd=13.4m` 接受、probe"命中"1.08m 侧向、
+     `near_coll_off=0`)。改用 `_forward_min_depth(center_frac)`:要求直线策略**正面撞**墙 →
+     eval 全图 near mask(<1.5,仍是冻结 §4.1)必然复现,ratio 可测。
+  3. **shield 后退罩 latch(`safety.ThresholdSafetyShield`)**:旧 `override_action` 返回 zeros=悬停,
+     会把机体**停在** 1.5m 近障带里(goal-seeker 一直命令前进、罩一直抵消)→ `near_on>near_off`
+     ratio 反转/NaN。改:首次触发即**整集 latch**,后退(body −x)到预测间距恢复 >`safe_depth_m`(2.5m)
+     再悬停 → `near_on≈0` 构造保证。加 `reset()`,`run_shield_eval` per-episode 清 latch(shield 实例跨集复用)。
+  4. **近障优先候选 + 扫描参数**(`_v0_gate`):`_obstacle_candidate_positions` 按采集帧深度全图最小
+     **近障优先排序**(RGB-only 无存深度则安全回退原序);`make_obstacle_facing_episodes` 加
+     `preserve_order` 按此序扫(不打乱);scan 参数 `obstacle_max_m` 15→25、`probe_steps` 12→40
+     (配 ~1m/步够到 25m 正前障)、`max_scans` 400→1000。诊断依据:上一版 `open_ahead=392/400`
+     (98% 候选点前向 >15m 空)+ 只扫了 8.7%(400/4584 对)→ 巡航走廊本就多为开阔,把少数近障点排前是关键。
+  harness 几何/罩行为修 + 一个真 step bug,**env / §4.1 阈值 / 模型 / flags 均未动**。①③② 的判读不受影响
+  (② 决定性通过的 banked 结果仍成立;重跑会在障碍起点上重测 ②,仍应过)。**待 H100 pull + 重跑 ②④。**
 - **2026-08-11(晚²) —— ④ probe 验证起点(修 near_coll_off=0)。**
   - `make_obstacle_facing_episodes` 加 `probe_policy/probe_steps/probe_near_m`:代理判据通过后,用同一
     `HeuristicPolicy` 空跑 24 步(shield 关),只保留 GT 深度真进 `<near_collision_depth_m` 的起点 →

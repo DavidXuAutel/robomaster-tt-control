@@ -13,7 +13,7 @@ trigger wiring against fields that may not be populated yet.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol, runtime_checkable
 
 import numpy as np
@@ -44,14 +44,32 @@ class ThresholdSafetyShield:
 
     Reads optional predictions off ``obs.info`` / ``wm_out`` — if none are
     present it degrades to never-override, so it is safe to install early.
+
+    **Latch + retreat** (V2, 2026-08-11). A pure hover-override (return zeros)
+    parks the vehicle *inside* the near-collision band once it drifts there: the
+    goal-seeking policy keeps commanding forward, the shield keeps cancelling it,
+    and the drone hovers at ~``min_depth_m`` — so the shield-on arm accrues MORE
+    near-collision frames than shield-off (near_coll_rate_on > near_coll_rate_off,
+    ④'s ratio inverts / NaNs, observed 2026-08-11). Instead: on the first breach
+    we *latch* for the rest of the episode and *retreat* (body −x) until predicted
+    clearance recovers past ``safe_depth_m``, then hover. This drives the drone OUT
+    of the band and keeps it there, so near_coll_rate_on ≈ 0 by construction.
+    ``reset()`` clears the latch between episodes (the eval reuses one instance).
     """
 
     min_depth_m: float = 1.5          # brake if nearest predicted depth < this
     min_tau_s: float = 1.0            # brake if time-to-contact < this
     max_p_coll: float = 0.5           # brake if WM collision prob > this
     brake_gain: float = 1.0
+    safe_depth_m: float = 2.5         # retreat until predicted clearance ≥ this
+    retreat_step_m: float = 3.0       # backward body-delta request (collector re-clips to the rate cap)
+    _engaged: bool = field(default=False, init=False, repr=False)
 
-    def should_override(self, obs: Observation, wm_out: Optional[Any] = None) -> bool:
+    def reset(self) -> None:
+        """Clear the per-episode latch (the shield instance is reused across episodes)."""
+        self._engaged = False
+
+    def _breached(self, obs: Observation, wm_out: Optional[Any] = None) -> bool:
         d_hat = obs.info.get("depth_min_pred")
         tau = obs.info.get("tau_pred")
         p_coll = None
@@ -65,6 +83,22 @@ class ThresholdSafetyShield:
             return True
         return False
 
+    def should_override(self, obs: Observation, wm_out: Optional[Any] = None) -> bool:
+        # Latch for the rest of the episode once breached, so we retreat clear of
+        # the band and hold — rather than oscillating in/out of it, which would
+        # keep sampling near-collision frames on the shield-on arm.
+        if self._engaged:
+            return True
+        if self._breached(obs, wm_out):
+            self._engaged = True
+            return True
+        return False
+
     def override_action(self, obs: Observation) -> np.ndarray:
-        # Conservative: cancel forward motion, hold altitude/heading.
+        # Retreat (body −x) while still inside the safe standoff, else hover. The
+        # collector re-clips to ``body_delta_limits(1/step_hz)`` so a large request
+        # becomes a steady per-step backward increment, not a teleport.
+        d_hat = obs.info.get("depth_min_pred")
+        if d_hat is not None and float(d_hat) < self.safe_depth_m:
+            return np.array([-abs(float(self.retreat_step_m)), 0.0, 0.0, 0.0], dtype=np.float64)
         return np.zeros(4, dtype=np.float64)

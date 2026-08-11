@@ -131,6 +131,7 @@ def make_obstacle_facing_episodes(
     probe_steps: int = 24,
     probe_near_m: Optional[float] = None,
     reward_cfg: Optional[RewardConfig] = None,
+    preserve_order: bool = False,
     log_every: int = 0,
 ) -> tuple[List[Dict[str, np.ndarray]], Dict[str, Any]]:
     """Build N obstacle-facing start/goal episodes by *live scanning* the renderer.
@@ -186,10 +187,14 @@ def make_obstacle_facing_episodes(
         if yaw_candidates_deg is not None
         else [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
     )
-    # (position, yaw) scan order: shuffle positions, and each position tries its
-    # yaws in a shuffled order, so the accepted set spreads across the map rather
-    # than exhausting one spot. Deterministic under ``seed``.
-    order = rng.permutation(cand.shape[0])
+    # (position, yaw) scan order: each position tries its yaws in a shuffled
+    # order (spread across headings). Positions are shuffled by default so the
+    # accepted set spreads across the map; but when ``preserve_order`` is set the
+    # caller has pre-ranked candidates (e.g. nearest-geometry-first from the
+    # collection's own depth) and we walk them in that order so the scan hits the
+    # obstacle-rich spots first instead of exhausting ``max_scans`` on open
+    # cruise corridors. Deterministic under ``seed`` either way.
+    order = np.arange(cand.shape[0]) if preserve_order else rng.permutation(cand.shape[0])
     pairs: List[tuple[int, float]] = []
     for pi in order:
         ys = list(yaws)
@@ -256,15 +261,23 @@ def make_obstacle_facing_episodes(
             except Exception:  # noqa: BLE001
                 rej["reset_error"] += 1
                 continue
+            # Require the FORWARD (central-crop) depth to drop below near_m — i.e.
+            # the straight-line policy rams a frontal obstacle head-on. A full-field
+            # min here accepts a side-graze or the ground sinking into view (the
+            # docstring's "full-field min at cruise is almost always the ground");
+            # such hits do NOT reproduce on the ④ shield-off arm under cross-net
+            # RPC timing jitter (observed 2026-08-11: fwd=13.4 m accepted, probe
+            # "hit" 1.08 m off-axis, eval near_coll_off==0). A head-on frontal wall
+            # is jitter-robust and makes both the eval near mask (full-field <1.5)
+            # and the ④ ratio reproduce by construction.
             probe_min = float("inf")
             for tr in probe_ep:
                 d = getattr(tr.obs, "depth", None)
                 if d is None:
                     continue
-                d = np.asarray(d, dtype=np.float64)
-                finite = d[np.isfinite(d) & (d > 0)]
-                if finite.size:
-                    probe_min = min(probe_min, float(np.min(finite)))
+                fwd_min = _forward_min_depth(np.asarray(d, dtype=np.float64), center_frac=center_frac)
+                if math.isfinite(fwd_min):
+                    probe_min = min(probe_min, float(fwd_min))
             if not (probe_min < float(probe_near_m)):
                 rej["probe_no_hit"] += 1
                 continue
@@ -448,6 +461,10 @@ def run_shield_eval(
     for epi in start_episodes:
         if hasattr(policy, "reset"):
             policy.reset()
+        # The shield instance is reused across episodes and latches on first
+        # breach — clear the latch so each episode starts un-engaged.
+        if hasattr(shield, "reset"):
+            shield.reset()
         ep_on = _run_one(
             env, policy, epi, max_steps=max_steps, reward_cfg=reward_cfg,
             shield=shield, depth_predictor=depth_predictor_on,

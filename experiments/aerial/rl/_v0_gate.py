@@ -518,15 +518,38 @@ def _obstacle_candidate_positions(dataset_dir: Path, *, stride: int = 5) -> np.n
     *there*) guarantees the renderer's geometry is nearby AND side-steps every
     world-frame ambiguity — we scan the exact coordinates the data was logged
     at, never a guessed obstacle location.
+
+    Positions are returned **nearest-geometry-first**: when the collection stored
+    per-frame depth, we rank each sampled pose by its full-field min depth (the
+    nearest geometry in *any* direction at that pose) ascending, so the scan
+    (with ``preserve_order=True``) walks the near-building poses first instead of
+    burning ``max_scans`` on open cruise corridors. The 2026-08-11 diag showed
+    392/400 scanned poses were open-ahead (>15 m) — cruise flight is mostly open,
+    so ordering the few near-obstacle poses to the front is what makes ④ scannable.
+    If the corpus is RGB-only (no stored depth) every pose ranks ``inf`` and the
+    order is left unchanged — a safe no-op fallback.
     """
     episodes = ds.load_dataset(Path(dataset_dir), skip_quarantined=True)
     pts: List[np.ndarray] = []
+    prox: List[float] = []
     for ep in episodes:
         for i in range(0, len(ep), max(1, int(stride))):
             pts.append(np.asarray(ep[i].obs.position, dtype=np.float64))
+            d = getattr(ep[i].obs, "depth", None)
+            if d is None:
+                prox.append(float("inf"))
+                continue
+            d = np.asarray(d, dtype=np.float64)
+            finite = d[np.isfinite(d) & (d > 0)]
+            prox.append(float(np.min(finite)) if finite.size else float("inf"))
     if not pts:
         raise ValueError(f"no positions in dataset {dataset_dir}")
-    return np.stack(pts)
+    out = np.stack(pts)
+    prox_arr = np.asarray(prox, dtype=np.float64)
+    if np.isfinite(prox_arr).any():
+        # stable ascending sort → near-building poses first; ties keep dataset order.
+        out = out[np.argsort(prox_arr, kind="stable")]
+    return out
 
 
 def _signals_2_4_from_rollouts(
@@ -565,12 +588,21 @@ def _signals_2_4_from_rollouts(
     policy = HeuristicPolicy(goal_getter=lambda: getattr(env, "goal", None))
     if rollout_dataset is not None:
         cand = _obstacle_candidate_positions(Path(rollout_dataset))
+        # obstacle_max_m 25 (was 15): the probe is the real filter (rams the wall
+        # head-on), so accept mid-range frontal obstacles up to just under the 30 m
+        # goal — sky/max-range artifacts get rejected by the probe anyway.
+        # probe_steps 40 (was 12): with the step_m double-clip fixed the policy now
+        # steps ~1.0 m at 5 Hz, so 40 steps reaches a ≤25 m frontal obstacle head-on
+        # (12 steps only travelled ~2 m and could not).
+        # preserve_order: candidates are pre-ranked nearest-geometry-first, so walk
+        # them in order; max_scans 1000 (was 400) still covers far more near-obstacle
+        # poses because the open corridors sort to the back.
         starts, scan_diag = rollout.make_obstacle_facing_episodes(
             env, int(n_episodes), cand, seed=int(seed),
-            obstacle_max_m=15.0, center_frac=0.3,
+            obstacle_max_m=25.0, center_frac=0.3,
             probe_policy=policy, probe_near_m=float(thr.near_collision_depth_m),
-            probe_steps=12, reward_cfg=reward_cfg,
-            max_scans=400, log_every=20,
+            probe_steps=40, reward_cfg=reward_cfg,
+            preserve_order=True, max_scans=1000, log_every=20,
         )
         print(f"[v0-gate] obstacle-facing scan: {json.dumps(scan_diag)}")
         if not starts:

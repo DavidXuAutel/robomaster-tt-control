@@ -23,7 +23,6 @@ from experiments.aerial.rl.buffer import ReplayBuffer
 from experiments.aerial.rl.collector import RolloutCollector
 from experiments.aerial.rl.corrector import CorrectorConfig, SerialCorrectorLoop
 from experiments.aerial.rl.dynamics import StubLatentDynamics
-from experiments.aerial.rl.env.action import clip_body_delta
 from experiments.aerial.rl.env.obs import PolicyObservation
 from experiments.aerial.rl.reward import DEFAULT_ONLINE_SUCCESS_DIST_M, RewardConfig
 from experiments.aerial.rl.safety import NullSafetyShield, ThresholdSafetyShield
@@ -64,7 +63,15 @@ class HeuristicPolicy:
         n = np.linalg.norm(vec)
         if n > self.step_m:
             vec = vec / n * self.step_m
-        return clip_body_delta(np.array([vec[0], vec[1], vec[2], 0.0]))
+        # Return the step_m-scaled body delta RAW — do NOT clip to the default
+        # 30 Hz cap here. Doing so silently locked every step to
+        # ``body_delta_limits(1/30) ≈ [0.167, .067, .067] m`` regardless of
+        # ``step_m`` or the env's actual ``step_hz``, so a 5 Hz rollout crawled
+        # ~0.167 m/step instead of the physical 1.0 m cap (5 m/s ÷ 5 Hz) and the
+        # probe/eval could never reach an obstacle. The collector's ``act_delta``
+        # re-clips with the rate-correct ``body_delta_limits(1/step_hz)``, so this
+        # command is bounded downstream; ``step_m`` bounds ‖vec‖ here.
+        return np.array([vec[0], vec[1], vec[2], 0.0], dtype=np.float64)
 
 
 def _get(cfg: Any, key: str, default: Any = None) -> Any:
