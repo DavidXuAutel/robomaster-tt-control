@@ -16,7 +16,9 @@ goal-seeking ``HeuristicPolicy`` genuinely closes distance while random does not
 """
 from __future__ import annotations
 
+import logging
 import math
+import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -25,6 +27,63 @@ from experiments.aerial.rl.buffer import Episode, ReplayBuffer
 from experiments.aerial.rl.collector import RolloutCollector
 from experiments.aerial.rl.reward import RewardConfig
 from experiments.aerial.rl.safety import ThresholdSafetyShield
+
+logger = logging.getLogger(__name__)
+
+# Substrings that mark a *transient renderer / sensor* reset failure (a flaky
+# depth/IMU frame on spawn) — as opposed to a code bug. On these we retry the
+# reset a few times and then skip the start, rather than crashing the whole gate.
+# The obstacle-facing ④ starts are precisely the ones most likely to trip the
+# "depth nearly constant" health guard (a wall filling the FOV is near-constant
+# depth), so one bad frame must not nuke a 40-min run. The guard stays STRICT:
+# a bad frame is never *scored*, only retried/skipped.
+_TRANSIENT_RESET_MARKERS = (
+    "sanity failed",
+    "no depth data on reset",
+    "no imu data on reset",
+    "renderer/sensors unavailable",
+)
+
+
+def _run_one_resilient(
+    env: Any,
+    policy: Any,
+    episode: Dict[str, np.ndarray],
+    *,
+    max_steps: int,
+    reward_cfg: Optional[RewardConfig],
+    shield: Any = None,
+    depth_predictor: Any = None,
+    retries: int = 2,
+    retry_sleep_s: float = 0.5,
+) -> Optional[Episode]:
+    """``_run_one`` with retry-then-skip on transient reset/health failures.
+
+    Returns the episode, or ``None`` if the reset kept failing its health guard
+    (renderer produced a degenerate depth/IMU frame). A ``None`` tells the caller
+    to DROP this start from both arms so the pairing (and same-N) is preserved.
+    Non-transient errors (real bugs) propagate unchanged — we never mask those.
+    """
+    last: Optional[BaseException] = None
+    for attempt in range(int(retries) + 1):
+        try:
+            return _run_one(
+                env, policy, episode, max_steps=max_steps, reward_cfg=reward_cfg,
+                shield=shield, depth_predictor=depth_predictor,
+            )
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if not any(m in msg for m in _TRANSIENT_RESET_MARKERS):
+                raise  # a real error, not a flaky frame — do not swallow it
+            last = exc
+            logger.warning(
+                "rollout reset/health failure (attempt %d/%d), retrying: %s",
+                attempt + 1, int(retries) + 1, exc,
+            )
+            if attempt < int(retries) and retry_sleep_s > 0:
+                time.sleep(float(retry_sleep_s))
+    logger.warning("skipping start after %d reset/health failures: %s", int(retries) + 1, last)
+    return None
 
 
 class RandomActionPolicy:
@@ -373,11 +432,23 @@ def run_progress_eval(
         "random_final_dists": [],
     }
     for epi in start_episodes:
+        # Run both arms first; a transient reset/health failure on EITHER arm
+        # drops the whole start (skip=True) so policy/random stay paired at same N.
+        arms: Dict[str, Any] = {}
+        skip = False
         for tag, pol in (("policy", policy), ("random", random_policy)):
             if hasattr(pol, "reset"):
                 pol.reset()
-            ep = _run_one(env, pol, epi, max_steps=max_steps, reward_cfg=reward_cfg)
-            goal = _goal_of(env)
+            ep = _run_one_resilient(env, pol, epi, max_steps=max_steps, reward_cfg=reward_cfg)
+            if ep is None:  # reset kept failing its health guard → skip the start
+                skip = True
+                break
+            arms[tag] = ep
+        if skip:
+            continue
+        goal = _goal_of(env)
+        for tag in ("policy", "random"):
+            ep = arms[tag]
             if goal is None or not ep:
                 # No goal or empty episode → non-informative; record neutral 0s.
                 out[f"{tag}_progress_sums"].append(0.0)
@@ -475,22 +546,29 @@ def run_shield_eval(
         # breach — clear the latch so each episode starts un-engaged.
         if hasattr(shield, "reset"):
             shield.reset()
-        ep_on = _run_one(
+        ep_on = _run_one_resilient(
             env, policy, epi, max_steps=max_steps, reward_cfg=reward_cfg,
             shield=shield, depth_predictor=depth_predictor_on,
         )
+
+        if hasattr(policy, "reset"):
+            policy.reset()
+        ep_off = _run_one_resilient(
+            env, policy, epi, max_steps=max_steps, reward_cfg=reward_cfg,
+            shield=None, depth_predictor=None,
+        )
+
+        # A transient reset/health failure on EITHER arm drops the whole start,
+        # so on/off stay paired at the same N (the ratio is a controlled compare).
+        if ep_on is None or ep_off is None:
+            continue
+
         m_on = _episode_masks(ep_on, near_collision_depth_m=near_collision_depth_m)
         interventions_on.append(m_on["intervention"])
         collided_on.append(m_on["collided"])
         near_coll_on.append(m_on["near"])
         depth_steps += int(m_on["depth_steps"])
 
-        if hasattr(policy, "reset"):
-            policy.reset()
-        ep_off = _run_one(
-            env, policy, epi, max_steps=max_steps, reward_cfg=reward_cfg,
-            shield=None, depth_predictor=None,
-        )
         m_off = _episode_masks(ep_off, near_collision_depth_m=near_collision_depth_m)
         near_coll_off.append(m_off["near"])
         depth_steps += int(m_off["depth_steps"])

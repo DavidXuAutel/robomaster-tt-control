@@ -109,6 +109,14 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚⁵) —— rollout 对 reset/健康失败重试+跳过(修 flaky 深度帧崩全局 gate)。**
+  晚⁴ 重跑时崩在 shield-off 臂的 `env.reset`:`depth sanity failed: depth nearly constant (span=0.239, std=0.048)`
+  —— 一个抖动/近似恒定的深度帧让 `_assert_healthy` 抛 `RuntimeError` 冒到顶,**整个 40min gate 挂掉**。
+  且 ④ 专挑"正对障碍"起点,墙面填满 FOV 本就近似恒定深度 → 最易触发该守卫。修:`v0_rollout_eval`
+  加 `_run_one_resilient`,对**瞬态 reset/健康失败**(白名单 marker:sanity/‌no depth/no imu/renderer)**重试 2 次
+  (间隔 0.5s,reset 顶部 `_connect` 会重连),仍失败则**跳过该起点**(②/④ 都按起点整体跳,保持两臂配对、同 N)。
+  **守卫不削弱**:坏帧永不被**评分**,只重试/跳过;每次跳过打 WARNING(不静默丢)。非瞬态错误(真 bug)照常抛。
+  全跳空 → 现有 `depth_steps==0`/空数组守卫仍 fail-closed。env/§4.1/模型/flags 未动。
 - **2026-08-11(晚⁴) —— ④ 连续后退 + 触发余量(re-freeze ④a 注;修 ratio 反转 6.10 + before_frac 0.333)。**
   晚³ 修好后 ④ 首次可测,但仍 FAIL:`near_on=0.205 ≫ off=0.034`(ratio 6.10)、`before_frac=0.333`、
   `n_contact=3`。诊断:**深度预测器在 1.5m 边界偏乐观**(approach AbsRel≈0.167),"恰好 1.5m 反应"必然太晚:
