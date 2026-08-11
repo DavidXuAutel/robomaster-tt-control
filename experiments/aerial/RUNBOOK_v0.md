@@ -24,7 +24,7 @@
 | **①d** | 深度 AbsRel ≤0.30 | H100 离线(DA3 ckpt) | ✅ 0.132 代表 / 0.167 approach OOD |
 | **②** | 接近量↑(N=16 rollout vs random) | **4090 sim rollout** | ✅ 决定性通过:progress 24.13 vs random −5.11;final_dist 5.01m vs 34.99m |
 | **③** | D̂ 尺度一致(reprojection,GT-proprio 位移) | H100 离线 | ✅ 0.05–0.12(重投影估计器,GT-oracle 0.002) |
-| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 2026-08-11(晚³)harness 修已落地(后退罩+修 step bug+正前 probe+近障优先候选),**待 H100 pull + 重跑**;上一版不可测(`near_coll_rate_off=0`→ratio NaN) |
+| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 2026-08-11(晚⁴)连续后退+触发余量 3.0m(re-freeze ④a 注),修晚³ 首测的 ratio 反转 6.10 + before_frac 0.333,**待 H100 pull + 重跑**;晚³ 可测但 FAIL(`on 0.205≫off 0.034`) |
 
 > ④ `near_coll_rate_off=0`(2026-08-11 rollout)根因:`HeuristicPolicy` 是纯 proprio 直线奔 goal、
 > **不看 depth 不避障**;宽锥深度代理(`center_frac=0.5`)只证明"视野里有障碍",直线策略从旁 >1.5m 擦过。
@@ -109,6 +109,19 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚⁴) —— ④ 连续后退 + 触发余量(re-freeze ④a 注;修 ratio 反转 6.10 + before_frac 0.333)。**
+  晚³ 修好后 ④ 首次可测,但仍 FAIL:`near_on=0.205 ≫ off=0.034`(ratio 6.10)、`before_frac=0.333`、
+  `n_contact=3`。诊断:**深度预测器在 1.5m 边界偏乐观**(approach AbsRel≈0.167),"恰好 1.5m 反应"必然太晚:
+  1. **连续后退(`safety.override_action`)**:晚³ 的"退到 `safe_depth`(2.5)再悬停"仍把机体停在 GT<1.5 带内
+     (d̂ 到 2.5 就停、GT 还 ~1.2)→ latch 整集刷分子。改:latch 后**每步都后退,永不悬停**,机体单调退带 →
+     `near_on≈0`、总帧变大 → ratio 稳过。删 `safe_depth_m` 字段。
+  2. **触发余量(`min_depth_m` 1.5→3.0)**:`before_frac≥0.5` 在噪声预测器下对"边界反应"数学不可满足
+     (在碰撞边界才反应=已在边界)。shield 触发提到 3.0m(> 度量 1.5),提前于进带反应 → 不进带、零碰撞 →
+     `before_frac` 空过(`check_shield_effectiveness` 无碰撞集→1.0)。落点:`run_shield_eval(shield_trigger_depth_m=3.0)`
+     与 metric 掩码**解耦**、`_v0_gate` 显式传、`train_rl._build_safety` live 默认 3.0。
+  **治理**:改的是 §4.1 ④a 协议注「与 1.5 对齐」→ 用户批准 **re-freeze**(冻结 spec 已加"④ 反应余量注")。
+  **度量端 `near_collision_depth_m=1.5`、④b 0.50、④c 0.80 钉死值不动**;env/模型/flags 未动。起点前向最小 5.578m>3.0m
+  不误触发。**待 H100 pull + 重跑 ②④。**
 - **2026-08-11(晚³) —— ④ 后退罩 + 修 step 双夹 bug + 正前 probe + 近障优先候选(修 `near_coll_off=0`/ratio NaN)。**
   用户批准方向"后退罩+细step"。诊断链:上一版 `near_coll_off=0` 的真根因有三层,全修:
   1. **`HeuristicPolicy` 双重夹取 bug**(`train_rl.py`):`act` 里 `clip_body_delta` 用默认 30Hz

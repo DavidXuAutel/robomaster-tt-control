@@ -45,23 +45,31 @@ class ThresholdSafetyShield:
     Reads optional predictions off ``obs.info`` / ``wm_out`` — if none are
     present it degrades to never-override, so it is safe to install early.
 
-    **Latch + retreat** (V2, 2026-08-11). A pure hover-override (return zeros)
-    parks the vehicle *inside* the near-collision band once it drifts there: the
-    goal-seeking policy keeps commanding forward, the shield keeps cancelling it,
-    and the drone hovers at ~``min_depth_m`` — so the shield-on arm accrues MORE
-    near-collision frames than shield-off (near_coll_rate_on > near_coll_rate_off,
-    ④'s ratio inverts / NaNs, observed 2026-08-11). Instead: on the first breach
-    we *latch* for the rest of the episode and *retreat* (body −x) until predicted
-    clearance recovers past ``safe_depth_m``, then hover. This drives the drone OUT
-    of the band and keeps it there, so near_coll_rate_on ≈ 0 by construction.
-    ``reset()`` clears the latch between episodes (the eval reuses one instance).
+    **Latch + continuous retreat** (V2, re-freeze 2026-08-11). Two prior designs
+    failed ④ under an *optimistic* depth predictor (approach AbsRel ≈0.167 ⇒ ``D̂``
+    reads FARTHER than GT near the band):
+      * pure hover (return zeros) parks the vehicle inside the near-collision band
+        (goal-seeker keeps pushing forward, shield keeps cancelling) →
+        near_coll_rate_on ≫ off, ④'s ratio inverts;
+      * "retreat until ``D̂`` ≥ ``safe_depth_m`` then hover" *also* parks it there,
+        because ``D̂`` recovers past ``safe`` while GT is still <1.5 m (ratio 6.10,
+        observed 2026-08-11).
+    Fix: on the first breach we *latch* for the rest of the episode and retreat
+    (body −x) **every step, never hovering** — monotonic backward travel drives GT
+    clearance strictly up regardless of predictor bias, so near_coll_rate_on ≈ 0 by
+    construction. Paired with a *reaction margin* (``min_depth_m`` set ABOVE the
+    1.5 m near-collision metric, default 3.0 m) the shield triggers BEFORE the band,
+    so it also intervenes before contact (④b). ``reset()`` clears the latch between
+    episodes (the eval reuses one instance). See frozen-spec ④a re-freeze note.
     """
 
-    min_depth_m: float = 1.5          # brake if nearest predicted depth < this
+    # Reaction standoff (NOT the near-collision metric): trigger when predicted
+    # clearance < this. Default 3.0 m > the 1.5 m ④a metric so the shield reacts
+    # before entering the band; the metric stays frozen at 1.5 in v0_metrics.
+    min_depth_m: float = 3.0
     min_tau_s: float = 1.0            # brake if time-to-contact < this
     max_p_coll: float = 0.5           # brake if WM collision prob > this
     brake_gain: float = 1.0
-    safe_depth_m: float = 2.5         # retreat until predicted clearance ≥ this
     retreat_step_m: float = 3.0       # backward body-delta request (collector re-clips to the rate cap)
     _engaged: bool = field(default=False, init=False, repr=False)
 
@@ -95,10 +103,12 @@ class ThresholdSafetyShield:
         return False
 
     def override_action(self, obs: Observation) -> np.ndarray:
-        # Retreat (body −x) while still inside the safe standoff, else hover. The
-        # collector re-clips to ``body_delta_limits(1/step_hz)`` so a large request
-        # becomes a steady per-step backward increment, not a teleport.
-        d_hat = obs.info.get("depth_min_pred")
-        if d_hat is not None and float(d_hat) < self.safe_depth_m:
-            return np.array([-abs(float(self.retreat_step_m)), 0.0, 0.0, 0.0], dtype=np.float64)
-        return np.zeros(4, dtype=np.float64)
+        # Latched → retreat every step (body −x) for the rest of the episode; do
+        # NOT hover once ``D̂`` "recovers". The predictor is optimistic near the
+        # band (reads farther than GT), so any hover-at-safe branch parks the
+        # vehicle INSIDE the GT near-collision band and inflates near_coll_rate_on
+        # (④ ratio inverted, observed 2026-08-11). Monotonic retreat makes GT
+        # clearance strictly increase regardless of predictor bias. The collector
+        # re-clips to ``body_delta_limits(1/step_hz)`` so this is a steady per-step
+        # backward increment, not a teleport.
+        return np.array([-abs(float(self.retreat_step_m)), 0.0, 0.0, 0.0], dtype=np.float64)

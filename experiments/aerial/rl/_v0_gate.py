@@ -635,6 +635,9 @@ def _signals_2_4_from_rollouts(
     masks = rollout.run_shield_eval(
         env, policy, predictor, starts,
         near_collision_depth_m=thr.near_collision_depth_m,
+        # Reaction standoff > the frozen 1.5 m metric so the shield reacts before
+        # the band (frozen-spec ④a re-freeze 2026-08-11). NOT a §4.1 gate threshold.
+        shield_trigger_depth_m=3.0,
         max_steps=int(max_steps), reward_cfg=reward_cfg,
     )
     # ④'s near-collision rate is GT-depth-driven. If no episode carried a usable

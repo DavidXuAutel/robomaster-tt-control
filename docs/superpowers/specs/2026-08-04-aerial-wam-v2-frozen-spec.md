@@ -121,9 +121,11 @@ connected ∧ real_rgb ∧ imu ∧ (baro∨gps) ∧ collision ∧ depth ∧ dept
 | ③d | `fwd_cos_min` | **0.7** | 2026-08-05：|cos∠(Δp, mean heading)|；取代 world-+x 前向代理 |
 | ③e | `scale_support_ratio` | **0.6**（采样器仍用；估计器不再依赖，DEPRECATED-in-place） | 2026-08-10：重投影无死代理失效模式，保留只为 `_sample_scale_windows` 选前向接近窗，不参与 ③ 判定 |
 | ③f | `min_scale_windows` | **≥ 8** | 2026-08-05：有效接近窗不足则 ③ FAIL（非放宽 0.25） |
-| ④a | `near_collision_depth_m` | GT `depth_min` < **1.5** m | 与 `ThresholdSafetyShield.min_depth_m` 对齐 |
+| ④a | `near_collision_depth_m` | GT `depth_min` < **1.5** m | 度量钉死 1.5;shield 触发 `min_depth_m` = 度量 + 反应余量（默认 **3.0 m**），见下 ④ 反应余量注（re-freeze 2026-08-11） |
 | ④b | `intervention_before_contact_min` | **≥ 0.50** | 在最终 `collided` 的 episode 中，首次 intervention 步号 < 首次 contact 步号 的比例 |
 | ④c | `near_coll_rate_ratio_max` | shield-on / shield-off ≤ **0.80** | near_coll 帧占比；同 N、同起点；**仅评测 CLI 开罩** |
+
+**④ 反应余量注（re-freeze 2026-08-11；不改 ④a 钉死度量 1.5 / ④b 0.50 / ④c 0.80）**：原 ④a 协议注要求 `ThresholdSafetyShield.min_depth_m` 与近碰撞度量 1.5 m **对齐**。实测（`dataset_v0_approach_20260805`，DA3 深度头 approach AbsRel≈0.167，accepted=12）证明该对齐使 ④ **结构性不可过**——预测器在 1.5 m 边界处偏乐观（d̂ 读得比 GT 远）：(i) "退到 `safe_depth` 再悬停"把机体停在 GT<1.5 带内 → `near_coll_rate_on`(0.205) ≫ `off`(0.034)、**ratio 反转 6.10**；(ii) 约半数过边界时 d̂ 仍 >1.5 → 触发晚一拍、前一步已前冲进碰撞 → 干预晚于接触，**before_frac=0.333**。**修订**：(a) shield latch 后**连续后退**（`override_action` 去掉 hover-at-safe 分支，每步 body −x），机体单调退带 → ratio 稳过；(b) shield **触发 `min_depth_m` 提到 3.0 m**（> 度量 1.5，作反应余量），提前于进带反应 → 不进带、零碰撞 → `before_frac` 空过（`check_shield_effectiveness` 无碰撞集 → 1.0）。**度量端 `near_collision_depth_m=1.5` 与 ④b/④c 钉死值不动**；改的只是 shield 触发/后退**行为**（shield 是被测系统，反应余量属其设计参数，非 gate 阈值）。起点前向深度最小 5.578 m > 3.0 m，余量不误触发起点。落点：`safety.py::ThresholdSafetyShield`（`min_depth_m=3.0` 默认、连续后退）· `v0_rollout_eval.run_shield_eval(shield_trigger_depth_m=3.0)`（与 metric 掩码解耦）· `train_rl._build_safety`（live 默认 3.0）。理由：④b「干预先于接触」在噪声预测器下，对"恰好边界反应"数学不可满足，反应余量为必需而非调参偏好。
 
 **③ 适用性注记（不改钉死值 0.25；协议修订 2026-08-05）**：③ 用的深度侧长度 `ŝ_D = |median_band D̂_last − median_band D̂_first|`（`vio.scale_from_depth_change`，median 限在 **[1, 40] m** 导航带）是一个**代理**，只在**窗内含前向接近分量**（相机大致沿运动方向、正对场景使视深随位移单调变化，且 ŝ_D ≥ 0.6·‖Δp‖）时才与度量位移 `s_VIO=‖Δp‖` 同尺度。纯侧移/纯偏航/纯升降/贴墙平行巡航/开阔地平线窗上该代理失真——`③a min_motion_m≥0.5 m` 只滤静止窗；`③d/③e/③c` 滤掉无物理意义的窗。采数应偏**朝向表面接近**的轨迹；V1 τ 通道用 FOE 散度独立复核。**`--signal3-diagnose`（2026-08-05）**在改定协议下拆 GT-oracle vs D̂：GT 仍失败 → 再修订或重采，禁止为过门放松 0.25；GT 过而 D̂ 不过 → 加时序/Δ-depth 监督重训深度头。
 

@@ -147,8 +147,11 @@ def _build_safety(safety_cfg: Any) -> Any:
     if kind in ("null", "none", "None"):
         return NullSafetyShield()
     if kind == "threshold":
+        # min_depth_m is the reaction STANDOFF, not the ④a near-collision metric
+        # (frozen at 1.5). Default 3.0 m gives the shield room to intervene before
+        # the band (frozen-spec ④a re-freeze 2026-08-11).
         return ThresholdSafetyShield(
-            min_depth_m=float(_get(safety_cfg, "min_depth_m", 1.5)),
+            min_depth_m=float(_get(safety_cfg, "min_depth_m", 3.0)),
             min_tau_s=float(_get(safety_cfg, "min_tau_s", 1.0)),
             max_p_coll=float(_get(safety_cfg, "max_p_coll", 0.5)),
         )

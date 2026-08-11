@@ -440,18 +440,28 @@ def run_shield_eval(
     start_episodes: List[Dict[str, np.ndarray]],
     *,
     near_collision_depth_m: float = 1.5,
+    shield_trigger_depth_m: float = 3.0,
     max_steps: int = 200,
     reward_cfg: Optional[RewardConfig] = None,
 ) -> Dict[str, List[List[bool]]]:
     """Signal ④ inputs: paired shield-on vs shield-off per-step boolean masks.
 
     ``depth_predictor_on`` fills ``obs.info['depth_min_pred']`` so the
-    ``ThresholdSafetyShield`` (``min_depth_m = near_collision_depth_m``) can
-    trigger; the shield-off side installs neither shield nor predictor. Same
-    ``start_episodes`` both sides. GT depth drives the near-collision mask on
-    both sides identically, so the ratio is a controlled comparison.
+    ``ThresholdSafetyShield`` can trigger; the shield-off side installs neither
+    shield nor predictor. Same ``start_episodes`` both sides. GT depth drives the
+    near-collision mask on both sides identically, so the ratio is a controlled
+    comparison.
+
+    The shield's trigger ``shield_trigger_depth_m`` (reaction standoff, default
+    3.0 m) is DECOUPLED from the ④a near-collision metric ``near_collision_depth_m``
+    (frozen 1.5 m). Reacting at the 1.5 m band boundary is structurally too late
+    under an optimistic predictor — it parks the vehicle in the band (ratio
+    inversion) and triggers after contact (before_frac<0.5). A >metric standoff
+    lets the (continuous-retreat) shield leave the band and intervene before
+    contact. Metric masks still use ``near_collision_depth_m``. See frozen-spec
+    ④a re-freeze 2026-08-11.
     """
-    shield = ThresholdSafetyShield(min_depth_m=float(near_collision_depth_m))
+    shield = ThresholdSafetyShield(min_depth_m=float(shield_trigger_depth_m))
     interventions_on: List[List[bool]] = []
     collided_on: List[List[bool]] = []
     near_coll_on: List[List[bool]] = []
