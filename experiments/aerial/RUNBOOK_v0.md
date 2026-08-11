@@ -24,7 +24,7 @@
 | **①d** | 深度 AbsRel ≤0.30 | H100 离线(DA3 ckpt) | ✅ 0.132 代表 / 0.167 approach OOD |
 | **②** | 接近量↑(N=16 rollout vs random) | **4090 sim rollout** | ✅ 决定性通过:progress 24.13 vs random −5.11;final_dist 5.01m vs 34.99m |
 | **③** | D̂ 尺度一致(reprojection,GT-proprio 位移) | H100 离线 | ✅ 0.05–0.12(重投影估计器,GT-oracle 0.002) |
-| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 scan 已修(accepted=10/11);晚¹⁰ `_shield_diag` 定位盲目后退撞后墙(coll_after_latch=9/9);晚¹¹ 保持(悬停)反致惯性滑进带并停留(near_count_on 200/200、ratio 12.96);晚¹² **shield 有界状态反馈后退**(D̂<standoff 后退刹动量、D̂≥standoff 保持不撞后墙;re-freeze),**待 4090 重跑预期 coll_after_latch→0、ratio≤0.80、④ PASS** |
+| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 scan 已修(accepted=10/11);晚¹⁰ `_shield_diag` 定位盲目后退撞后墙(coll_after_latch=9/9);晚¹¹ 保持(悬停)反致惯性滑进带并停留(near_count_on 200/200、ratio 12.96);晚¹² **shield 有界状态反馈后退**(D̂<standoff 后退刹动量、D̂≥standoff 保持不撞后墙;re-freeze);晚¹³ 遥测:④c ratio 0.172 ✓ 但 ④b=0,盲退 REFUTED;晚¹⁴ 真因=eval 关了 collector 出生碰撞守卫误计出生嵌入为碰撞 → 恢复 `skip_reset_collision=True`+重采样,**待 4090 重跑预期 spawn_collision_drops>0、④ PASS** |
 
 > ④ `near_coll_rate_off=0`(2026-08-11 rollout)根因:`HeuristicPolicy` 是纯 proprio 直线奔 goal、
 > **不看 depth 不避障**;宽锥深度代理(`center_frac=0.5`)只证明"视野里有障碍",直线策略从旁 >1.5m 擦过。
@@ -110,6 +110,12 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚¹⁴) —— 晚¹³ 遥测实锤:盲退假设 REFUTED;真因是 ④ eval 关掉了 collector 的出生碰撞守卫,把"出生嵌入"误计为 shield 碰撞 → 恢复 `skip_reset_collision=True` + 重采样。**
+  晚¹³ 4090 rollout 带回按集几何:**盲目后退撞后墙 REFUTED** —— 5 个接触集(#2/4/6/7/9)`along_heading_on` = −0.004/−0.145/−0.311/−0.009/−0.301(全≈0)、`lateral_on` ≤0.39,**几乎没动就撞了**,不是退进后墙。真相:5 集全 `len_on=1`、`start_full_min` 低到 0.663/0.879/0.907m(3 个在 1.5m 带内),而**同起点 off 臂飞了 8–13 步**(`len_off` 8/13/11/13/11)才撞 → on/off 臂**出生净空显著不同**。位移≈0 却撞,物理上只可能是**出生就贴/嵌在几何体里**(撞前向 FOV 之外的侧/后/地面几何)。
+  **代码钉死根因**:`_run_one`(v0_rollout_eval.py)给 collector 传 `skip_reset_collision=False`,**单独关掉了** collector 默认(`True`)的"出生即碰撞→跳过"守卫;`_run_one_resilient` 只在抛 `RuntimeError` 时重试,出生嵌入只返回 length-1 集不抛异常 → 不重试不跳过 → 被当成一次 shield 碰撞 → `first_i<first_c`=`0<0`=False → **④b 结构性归零**。这与 scan 自己会 reject `spawn_collision`、以及 collector 到处用的默认**自相矛盾**。
+  **修复(治理安全,episode 有效性,同 晚⁸/⁹/¹³ 类)**:(1) `_run_one` 恢复 `skip_reset_collision=True`;(2) `_run_one_resilient` 把"出生碰撞→空 episode"当**可重采样 transient**(4090 reset 非确定,on/off 同起点净空都不同已证)→ 重试(=collector 文档说的 "start pose may need resampling"),持续嵌入才 drop(成对丢保持配对);(3) 新增 `drop_stats`,`run_shield_eval`/`_v0_gate` 输出 `spawn_collision_drops`/`health_drops`(**可审计,非静默截断**);(4) `_episode_geom_diag` 加只读 `start_collided_on/off`(存活集须为 False)。
+  **诚实警示**:好 shield 会让"净空充足起点"零碰撞 → ④b 依冻结 metric(v0_metrics.py:286,无接触→before_frac=1.0)**空过**;此时 ④ 靠 ④c(ratio 0.172,近带占用 5.7× 更低)+ off 臂每集都撞(证明每个场景都是真碰撞风险)成立。**未动** §4.1(1.5/0.50/0.80)、shield 控制律、env/模型/flags。冻结 spec ④ 方法学追加注记(晚¹⁴)。新单测 3 个(persistent-drop / resample-recover / drops-surfaced);rollout+followups+collector 44 全过。
+  **待**:4090 同命令重跑 ④ → 看 `spawn_collision_drops`>0 且接触集消失/变真接近 → 期望 ④ PASS → `_v0_gate --merge` 全四 → exit 0 才翻 flags。commit 本次待 push。
 - **2026-08-11(晚¹³) —— 晚¹² 修好 ④c(ratio 12.96→0.192 ✓),但 ④b 仍 FAIL(before_frac=0);加只读按集几何遥测定位 step-1 碰撞方向。**
   晚¹² 有界后退在 4090 权威 rollout 上**大幅改善 ④c**:`near_coll_rate_ratio` 12.96→**0.192 ≤0.80** ✓、`near_coll_rate_on` 0.385→0.0066、`coll_after_latch` 4→3、6 集里 3 集存活满 200 步(shield 成功)。但 **④ 仍 FAIL 于 ④b**:`intervention_before_contact_frac=0.0`。
   **只读定位**:`collided` 是 post-step、只在 done 的终止步(v0_rollout_eval.py:571)→ `first_coll_step=0` ⟹ 该集**长度=1**(第一个动作后即撞)。3 个接触集全长度≈1 → `first_i<first_c` 恒 `0<0`=False → ④b 恒 0。**根因收窄(非 shield 控制律、非出生嵌入)**:起点 `start_clearance_m=3.0` + `spawn_collision` 拒 → 起点前向 FOV 净空 ≥3.0m(不在带内);off 臂 ~9 步才撞 → 每步 ~0.5–2.8m → **一步跨不过 5–25m 前障** → step-1 碰撞对象**不是前障**。shield 退 body −x + **前视相机看不到后方** → 强指向**盲目后退撞未感知的后/侧墙**(3 个 boxed-in 起点);design-4 有界后退在后墙就在第一退步内时仍无能为力。

@@ -149,6 +149,90 @@ def test_episode_geom_diag_flags_backward_retreat():
     assert d["len_off"] == -1 and d["coll_first_off"] == -1, d
 
 
+class _SpawnCollisionEnv:
+    """Reset spawns already in collision for the first ``collide_resets`` resets,
+    then clear — models the live renderer's non-deterministic reset (the same
+    start can spawn embedded on one attempt and clear on the next).
+    """
+
+    def __init__(self, *, collide_resets: int, step_hz: float = 5.0, size: int = 8) -> None:
+        self.config = type("C", (), {"step_hz": float(step_hz)})()
+        self._collide_resets = int(collide_resets)
+        self._resets = 0
+        self._pos = np.zeros(3, dtype=np.float64)
+        self._goal = np.array([30.0, 0.0, 0.0], dtype=np.float64)
+        self._spawn_collided = False
+
+    @property
+    def goal(self) -> Optional[np.ndarray]:
+        return self._goal
+
+    def _observe(self, collided: bool) -> Observation:
+        state = np.array([self._pos[0], self._pos[1], self._pos[2], 0, 0, 0, 0.0], np.float32)
+        return Observation(
+            rgb=np.zeros((8, 8, 3), np.uint8), state=state,
+            depth=np.full((8, 8), 5.0, np.float32), collided=collided, info={},
+        )
+
+    def reset(self, episode: Optional[Dict[str, Any]] = None) -> Observation:
+        self._pos = np.zeros(3, dtype=np.float64)
+        self._spawn_collided = self._resets < self._collide_resets
+        self._resets += 1
+        return self._observe(self._spawn_collided)
+
+    def step(self, action: np.ndarray) -> tuple[Observation, Dict[str, Any]]:
+        self._pos[0] += float(action[0])
+        return self._observe(False), {}
+
+
+def test_run_one_resilient_drops_persistent_spawn_collision():
+    # A start that spawns embedded on EVERY reset (no clear resample) is an invalid
+    # ④ trial: no pre-contact window, so it must be DROPPED (None), not counted as a
+    # shielded collision. Auditable via drop_stats["spawn_collision"].
+    env = _SpawnCollisionEnv(collide_resets=99)
+    policy = HeuristicPolicy(goal_getter=lambda: env.goal)
+    stats: Dict[str, int] = {}
+    ep = rollout._run_one_resilient(
+        env, policy, rollout.make_start_episodes(1, seed=0)[0],
+        max_steps=20, reward_cfg=None, retry_sleep_s=0.0, drop_stats=stats,
+    )
+    assert ep is None, ep
+    assert stats.get("spawn_collision") == 1, stats
+    assert stats.get("health", 0) == 0, stats
+
+
+def test_run_one_resilient_resamples_spawn_collision_then_succeeds():
+    # The renderer reset is non-deterministic: the first reset spawns embedded, the
+    # retry lands clear. The resample must RECOVER the start (preserving N + giving a
+    # genuine pre-contact window), not drop it.
+    env = _SpawnCollisionEnv(collide_resets=1)
+    policy = HeuristicPolicy(goal_getter=lambda: env.goal)
+    stats: Dict[str, int] = {}
+    ep = rollout._run_one_resilient(
+        env, policy, rollout.make_start_episodes(1, seed=0)[0],
+        max_steps=20, reward_cfg=None, retry_sleep_s=0.0, drop_stats=stats,
+    )
+    assert ep is not None and len(ep) > 0, ep
+    assert not bool(getattr(ep[0].obs, "collided", False)), ep[0].obs  # clear spawn
+    assert stats == {}, stats  # recovered → nothing dropped
+
+
+def test_shield_eval_reports_spawn_collision_drops():
+    # run_shield_eval surfaces the drop accounting so a FAIL→(no-contact) shift is
+    # never a silent truncation: every embedded start is counted, not hidden.
+    env = _SpawnCollisionEnv(collide_resets=99)
+    policy = HeuristicPolicy(goal_getter=lambda: env.goal)
+    predictor = _PessimisticGTDepthPredictor(margin=1.6)
+    masks = rollout.run_shield_eval(
+        env, policy, predictor, rollout.make_start_episodes(3, seed=0),
+        near_collision_depth_m=1.5, max_steps=20,
+    )
+    # Every start drops (both arms embedded) → no scored episodes, drops surfaced.
+    assert masks["interventions_on"] == [], masks
+    assert masks["spawn_collision_drops"] >= 3, masks
+    assert masks["health_drops"] == 0, masks
+
+
 def test_signal4_shield_reduces_near_collision_on_wall():
     env = _WallEnv(wall_x=10.0, step_hz=5.0)
     starts = rollout.make_start_episodes(8, seed=0)

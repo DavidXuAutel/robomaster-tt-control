@@ -682,6 +682,10 @@ def _signals_2_4_from_rollouts(
     ep_geom = masks.get("episode_diag")
     if ep_geom:
         diag["episodes"] = ep_geom
+    # Auditable drop accounting: how many starts left the scored set and why
+    # (spawn-embedded resamples that never cleared vs degenerate renderer frames).
+    diag["spawn_collision_drops"] = int(masks.get("spawn_collision_drops", 0))
+    diag["health_drops"] = int(masks.get("health_drops", 0))
     s4["shield_diag"] = diag
     print(f"[v0-gate] shield mechanism diag: {json.dumps(diag)}")
     return s2, s4

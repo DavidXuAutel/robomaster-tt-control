@@ -56,18 +56,35 @@ def _run_one_resilient(
     depth_predictor: Any = None,
     retries: int = 2,
     retry_sleep_s: float = 0.5,
+    drop_stats: Optional[Dict[str, int]] = None,
 ) -> Optional[Episode]:
-    """``_run_one`` with retry-then-skip on transient reset/health failures.
+    """``_run_one`` with retry-then-skip on transient reset/health failures AND
+    spawn-in-collision resets.
 
-    Returns the episode, or ``None`` if the reset kept failing its health guard
-    (renderer produced a degenerate depth/IMU frame). A ``None`` tells the caller
-    to DROP this start from both arms so the pairing (and same-N) is preserved.
-    Non-transient errors (real bugs) propagate unchanged — we never mask those.
+    Returns the episode, or ``None`` if the reset kept failing. A ``None`` tells
+    the caller to DROP this start from both arms so the pairing (and same-N) is
+    preserved. Two transient failure modes are retried-then-dropped:
+
+      * **health failure** — the renderer produced a degenerate depth/IMU frame
+        (``_run_one`` raises a RuntimeError matching ``_TRANSIENT_RESET_MARKERS``).
+      * **spawn-in-collision** — ``_run_one`` returns an EMPTY episode because the
+        collector's ``skip_reset_collision`` guard fired: the vehicle spawned
+        inside geometry. The live renderer reset is non-deterministic (the on/off
+        arms of the SAME start spawn at different clearances — observed at eval),
+        so a retry RESAMPLES the spawn and usually lands clear; drop only if it
+        keeps spawning embedded. This is exactly the collector's own documented
+        "start pose may need resampling", applied at the ④ eval boundary so a
+        spawn-embedded start is never miscounted as a shielded collision.
+
+    ``drop_stats`` (optional) is incremented in place (``"spawn_collision"`` /
+    ``"health"``) so the caller can surface WHY starts were dropped — auditable,
+    not a silent truncation. Non-transient errors (real bugs) propagate unchanged.
     """
     last: Optional[BaseException] = None
+    last_kind = "health"
     for attempt in range(int(retries) + 1):
         try:
-            return _run_one(
+            ep = _run_one(
                 env, policy, episode, max_steps=max_steps, reward_cfg=reward_cfg,
                 shield=shield, depth_predictor=depth_predictor,
             )
@@ -75,14 +92,30 @@ def _run_one_resilient(
             msg = str(exc).lower()
             if not any(m in msg for m in _TRANSIENT_RESET_MARKERS):
                 raise  # a real error, not a flaky frame — do not swallow it
-            last = exc
+            last, last_kind = exc, "health"
             logger.warning(
                 "rollout reset/health failure (attempt %d/%d), retrying: %s",
                 attempt + 1, int(retries) + 1, exc,
             )
             if attempt < int(retries) and retry_sleep_s > 0:
                 time.sleep(float(retry_sleep_s))
-    logger.warning("skipping start after %d reset/health failures: %s", int(retries) + 1, last)
+            continue
+        if ep:  # a real roll (at least one step) — done
+            return ep
+        # Empty episode ⇒ spawn-in-collision guard fired. Resample the reset.
+        last_kind = "spawn_collision"
+        logger.warning(
+            "spawn-in-collision at reset (attempt %d/%d), resampling",
+            attempt + 1, int(retries) + 1,
+        )
+        if attempt < int(retries) and retry_sleep_s > 0:
+            time.sleep(float(retry_sleep_s))
+    if drop_stats is not None:
+        drop_stats[last_kind] = int(drop_stats.get(last_kind, 0)) + 1
+    logger.warning(
+        "skipping start after %d attempts (%s): %s",
+        int(retries) + 1, last_kind, last,
+    )
     return None
 
 
@@ -498,7 +531,13 @@ def _run_one(
         max_steps=int(max_steps),
         target_hz=0.0,
         depth_predictor=depth_predictor,
-        skip_reset_collision=False,
+        # Align to the collector default + the start-scan's spawn_collision reject:
+        # a vehicle already colliding AT RESET spawned inside geometry — an invalid
+        # start with NO pre-contact window (the shield never got to act). Counting
+        # it as a shield collision is a false negative that structurally zeroes ④b
+        # (length-1 episode → first_interv<first_coll is 0<0=False). Skip it (empty
+        # episode) so _run_one_resilient can resample; see that function.
+        skip_reset_collision=True,
     )
     ep, _stats = col.collect_episode(episode)
     return ep
@@ -668,6 +707,13 @@ def _episode_geom_diag(
         "start_fwd_min": round(start_fwd, 3),
         "along_heading_on": round(along, 3),
         "lateral_on": round(lateral, 3),
+        # obs₀.collided: was the vehicle already in contact AT spawn (before any
+        # action)? After the skip_reset_collision fix a surviving episode must have
+        # False here — a True would mean a spawn-embedded start slipped through.
+        "start_collided_on": bool(getattr(obs0, "collided", False)),
+        "start_collided_off": (
+            bool(getattr(ep_off[0].obs, "collided", False)) if ep_off else None
+        ),
     }
 
 
@@ -705,6 +751,7 @@ def run_shield_eval(
     near_coll_on: List[List[bool]] = []
     near_coll_off: List[List[bool]] = []
     episode_diag: List[Dict[str, Any]] = []
+    drop_stats: Dict[str, int] = {}
     depth_steps = 0
 
     for epi in start_episodes:
@@ -716,14 +763,14 @@ def run_shield_eval(
             shield.reset()
         ep_on = _run_one_resilient(
             env, policy, epi, max_steps=max_steps, reward_cfg=reward_cfg,
-            shield=shield, depth_predictor=depth_predictor_on,
+            shield=shield, depth_predictor=depth_predictor_on, drop_stats=drop_stats,
         )
 
         if hasattr(policy, "reset"):
             policy.reset()
         ep_off = _run_one_resilient(
             env, policy, epi, max_steps=max_steps, reward_cfg=reward_cfg,
-            shield=None, depth_predictor=None,
+            shield=None, depth_predictor=None, drop_stats=drop_stats,
         )
 
         # A transient reset/health failure on EITHER arm drops the whole start,
@@ -752,6 +799,13 @@ def run_shield_eval(
         "near_coll_on": near_coll_on,
         "near_coll_off": near_coll_off,
         "episode_diag": episode_diag,
+        # Auditable drop accounting (WHY starts left the scored set), never silent:
+        # spawn_collision_drops = starts that kept spawning inside geometry across
+        # all resamples (invalid, no pre-contact window); health_drops = degenerate
+        # renderer frames. A start counts once here even if only one arm failed
+        # (the pair is dropped together to keep on/off at the same N).
+        "spawn_collision_drops": int(drop_stats.get("spawn_collision", 0)),
+        "health_drops": int(drop_stats.get("health", 0)),
         # 0 → no episode carried GT depth (grab_depth=false). The near-collision
         # masks are then vacuously all-False; the caller must fail ④ closed
         # rather than mistaking "no depth" for "no obstacle ever near".
