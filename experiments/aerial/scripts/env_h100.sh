@@ -12,9 +12,14 @@
 # the SAME file runs from any checkout.
 #
 # MINIMAL ②④/①③ gate deps only (NOT the full FastWAM stack — no deepspeed/
-# transformers): torch cu128 + numpy + pyyaml + the airsim RPC client trio.
-# The DA3 depth head is pure torch (build_depth_head in dynamics_torch), so no
-# timm/transformers/depth_anything are needed.
+# transformers): torch cu128 + numpy + pyyaml + the airsim RPC client trio,
+# PLUS einops + addict for the DA3 depth head.
+# The DA3 depth head loads the vendored depth_anything_3 backbone (DinoV2 + DPT
+# in third_party/), which hard-imports `einops` and `addict`. It does NOT need
+# timm/transformers/depth_anything-pip, and `xformers` is optional (try/except
+# fallback in swiglu_ffn). So the DA3 extras are just those two tiny pure-python
+# packages — but they ARE required: without them the ②④ shield eval and the ①d
+# depth gate crash on `ModuleNotFoundError: einops` when loading the depth ckpt.
 #
 # Overrides:
 #   VENV=/path/to/venv        INSTALL=1 source .../env_h100.sh   # venv location
@@ -62,9 +67,10 @@ PY
   python -m pip install -U pip setuptools wheel
   echo "[env] installing torch cu128 (pinned) from $TORCH_INDEX ..."
   python -m pip install "torch==2.7.1" "torchvision==0.22.1" --index-url "$TORCH_INDEX"
-  echo "[env] installing gate deps (numpy/pyyaml + airsim RPC client) ..."
+  echo "[env] installing gate deps (numpy/pyyaml + airsim RPC client + DA3 einops/addict) ..."
   python -m pip install "numpy==1.26.4" "pyyaml" \
-    "airsim>=1.8.1" "opencv-python-headless>=4.6" "msgpack-rpc-python>=0.4.1"
+    "airsim>=1.8.1" "opencv-python-headless>=4.6" "msgpack-rpc-python>=0.4.1" \
+    "einops" "addict"
   # airsim pulls the NON-headless opencv-python, which needs libGL.so.1 (absent
   # on GPU pods) and shadows the headless build. Force headless-only so `import
   # cv2` works without apt/libgl1.
@@ -111,7 +117,7 @@ except Exception as e:  # noqa: BLE001
     ok = False
     print(f"[env] torch: MISSING -> {e}")
     print("[env]   run:  INSTALL=1 source experiments/aerial/scripts/env_h100.sh")
-for pkg in ("airsim", "cv2", "msgpackrpc"):
+for pkg in ("airsim", "cv2", "msgpackrpc", "einops", "addict"):
     probe(pkg, lambda p=pkg: __import__(p))
 if all(m in globals() for m in ()):
     pass

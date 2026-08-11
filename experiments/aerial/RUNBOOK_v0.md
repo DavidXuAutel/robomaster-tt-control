@@ -22,13 +22,14 @@
 |---|---|---|---|
 | **①a–c** | WM 训练健康(loss↓≥2% / recon 不劣 / min entropy-frac ≥0.10) | H100 离线(重训日志) | 🟡 干净重训 dry-run 已产出(`wm_ckpt_v2clean_20260810`,非权威);权威 a–c 待 Step-6 语料重跑 |
 | **①d** | 深度 AbsRel ≤0.30 | H100 离线(DA3 ckpt) | ✅ 0.132 代表 / 0.167 approach OOD |
-| **②** | 接近量↑(N=16 rollout vs random) | **4090 sim rollout** | ✅ progress margin 通过(progress_sum ≈24.13) |
+| **②** | 接近量↑(N=16 rollout vs random) | **4090 sim rollout** | ✅ 决定性通过:progress 24.13 vs random −5.11;final_dist 5.01m vs 34.99m |
 | **③** | D̂ 尺度一致(reprojection,GT-proprio 位移) | H100 离线 | ✅ 0.05–0.12(重投影估计器,GT-oracle 0.002) |
-| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 障碍生成器已修好开阔空域问题,scan 16/16;rollout 结果**待出** |
+| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🔴 rollout 完成但**不可测**:④b 干预=1.0 ✅,但 `near_coll_rate_off=0` / `n_contact=0` → ratio=NaN fail |
 
-> ④ 之前卡在 `near_coll_rate_off=0`(巡航高度朝原点飞是开阔空域,无障碍可撞)。已加
-> `make_obstacle_facing_episodes`(扫真实轨迹点找前向障碍),2026-08-11 scan `accepted 16/16`
-> (障碍在前方 ~21m)。等 rollout 出 `near_coll_rate_off>0` / `intervention_before_contact≥0.5` / `ratio≤0.8`。
+> ④ 仍卡在 `near_coll_rate_off=0`(2026-08-11 rollout):障碍生成器让相机前方 ~21m 有障碍,但**过 ② 的
+> 好策略天然直达目标、不进 <1.5m 近障区** → shield 开/关对比无分母。根因是**障碍在相机前方,不必在
+> start→goal 航线上**。下一步:收紧几何(障碍压到 start→goal 连线上、`obstacle_max_m`↓、goal 置于障碍
+> 更远端),逼未开 shield 的策略真的进近障区,`n_contact_episodes>0` 才能测 ④c。
 
 ## 3. 文档地图
 
@@ -106,6 +107,14 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚) —— ②④ rollout 判读 + 修 DA3 依赖漏装。**
+  - ②④ rollout 出结果:**② 决定性过**(progress 24.13 vs −5.11;final_dist 5.01 vs 34.99m);
+    **④ 不可测**(④b 干预 1.0 ✅,但 `near_coll_rate_off=0`/`n_contact=0`→ratio NaN)。判定:过 ② 的
+    好策略天然不进 <1.5m 近障区,shield 无分母。**下一阶段 = 收紧 ④ 几何**(障碍上 start→goal 连线、
+    `obstacle_max_m`↓、goal 置障碍远端),非改 §4.1。
+  - **修 `env_h100.sh`**:DA3 深度头 hard-import `einops`+`addict`(vendored depth_anything_3 的
+    DinoV2+DPT),之前最小依赖漏装 → 新 clone 跑 ②④/①③ 报 `ModuleNotFoundError: einops`。已加进安装
+    列表 + 自检。`xformers` 有 try/except 回退,**不需要**。(纠正"DA3 是纯 torch"的错误判断。)
 - **2026-08-11 —— 建本活文档 + 基础设施脚本化 + ④ 障碍生成器上线。**
   - 新增本 RUNBOOK(总入口 + 活文档约定)。
   - 新增 `experiments/aerial/scripts/{sync_push,sync_pull,start_renderer_4090,env_h100}.sh`
