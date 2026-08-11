@@ -622,6 +622,8 @@ def depth_head_loss(
     absrel_weight: float = 1.0,
     nll_weight: float = 0.1,
     max_depth_m: float = 200.0,
+    near_weight: float = 0.0,
+    near_focus_m: float = 5.0,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """Supervised depth loss: AbsRel L1 + mild heteroscedastic NLL on valid GT.
 
@@ -631,6 +633,14 @@ def depth_head_loss(
     sky/fill — those pixels are excluded via ``max_depth_m`` so AbsRel tracks
     navigational near/mid field (safety ``depth_min_pred`` cares about the near
     end). Holdout ①d must use the same mask.
+
+    ``near_weight`` (>0) adds a near-band emphasis term (AbsRel over GT ≤
+    ``near_focus_m``). The plain AbsRel mean is dominated by the many mid/far
+    pixels, so a close forward obstacle (a few % of pixels) is averaged away and
+    the head regresses it toward the scene's far median — diag 2026-08-11:
+    forward GT<1.5 m → D̂ p50 6.4 m, never triggers the shield → 4/7 ④ contacts.
+    This is an ADDED training term only; it does NOT change the ①d gate metric
+    (``v0_metrics.depth_absrel`` over the full mask) or any §4.1 threshold.
     """
     mask = (
         torch.isfinite(gt) & (gt > 1e-6) & (gt <= float(max_depth_m))
@@ -652,11 +662,23 @@ def depth_head_loss(
     inv_var = torch.exp(-2.0 * ls_c)
     nll = (0.5 * ((p - g) ** 2 * inv_var + 2.0 * ls_c)).mean()
     loss = float(absrel_weight) * absrel + 0.5 * silog + float(nll_weight) * nll
+    # Near-band emphasis (safety-critical close field) — added term, metric-neutral.
+    near_absrel_v = float("nan")
+    n_near = 0
+    if float(near_weight) > 0.0:
+        near = g <= float(near_focus_m)
+        n_near = int(near.sum().item())
+        if n_near > 0:
+            near_absrel = (torch.abs(p[near] - g[near]) / g[near]).mean()
+            loss = loss + float(near_weight) * near_absrel
+            near_absrel_v = float(near_absrel.detach().item())
     return loss, {
         "loss": float(loss.detach().item()),
         "absrel": float(absrel.detach().item()),
         "silog": float(silog.detach().item()),
         "nll": float(nll.detach().item()),
+        "near_absrel": near_absrel_v,
+        "n_near": n_near,
         "n_valid": int(mask.sum().item()),
     }
 

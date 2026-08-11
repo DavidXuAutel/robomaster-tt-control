@@ -47,6 +47,11 @@ def _load_depth_cfg(config_path: Path) -> Dict[str, Any]:
     dh.setdefault("grad_clip", 5.0)
     dh.setdefault("absrel_weight", 1.0)
     dh.setdefault("nll_weight", 0.1)
+    # Near-band emphasis so close forward obstacles are not averaged away by the
+    # many mid/far pixels (diag 2026-08-11: forward GT<1.5 m → D̂ p50 6.4 m, shield
+    # never fires). Added training term; ①d gate metric/threshold unchanged.
+    dh.setdefault("near_weight", 3.0)
+    dh.setdefault("near_focus_m", 5.0)
     # Keep delta << AbsRel/SILog: delta_weight=1.0 from-scratch collapsed AbsRel
     # (0.98 / 0.70 archived 2026-08-05). Prefer finetune from canonical PASS ckpt.
     dh.setdefault("delta_weight", 0.1)
@@ -719,6 +724,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             absrel_weight=float(dh_cfg["absrel_weight"]),
             nll_weight=float(dh_cfg["nll_weight"]),
             max_depth_m=float(dh_cfg["max_depth_m"]),
+            near_weight=float(dh_cfg.get("near_weight", 0.0)),
+            near_focus_m=float(dh_cfg.get("near_focus_m", 5.0)),
         )
         # Temporal / Δ-depth: predict the first frame of the window with full
         # n_frames context and match |Δ band-mean| to GT on approach-alive rows
@@ -784,6 +791,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"[depth-train] step {step}/{args.steps} "
                 f"loss={stats['loss']:.4f} "
                 f"train_batch_absrel={train_batch_absrel:.4f} "
+                f"near_absrel={stats.get('near_absrel', float('nan'))} "
+                f"n_near={stats.get('n_near', 0)} "
                 f"delta_rel={stats.get('delta_rel', float('nan'))} "
                 f"n_delta={stats.get('n_delta', 0)} "
                 f"n_valid={stats['n_valid']}"
