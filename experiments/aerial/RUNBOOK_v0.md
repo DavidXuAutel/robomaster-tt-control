@@ -24,7 +24,7 @@
 | **①d** | 深度 AbsRel ≤0.30 | H100 离线(DA3 ckpt) | ✅ 0.132 代表 / 0.167 approach OOD |
 | **②** | 接近量↑(N=16 rollout vs random) | **4090 sim rollout** | ✅ 决定性通过:progress 24.13 vs random −5.11;final_dist 5.01m vs 34.99m |
 | **③** | D̂ 尺度一致(reprojection,GT-proprio 位移) | H100 离线 | ✅ 0.05–0.12(重投影估计器,GT-oracle 0.002) |
-| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 2026-08-11(晚⁴)连续后退+触发余量 3.0m(re-freeze ④a 注),修晚³ 首测的 ratio 反转 6.10 + before_frac 0.333,**待 H100 pull + 重跑**;晚³ 可测但 FAIL(`on 0.205≫off 0.034`) |
+| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 晚⁷ 深度头 near-band 重训消除感知层根因(正前 1.5m 墙 D̂ 6.4→0.65m、P(trig) 0→1.0、①d 0.0483 不退),**待用新头 `depth_ckpt_da3_near_20260811` 重跑 4090 rollout** |
 
 > ④ `near_coll_rate_off=0`(2026-08-11 rollout)根因:`HeuristicPolicy` 是纯 proprio 直线奔 goal、
 > **不看 depth 不避障**;宽锥深度代理(`center_frac=0.5`)只证明"视野里有障碍",直线策略从旁 >1.5m 擦过。
@@ -69,7 +69,7 @@
     ```bash
     "$AERIAL_PY" -m experiments.aerial.rl._v0_gate --signals 2,4 --rollout-eval \
       --config configs/aerial_rl_rollout.yaml \
-      --depth-ckpt /home/a25689/aerial-rl-skeleton/experiments/aerial/rl/artifacts/depth_ckpt_da3_20260810/depth_step_2000_da3_head.pt \
+      --depth-ckpt /home/a25689/aerial-rl-skeleton/experiments/aerial/rl/artifacts/depth_ckpt_da3_near_20260811/depth_step_2000_da3_head.pt \
       --rollout-dataset /home/a25689/aerial-rl-skeleton/experiments/aerial/rl/artifacts/dataset_v1_rgb \
       --device cuda --emit experiments/aerial/rl/artifacts/v0_partial_24.json
     ```
@@ -109,6 +109,15 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚⁷) —— near-band 重训验证双绿(①d 不退 + 近带感知实锤修复);待 4090 重跑 ④。**
+  合并 `dataset_v0_local_depth + dataset_v0_approach_merged`(`_merge_datasets`)→ DA3 头 fresh 重训
+  (near_weight=3.0,本地 HF cache 权重,`pip install safetensors` 解依赖)→ `depth_ckpt_da3_near_20260811`。
+  **① 权威复验**(`--signals 1 --dataset dataset_v0_local_depth`):①d AbsRel=**0.0483 ≤0.30**,不退反降(旧代表 0.132)。
+  **⑤ 诊断复跑**(`_diag_depth_vs_gt` on approach_merged):FORWARD 正前 `GT[0,1.5)` D̂p50 **6.415→0.645m**、
+  `P(trig)` **0.000→1.000**、`P(over)` 1.000→0.377、AbsRel 6.757→0.198;full-field HEADLINE 近带 `GT<1.5` 与
+  反应窗 `[1.5,3)` **P(trig) 双双=1.0**(旧 0.697/0.802)。1.5m 正前墙从被读 ~6.4m 修到 ~0.65m,shield 每帧必刹 →
+  ④ 感知层根因消除。§4 ②④ 命令 `--depth-ckpt` 已切至新头。**待**:4090 起渲染器 → `_v0_gate --signals 2,4
+  --rollout-eval` 重跑 ④(用新头)→ `--merge` 四信号权威判决。flags 仍全关。
 - **2026-08-11(晚⁶) —— 定位 ④ 真根因=深度头近障乐观 → 深度头 near-band 重训(离线诊断先证,再修 loss)。**
   晚⁵ 修完 flaky 后 ④ 仍未过。用只读离线诊断 `_diag_depth_vs_gt`(不碰 gate/spec/config/flags,仅读 ckpt+语料,
   按 shield 同款 `DepthMinPredictor` 逐帧配 D̂ vs GT、按 GT 深度分箱)在 `dataset_v0_approach_merged`(115 集/14487 帧)
