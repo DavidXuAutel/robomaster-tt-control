@@ -131,6 +131,7 @@ def make_obstacle_facing_episodes(
     probe_steps: int = 24,
     probe_near_m: Optional[float] = None,
     reward_cfg: Optional[RewardConfig] = None,
+    log_every: int = 0,
 ) -> tuple[List[Dict[str, np.ndarray]], Dict[str, Any]]:
     """Build N obstacle-facing start/goal episodes by *live scanning* the renderer.
 
@@ -209,6 +210,11 @@ def make_obstacle_facing_episodes(
         if len(episodes) >= int(n) or n_scanned >= budget:
             break
         n_scanned += 1
+        if int(log_every) and n_scanned % int(log_every) == 0:
+            print(f"[v0-gate] scan progress: scanned={n_scanned}/{budget} "
+                  f"accepted={len(episodes)}/{int(n)} proxy_ok={rej['proxy_ok']} "
+                  f"probe_no_hit={rej['probe_no_hit']} open_ahead={rej['open_ahead']}",
+                  flush=True)
         start = cand[pi].copy()
         yaw = math.radians(yaw_deg)
         heading = np.array([math.cos(yaw), math.sin(yaw), 0.0], dtype=np.float64)

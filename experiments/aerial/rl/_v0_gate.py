@@ -569,7 +569,8 @@ def _signals_2_4_from_rollouts(
             env, int(n_episodes), cand, seed=int(seed),
             obstacle_max_m=15.0, center_frac=0.3,
             probe_policy=policy, probe_near_m=float(thr.near_collision_depth_m),
-            probe_steps=24, reward_cfg=reward_cfg,
+            probe_steps=12, reward_cfg=reward_cfg,
+            max_scans=400, log_every=20,
         )
         print(f"[v0-gate] obstacle-facing scan: {json.dumps(scan_diag)}")
         if not starts:
