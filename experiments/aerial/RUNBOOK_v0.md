@@ -24,7 +24,7 @@
 | **①d** | 深度 AbsRel ≤0.30 | H100 离线(DA3 ckpt) | ✅ 0.132 代表 / 0.167 approach OOD |
 | **②** | 接近量↑(N=16 rollout vs random) | **4090 sim rollout** | ✅ 决定性通过:progress 24.13 vs random −5.11;final_dist 5.01m vs 34.99m |
 | **③** | D̂ 尺度一致(reprojection,GT-proprio 位移) | H100 离线 | ✅ 0.05–0.12(重投影估计器,GT-oracle 0.002) |
-| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 晚⁷ 深度头 near-band 重训消除感知层根因(D̂ 6.4→0.65m、①d 0.0483);晚⁸ scan 用记录航向;晚⁹ probe 判据对齐评测臂(中心裁剪→全画面+碰撞即接受,修 proxy_ok=22/accepted=0),**待用新头+`dataset_v0_headon_20260811` 重跑 4090 rollout(预期 accepted>0)** |
+| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🔴 scan 已修(晚⁹→晚¹⁰ accepted=11);**④c FAIL**:near_coll ratio on/off=**1.24**>0.80 且 shield 开启臂 11 集全碰撞 —— 与闩锁+单调后退设计矛盾,晚¹⁰ 加 `_shield_diag` 只读遥测定位(闩锁太晚 vs 后退失效),**待 4090 重跑取 diag 后据实修**(不 gaming) |
 
 > ④ `near_coll_rate_off=0`(2026-08-11 rollout)根因:`HeuristicPolicy` 是纯 proprio 直线奔 goal、
 > **不看 depth 不避障**;宽锥深度代理(`center_frac=0.5`)只证明"视野里有障碍",直线策略从旁 >1.5m 擦过。
@@ -109,6 +109,16 @@
 ## 8. 变更记录
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
+
+- **2026-08-11(晚¹⁰) —— scan 修复生效(accepted=11);② PASS;④ 仍 FAIL(near_coll ratio=1.24>0.80),加只读机制遥测定位。**
+  晚⁹ 全画面/碰撞判据把 `accepted` 0→**11**、`probe hits`=11、`obstacle_ok`=11 —— scan 阻塞彻底解除。权威 rollout:
+  **② PASS**(progress 10.5 vs random −0.65;final_dist 19.5 vs 26.5,双余量过)。**④ FAIL**:④b `intervention_before_contact=0.636≥0.5` ✓,
+  但 ④c `near_coll_rate_ratio = on/off = 0.0389/0.0312 = **1.24** > 0.80` ✗,且 `n_contact_episodes=**11**`(shield 开启臂 11 集**全部仍碰撞**)。
+  与"闩锁+单调后退首次 breach 后 GT 间距严格单调增、on 臂不该碰撞"的设计**直接矛盾** → 要么闩锁太晚(predictor 在实测帧偏乐观),
+  要么后退量压不住前向位移/动量。**不靠改 shield/阈值凑过**(那是 gaming gate)。加纯后处理只读遥测 `_shield_diag`(从已返回 `masks` 算,
+  不改 rollout/不动阈值/模型/flags):每臂逐集 `steps`/`near_count`、on 臂 `first_interv`/`first_coll`/`first_near` 步、
+  以及 `near_before_latch`(near 早于闩锁数)、`coll_after_latch`(闩锁后仍碰撞数)。一次重跑即可判"闩锁太晚"还是"后退失效"。
+  **待**:4090 重跑 ④(同命令,遥测自动带出 `shield mechanism diag`)→ 据实定位后再动。flags 仍全关。commit 本次待 push。
 
 - **2026-08-11(晚⁹) —— ④ probe 判据对齐评测臂(中心裁剪→全画面 + 碰撞即接受);修 probe/eval 不匹配。**
   晚⁸ 上记录航向优先只把 proxy_ok 19→22,`accepted` 仍 0。加只读遥测(每个 proxy-OK probe 记

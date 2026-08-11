@@ -669,7 +669,75 @@ def _signals_2_4_from_rollouts(
         near_coll_off=masks["near_coll_off"],
         thr=thr,
     )
+    # Read-only ④ mechanism telemetry (post-processes the SAME masks the scorer
+    # reads; touches no threshold/model/flag). The retreat shield should make the
+    # on-arm leave the near band monotonically after it latches — so if the ratio
+    # inverts we need to see, per episode: does the first near-frame precede the
+    # first intervention (latch too late — predictor optimistic on live frames)?
+    # does a collision follow a latch (retreat not overpowering forward drift)?
+    # and how do on/off episode lengths & near-counts compare.
+    diag = _shield_diag(masks)
+    s4["shield_diag"] = diag
+    print(f"[v0-gate] shield mechanism diag: {json.dumps(diag)}")
     return s2, s4
+
+
+def _shield_diag(masks: Dict[str, Any]) -> Dict[str, Any]:
+    """Per-arm, per-episode ④ mechanism telemetry from already-collected masks.
+
+    Pure post-processing — no rollout, no gate/threshold/model/flag touch. Answers
+    WHY the near-collision ratio sits where it does, so the next fix is measured
+    not guessed.
+    """
+    interv = masks["interventions_on"]
+    coll = masks["collided_on"]
+    near_on = masks["near_coll_on"]
+    near_off = masks["near_coll_off"]
+
+    def _first(seq: List[bool]) -> int:
+        a = np.asarray(seq, dtype=bool)
+        return int(np.argmax(a)) if bool(a.any()) else -1
+
+    def _stats(xs: List[float]) -> Dict[str, float]:
+        if not xs:
+            return {"min": float("nan"), "p50": float("nan"), "max": float("nan")}
+        a = np.asarray(xs, dtype=np.float64)
+        return {"min": float(a.min()), "p50": float(np.median(a)), "max": float(a.max())}
+
+    steps_on, steps_off = [], []
+    ncount_on, ncount_off = [], []
+    first_interv, first_coll, first_near_on = [], [], []
+    near_before_latch = 0   # on-arm: near band entered before the shield latched
+    coll_after_latch = 0    # on-arm: collided AFTER a latch (retreat failed to clear)
+    latched_eps = 0
+    for iv, cl, no, nf in zip(interv, coll, near_on, near_off):
+        steps_on.append(float(len(no)))
+        steps_off.append(float(len(nf)))
+        ncount_on.append(float(int(np.count_nonzero(np.asarray(no, bool)))))
+        ncount_off.append(float(int(np.count_nonzero(np.asarray(nf, bool)))))
+        fi = _first(iv); fc = _first(cl); fn = _first(no)
+        first_interv.append(float(fi)); first_coll.append(float(fc)); first_near_on.append(float(fn))
+        if fi >= 0:
+            latched_eps += 1
+        # near band reached with no latch, or before the latch fired
+        if fn >= 0 and (fi < 0 or fn < fi):
+            near_before_latch += 1
+        # collision at a step at/after the latch → monotonic retreat did NOT clear
+        if fi >= 0 and fc >= 0 and fc >= fi:
+            coll_after_latch += 1
+    return {
+        "n_episodes": len(near_on),
+        "latched_episodes": latched_eps,
+        "near_before_latch": near_before_latch,
+        "coll_after_latch": coll_after_latch,
+        "steps_on": _stats(steps_on),
+        "steps_off": _stats(steps_off),
+        "near_count_on": _stats(ncount_on),
+        "near_count_off": _stats(ncount_off),
+        "first_interv_step": _stats(first_interv),
+        "first_coll_step": _stats(first_coll),
+        "first_near_on_step": _stats(first_near_on),
+    }
 
 
 # --------------------------------------------------------------------------- #
