@@ -717,6 +717,140 @@ def _episode_geom_diag(
     }
 
 
+def _min_depth_pixel_loc(depth: Optional[np.ndarray]) -> Optional[Dict[str, float]]:
+    """Normalised (row, col) of the nearest finite+positive depth pixel.
+
+    Read-only. This is the forensic that separates a FRONTAL obstacle (nearest
+    pixel near image centre) from a LATERAL/rear blind-spot hit (nearest pixel at
+    the left/right edge) or GROUND (bottom rows). ``row``/``col`` ∈ [0,1] with
+    (0,0)=top-left; ``col`` near 0/1 ⇒ side, ``row`` near 1 ⇒ below. A forward-only
+    depth shield structurally cannot react to a min that is not near the centre.
+    """
+    if depth is None:
+        return None
+    d = np.asarray(depth, dtype=np.float64)
+    if d.ndim != 2:
+        return None
+    mask = np.isfinite(d) & (d > 0)
+    if not mask.any():
+        return None
+    dd = np.where(mask, d, np.inf)
+    r, c = np.unravel_index(int(np.argmin(dd)), dd.shape)
+    h, w = dd.shape
+    return {
+        "row": round(float(r) / max(h - 1, 1), 3),
+        "col": round(float(c) / max(w - 1, 1), 3),
+        "val": round(float(dd[r, c]), 3),
+    }
+
+
+def _dump_contact_episode(
+    ep_on: Episode,
+    idx: int,
+    dump_dir: str,
+    *,
+    center_frac: float = 0.5,
+) -> Dict[str, Any]:
+    """Read-only per-step forensic dump for one CONTACT episode (④ debug only).
+
+    Re-reads what the episode ALREADY recorded — touches no threshold / model /
+    shield / flag, and is opt-in (``--dump-contact-frames``; default off ⇒ the
+    authoritative gate is byte-for-byte unchanged). Writes the shield-on RGB +
+    depth frame stack (obs of every step plus the terminal contact ``next_obs``)
+    to ``{dump_dir}/contact_ep{idx}_on.npz`` and PNGs of the spawn frame and the
+    contact frame, and RETURNS a per-step table so the JSON alone can tell a
+    teleport-jitter degenerate start (a single-step ‖Δpos‖ that no 5 Hz body-delta
+    could produce, velocity spike) apart from a genuine frontal-avoidance failure,
+    and a forward hit (min-depth pixel centred) from a lateral/blind-spot one.
+    """
+    import os
+
+    os.makedirs(dump_dir, exist_ok=True)
+    steps: List[Dict[str, Any]] = []
+    # obs of each step, then the terminal next_obs (the post-contact view).
+    frames: List[Any] = [tr.obs for tr in ep_on]
+    term_next = ep_on[-1].next_obs
+    if term_next is not None:
+        frames.append(term_next)
+
+    for i, tr in enumerate(ep_on):
+        obs = tr.obs
+        nxt = tr.next_obs if tr.next_obs is not None else tr.obs
+        d = getattr(obs, "depth", None)
+        p0 = np.asarray(obs.position, dtype=np.float64)
+        p1 = np.asarray(nxt.position, dtype=np.float64)
+        pred = tr.info.get("depth_min_pred")
+        steps.append({
+            "i": i,
+            "pos": p0.round(3).tolist(),
+            "next_pos": p1.round(3).tolist(),
+            "dpos_norm": round(float(np.linalg.norm(p1 - p0)), 3),  # 1-step |Δpos|
+            "vel": np.asarray(obs.velocity, dtype=np.float64).round(3).tolist(),
+            "yaw": round(float(getattr(obs, "yaw", float("nan"))), 4),
+            "collided_obs": bool(getattr(obs, "collided", False)),
+            "collided_next": bool(getattr(nxt, "collided", False)),
+            "gt_full_min": round(float(_full_min_depth(d)), 3) if d is not None else None,
+            "gt_fwd_min": round(float(_forward_min_depth(d, center_frac=center_frac)), 3) if d is not None else None,
+            "min_depth_px": _min_depth_pixel_loc(d),  # where is the nearest thing?
+            "depth_min_pred": (round(float(pred), 3) if pred is not None else None),
+            "intervention": bool(tr.info.get("intervention", False)),
+            "action": np.asarray(tr.action, dtype=np.float64).round(4).tolist(),
+        })
+
+    npz_path = os.path.join(dump_dir, f"contact_ep{idx}_on.npz")
+    save: Dict[str, Any] = {}
+    rgbs = [np.asarray(getattr(f, "rgb", None), dtype=np.uint8)
+            for f in frames if getattr(f, "rgb", None) is not None]
+    if rgbs and len({r.shape for r in rgbs}) == 1:
+        save["rgb"] = np.stack(rgbs)
+    depths = [np.asarray(getattr(f, "depth", None), dtype=np.float32)
+              for f in frames if getattr(f, "depth", None) is not None]
+    if depths and len({dp.shape for dp in depths}) == 1:
+        save["depth"] = np.stack(depths)
+    save["positions"] = np.asarray([np.asarray(f.position) for f in frames], dtype=np.float64)
+    try:
+        np.savez_compressed(npz_path, **save)
+    except Exception as exc:  # dump must never break the gate
+        logger.warning("contact-dump: npz save failed for ep%d: %s", idx, exc)
+
+    pngs: List[str] = []
+    try:
+        import cv2
+
+        def _save_rgb(frame: Any, tag: str) -> None:
+            rgb = getattr(frame, "rgb", None)
+            if rgb is None:
+                return
+            p = os.path.join(dump_dir, f"contact_ep{idx}_{tag}_rgb.png")
+            cv2.imwrite(p, np.asarray(rgb, dtype=np.uint8)[:, :, ::-1])  # RGB→BGR
+            pngs.append(p)
+
+        def _save_depth(frame: Any, tag: str) -> None:
+            d = getattr(frame, "depth", None)
+            if d is None:
+                return
+            d = np.asarray(d, dtype=np.float64)
+            finite = d[np.isfinite(d) & (d > 0)]
+            if not finite.size:
+                return
+            lo, hi = float(finite.min()), float(finite.max())
+            norm = np.clip((d - lo) / max(hi - lo, 1e-6), 0, 1)
+            norm = np.where(np.isfinite(d) & (d > 0), norm, 0.0)
+            img = cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_JET)
+            p = os.path.join(dump_dir, f"contact_ep{idx}_{tag}_depth.png")
+            cv2.imwrite(p, img)
+            pngs.append(p)
+
+        _save_rgb(frames[0], "spawn")
+        _save_depth(frames[0], "spawn")
+        _save_rgb(frames[-1], "contact")
+        _save_depth(frames[-1], "contact")
+    except Exception as exc:
+        logger.warning("contact-dump: png save failed for ep%d: %s", idx, exc)
+
+    return {"idx": idx, "npz": npz_path, "pngs": pngs, "n_steps": len(ep_on), "steps": steps}
+
+
 def run_shield_eval(
     env: Any,
     policy: Any,
@@ -727,6 +861,7 @@ def run_shield_eval(
     shield_trigger_depth_m: float = 3.0,
     max_steps: int = 200,
     reward_cfg: Optional[RewardConfig] = None,
+    dump_dir: Optional[str] = None,
 ) -> Dict[str, List[List[bool]]]:
     """Signal ④ inputs: paired shield-on vs shield-off per-step boolean masks.
 
@@ -751,8 +886,10 @@ def run_shield_eval(
     near_coll_on: List[List[bool]] = []
     near_coll_off: List[List[bool]] = []
     episode_diag: List[Dict[str, Any]] = []
+    contact_dumps: List[Dict[str, Any]] = []
     drop_stats: Dict[str, int] = {}
     depth_steps = 0
+    scored_idx = -1  # index into the SCORED (paired, non-dropped) episode set
 
     for epi in start_episodes:
         if hasattr(policy, "reset"):
@@ -792,6 +929,21 @@ def run_shield_eval(
         # attributed to a blind backward retreat vs a too-close spawn — see
         # _episode_geom_diag. Touches no threshold/model/flag.
         episode_diag.append(_episode_geom_diag(ep_on, ep_off, epi))
+        scored_idx += 1
+
+        # Opt-in forensic dump (default off). For every CONTACT episode on the
+        # shield-on arm, write the per-step table + RGB/depth frames so a contact
+        # can be classified (teleport-jitter degenerate start vs frontal-avoidance
+        # failure vs lateral/blind-spot hit) from data, not inference. Read-only.
+        if dump_dir is not None and any(
+            bool(getattr(tr.next_obs if tr.next_obs is not None else tr.obs,
+                         "collided", False))
+            for tr in ep_on
+        ):
+            try:
+                contact_dumps.append(_dump_contact_episode(ep_on, scored_idx, dump_dir))
+            except Exception as exc:  # a dump must never fail the gate
+                logger.warning("contact-dump: skipped ep%d: %s", scored_idx, exc)
 
     return {
         "interventions_on": interventions_on,
@@ -799,6 +951,8 @@ def run_shield_eval(
         "near_coll_on": near_coll_on,
         "near_coll_off": near_coll_off,
         "episode_diag": episode_diag,
+        # Opt-in per-contact-episode forensic dumps (empty unless dump_dir set).
+        "contact_dumps": contact_dumps,
         # Auditable drop accounting (WHY starts left the scored set), never silent:
         # spawn_collision_drops = starts that kept spawning inside geometry across
         # all resamples (invalid, no pre-contact window); health_drops = degenerate

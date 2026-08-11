@@ -574,6 +574,7 @@ def _signals_2_4_from_rollouts(
     max_steps: int,
     seed: int,
     rollout_dataset: Optional[Path] = None,
+    dump_dir: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     import yaml
 
@@ -652,6 +653,7 @@ def _signals_2_4_from_rollouts(
         # the band (frozen-spec ④a re-freeze 2026-08-11). NOT a §4.1 gate threshold.
         shield_trigger_depth_m=3.0,
         max_steps=int(max_steps), reward_cfg=reward_cfg,
+        dump_dir=dump_dir,
     )
     # ④'s near-collision rate is GT-depth-driven. If no episode carried a usable
     # depth field (grab_depth=false), every near mask is all-False and the ratio
@@ -686,6 +688,11 @@ def _signals_2_4_from_rollouts(
     # (spawn-embedded resamples that never cleared vs degenerate renderer frames).
     diag["spawn_collision_drops"] = int(masks.get("spawn_collision_drops", 0))
     diag["health_drops"] = int(masks.get("health_drops", 0))
+    # Opt-in forensic per-contact-episode dumps (--dump-contact-frames). Empty
+    # unless requested; read-only, never affects the verdict.
+    cdumps = masks.get("contact_dumps") or []
+    if cdumps:
+        diag["contact_dumps"] = cdumps
     s4["shield_diag"] = diag
     print(f"[v0-gate] shield mechanism diag: {json.dumps(diag)}")
     return s2, s4
@@ -1038,6 +1045,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--depth-ckpt", default=None, help="trained _DepthHead .pt (①d/③/④ depth pillar)")
     p.add_argument("--config", default="configs/aerial_rl.yaml", help="for ②/④ rollout env")
     p.add_argument("--rollout-eval", action="store_true", help="run ②/④ paired rollouts")
+    p.add_argument("--dump-contact-frames", default=None,
+                   help="DIR: read-only forensic dump (per-step table + RGB/depth "
+                        "PNGs/npz) for every ④ contact episode; default off, does "
+                        "NOT affect the verdict")
     p.add_argument("--rollout-dataset", default=None,
                    help="collection dir (e.g. dataset_v1_rgb) whose trajectory positions "
                         "seed ④'s live obstacle-facing scan; omit → level over-origin starts "
@@ -1223,6 +1234,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 max_steps=int(args.max_steps),
                 seed=int(args.seed),
                 rollout_dataset=Path(args.rollout_dataset) if args.rollout_dataset else None,
+                dump_dir=args.dump_contact_frames,
             )
         if "2" in req:
             signals["2"] = s2
