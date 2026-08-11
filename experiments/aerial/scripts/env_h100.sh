@@ -27,8 +27,35 @@ TORCH_INDEX="${TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
 # --- optional one-time bootstrap ---------------------------------------------
 if [ "${INSTALL:-0}" = "1" ]; then
   echo "[env] bootstrap venv: $VENV"
-  if [ ! -d "$VENV" ]; then
-    python3 -m venv "$VENV" || { echo "[env] ✗ python3 -m venv failed (need python3.10+ venv)"; return 1 2>/dev/null || exit 1; }
+  if [ ! -x "$VENV/bin/python" ]; then
+    rm -rf "$VENV"
+    if python3 -m venv "$VENV" 2>/dev/null; then
+      : # normal venv (ensurepip present)
+    else
+      # Debian/Ubuntu system python often lacks ensurepip/python3-venv. Create a
+      # pip-less venv and bootstrap pip via get-pip.py (SETUP.md §3.2 pattern) —
+      # no sudo / no apt needed.
+      echo "[env] ensurepip missing → venv --without-pip + get-pip.py"
+      rm -rf "$VENV"
+      python3 -m venv --without-pip "$VENV" \
+        || { echo "[env] ✗ 'python3 -m venv --without-pip' failed"; return 1 2>/dev/null || exit 1; }
+      # shellcheck disable=SC1090
+      source "$VENV/bin/activate"
+      GP="${TMPDIR:-/tmp}/get-pip.py"
+      if command -v curl >/dev/null 2>&1; then
+        curl -fsSL https://bootstrap.pypa.io/get-pip.py -o "$GP"
+      elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$GP" https://bootstrap.pypa.io/get-pip.py
+      else
+        python - <<'PY'
+import urllib.request, os
+dst = os.path.join(os.environ.get("TMPDIR", "/tmp"), "get-pip.py")
+urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", dst)
+print("[env] fetched get-pip.py via urllib:", dst)
+PY
+      fi
+      python "$GP" || { echo "[env] ✗ get-pip.py failed (network to bootstrap.pypa.io?)"; return 1 2>/dev/null || exit 1; }
+    fi
   fi
   # shellcheck disable=SC1090
   source "$VENV/bin/activate"
