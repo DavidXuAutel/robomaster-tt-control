@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>附件存储选型决策报告 · 2026-08-10</title>
+<style>
+  body {
+    background: #fafafa;
+    color: #333;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 16px;
+    line-height: 1.75;
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 24px 18px 80px;
+  }
+  h1, h2, h3 { color: #222; line-height: 1.35; }
+  h1 { font-size: 1.45rem; margin: 0 0 0.35em; }
+  h2 { font-size: 1.18rem; margin-top: 2.2em; border-bottom: 1px solid #e5e5e5; padding-bottom: 0.35em; }
+  h3 { font-size: 1.02rem; margin-top: 1.6em; }
+  p { margin: 0.75em 0; }
+  .meta { color: #666; font-size: 0.92rem; margin-bottom: 1.4em; }
+  .verdict { background: #fff; border: 1px solid #e8e8e8; border-left: 4px solid #2a6f6f; padding: 14px 16px; margin: 1.2em 0; }
+  .warn { background: #fffaf5; border: 1px solid #f0e0c8; border-left: 4px solid #c47a2c; padding: 14px 16px; margin: 1.2em 0; }
+  .ok { background: #f6fbf8; border: 1px solid #d7ebe0; border-left: 4px solid #3a8f6a; padding: 14px 16px; margin: 1.2em 0; }
+  .bad { background: #fdf5f5; border: 1px solid #efd8d8; border-left: 4px solid #b04a4a; padding: 14px 16px; margin: 1.2em 0; }
+  .quote { background: #fff; border: 1px solid #e5e5e5; border-left: 4px solid #999; padding: 12px 16px; margin: 1.1em 0; color: #444; }
+  ul, ol { padding-left: 1.3em; }
+  li { margin: 0.4em 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.87rem; margin: 1em 0; background: #fff; }
+  th, td { border: 1px solid #e5e5e5; padding: 8px 9px; text-align: left; vertical-align: top; }
+  th { background: #f3f3f3; color: #222; }
+  .tag { display: inline-block; font-size: 0.78rem; padding: 1px 7px; border-radius: 3px; margin-right: 4px; background: #eee; color: #444; }
+  .tag.red { background: #fdecea; color: #a33; }
+  .tag.orange { background: #fff3e0; color: #a65; }
+  .tag.green { background: #e8f5e9; color: #2e6b3a; }
+  .tag.grey { background: #eceff1; color: #556; }
+  .footnote { color: #777; font-size: 0.88rem; margin-top: 2.5em; border-top: 1px solid #e5e5e5; padding-top: 1em; }
+  a { color: #1a5f7a; word-break: break-word; }
+  .toc { background:#fff; border:1px solid #e8e8e8; padding: 12px 16px; }
+  .toc a { text-decoration: none; }
+  .toc li { margin: 0.2em 0; }
+  code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 0.88em; }
+  pre { background: #f5f5f5; border: 1px solid #e5e5e5; border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 0.82rem; line-height: 1.55; }
+
+  /* 术语悬停释义 */
+  .term { border-bottom: 1px dashed #7a8a99; cursor: help; position: relative; color: #17506b; }
+  .term::after {
+    content: attr(data-tip);
+    position: absolute; left: 0; top: 135%;
+    width: max-content; max-width: 330px;
+    padding: 9px 11px; background: #1e2530; color: #fff;
+    font-size: 13px; line-height: 1.6; border-radius: 6px;
+    white-space: normal; opacity: 0; pointer-events: none;
+    transition: opacity .15s; z-index: 20;
+    box-shadow: 0 4px 14px rgba(0,0,0,.22);
+  }
+  .term:hover::after, .term:focus::after { opacity: 1; }
+  /* 靠右的术语，气泡改为右对齐避免溢出 */
+  .term.r::after { left: auto; right: 0; }
+  .hint { color:#666; font-size:0.9rem; }
+</style>
+</head>
+<body>
+
+<h1>附件存储选型决策报告</h1>
+<p class="meta">
+  2026-08-10 · 触发事件：集成商就「是否弃用 MinIO」给出正式答复<br />
+  用途：供项目负责人决策。关联方案 <code>2026-08-05-dog-deployment-loop-plan.md</code> §1.6-F4、
+  接口清单 <code>2026-08-08-topsee-interface-inventory.md</code> §8.2
+</p>
+
+<div class="bad">
+  <strong>🔴 决策已下达（2026-08-10 项目负责人）：整体 HOLD，不向对方表达偏好。</strong>
+  <br /><br />
+  <strong>理由</strong>：本项目在客户侧属<strong>搭载验证</strong>性质、非独立立项，
+  我方不具备向集成商提出配合性要求的立场（选型偏好、分区加盘、书面约定均同）。
+  <br />
+  <strong>处置</strong>：§6 的四项决策全部 HOLD；但<strong>风险不随诉求 HOLD 而消失</strong>，
+  已逐条转为我方自主可控的技术缓解——
+  ①episode 落<strong>我方自备外置存储</strong>，完全不碰一体机系统盘（替代「要分区」，且更干净）；
+  ②做 <strong>URL 形态基线快照 + 漂移检测</strong>，自己发现变更（替代「要知会」，且更可靠）；
+  ③端口依赖走<strong>我司正式项目方的内部路径</strong>同步（替代「对外申报」）。
+  <br />
+  <strong>已确认事实</strong>：我司<strong>有</strong>可离线部署的附件存储组件——选项④技术上成立，
+  但当前不主动推进。
+  <br /><br />
+  📌 <strong>本报告的技术分析仍然有效</strong>，保留供项目转正后直接启用。
+  方案侧落点见 <code>2026-08-05-dog-deployment-loop-plan.md</code> §1.6-F8 与 §3.0-V。
+</div>
+
+<div class="verdict">
+  <strong>结论先行</strong>：对方答的是「<strong>可以不用 MinIO</strong>」，并给了三条替代路。
+  小昭建议选 <strong>本地化存储</strong>——它同时解决<strong>许可风险</strong>和<strong>端口收敛</strong>两件事，
+  而且我方本来就不依赖对象存储。<br />
+  但这句话里藏了一个对我们不利的坑：<strong>附件会和我们的训练数据抢同一块硬盘</strong>（见 §4.3），
+  这会触发我方既有的「磁盘满则停录制」保护，表现为采数莫名中断。
+</div>
+
+<p class="hint">📖 阅读提示：文中带虚线下划线的词都可以<strong>鼠标悬停</strong>看释义（手机端点一下即可）。</p>
+
+<div class="toc">
+  <strong>目录</strong>
+  <ol>
+    <li><a href="#s1">先把这句话翻译成人话</a></li>
+    <li><a href="#s2">原理：为什么会有这个议题</a></li>
+    <li><a href="#s3">三条路的技术对比</a></li>
+    <li><a href="#s4">对我们项目的四个具体影响</a></li>
+    <li><a href="#s5">小昭的推荐与理由</a></li>
+    <li><a href="#s6">需要主人决策的四件事</a></li>
+  </ol>
+</div>
+
+<h2 id="s1">1. 先把这句话翻译成人话</h2>
+
+<div class="quote">
+  「我们目前支持本地化存储，也支持 mminio，fastdfs 也可以，你们如果有搭载附件组件我们可以直接适配你们的，
+  我们自己不再独立搭建了，本身服务器就是共用的。」
+  <br /><span class="hint">（原文 <code>mminio</code> 是 <code>minio</code> 的笔误）</span>
+</div>
+
+<p>逐句拆解：</p>
+
+<table>
+  <tr><th style="width:38%">原话</th><th>意思</th></tr>
+  <tr>
+    <td>我们目前支持本地化存储</td>
+    <td>平台可以把图片、视频、报告这类<span class="term" data-tip="附件 = 平台产生的二进制大文件：告警抓拍图、巡检视频、点云、地图文件、导出报告等。这类文件不适合存进数据库，通常单独存放。">附件</span>
+      <strong>直接写进一体机自己的硬盘</strong>，不需要额外起一个存储服务。</td>
+  </tr>
+  <tr>
+    <td>也支持 minio，fastdfs 也可以</td>
+    <td>存储后端是<span class="term" data-tip="可插拔（pluggable）= 软件把某个功能做成可替换的模块，改配置就能换实现，不用改代码。这里指存储层做了抽象。">可插拔</span>的，
+      三种后端都能接。<strong>说明换掉 MinIO 在技术上不难</strong>，不是伤筋动骨的改造。</td>
+  </tr>
+  <tr>
+    <td>你们如果有搭载附件组件<br />我们可以直接适配你们的</td>
+    <td>如果<strong>我司自己有一套附件存储服务</strong>，他们可以改成往我司的存储里写。</td>
+  </tr>
+  <tr>
+    <td>我们自己不再独立搭建了</td>
+    <td><strong>他们不会再单独部署一套 MinIO。</strong>这是对「你们不用 minio，OK 不」的正面回答。</td>
+  </tr>
+  <tr>
+    <td>本身服务器就是共用的</td>
+    <td>反正都跑在同一台<span class="term" data-tip="一体机 = 把服务器硬件、操作系统、数据库、应用打包成一台设备整体交付。本项目现场是「离线一体机」形态：所有服务（平台、数据库、消息队列、存储）跑在同一台 x86 工控机上，不连公网。">一体机</span>上，
+      没必要多起一个服务占资源。<br />
+      <span class="tag orange">注意</span>这句话的隐含后果是：<strong>附件写的是这台机器的本地盘</strong>——见 §4.3。</td>
+  </tr>
+</table>
+
+<div class="ok">
+  <strong>一句话结论</strong>：MinIO 的许可风险<strong>有解，而且是最干净的那种解法</strong>——
+  不是花钱买许可，而是<strong>直接移除依赖</strong>。现在的问题变成了：三条替代路选哪条。
+</div>
+
+<h2 id="s2">2. 原理：为什么会有这个议题</h2>
+
+<h3>2.1 附件为什么要单独存，两大流派</h3>
+
+<p>巡检平台会持续产生大量二进制文件。存法有两派：</p>
+
+<ul>
+  <li><strong>直接写本机硬盘</strong>（本地化存储）：最朴素——就是文件系统上的一个目录，
+    再通过平台自己的 <span class="term" data-tip="HTTP = 网页和接口通用的传输协议。这里指：平台用自己已有的 Web 服务把文件提供出去，不需要额外的服务和端口。">HTTP</span> 接口把文件提供出去。</li>
+  <li><strong>交给对象存储服务</strong>：起一个<strong>独立进程</strong>专门管文件，应用通过网络 API 存取。</li>
+</ul>
+
+<h3>2.2 什么是「对象存储」和「S3 兼容」</h3>
+
+<p>
+  <span class="term" data-tip="对象存储（Object Storage）= 把每个文件当成一个带唯一标识的「对象」来管理，通过网络 API 存取，而不是通过文件路径。适合海量文件、易横向扩容、天然支持多机冗余。代表产品：亚马逊 S3、阿里云 OSS、MinIO。">对象存储</span>
+  是云时代的主流文件存储方式。亚马逊的
+  <span class="term" data-tip="S3（Simple Storage Service）= 亚马逊云的对象存储服务。它的 API 设计成了事实标准，后来者纷纷兼容它，这样用户换供应商时代码不用大改。">S3</span>
+  因为最早最普及，它的接口成了事实标准，其他产品都来兼容它，这叫
+  <span class="term" data-tip="S3 兼容 = 自己实现一套和亚马逊 S3 一样的 API。好处是客户端代码、SDK、工具链可以直接复用，迁移成本低。">「S3 兼容」</span>。
+</p>
+
+<p>
+  <span class="term" data-tip="MinIO = 一款开源的、S3 兼容的对象存储软件，可以自己部署在内网。因为轻量且兼容 S3，在私有化部署场景非常流行。争议点在它 2021 年更换了许可证。">MinIO</span>
+  就是一个可以自己装在内网的 S3 兼容对象存储，因为轻量、好装，私有化部署里用得极多。
+  <strong>整件事的起因就是它的许可证。</strong>
+</p>
+
+<h3>2.3 关键区分：MinIO 的「服务端」和「客户端」许可证不一样</h3>
+
+<p>这一点是整个议题最容易被搞混的地方，务必分清：</p>
+
+<table>
+  <tr><th style="width:26%">部件</th><th style="width:22%">许可证</th><th>含义</th></tr>
+  <tr>
+    <td><strong>MinIO 服务端</strong><br />（自己部署的那个进程）</td>
+    <td><span class="tag red">AGPLv3</span><br /><span class="hint">2021 年 4 月起</span></td>
+    <td>🔴 <strong>风险就在这里。</strong>2021 年前是宽松的 Apache 2.0，之后改成了传染性最强的 AGPLv3。</td>
+  </tr>
+  <tr>
+    <td>MinIO 客户端 SDK</td>
+    <td><span class="tag green">Apache 2.0</span></td>
+    <td>✅ 无风险。<strong>用 SDK 去连别人的 S3 服务，完全不受 AGPL 影响。</strong></td>
+  </tr>
+</table>
+
+<p>
+  所以准确的说法是：<strong>「自己部署 MinIO 服务端」才是问题，「用 S3 客户端」不是问题。</strong>
+  这也解释了为什么解法是「不部署它」而不是「不调用它」。
+</p>
+
+<h3>2.4 AGPL 的原理：它是来堵一个漏洞的</h3>
+
+<p>要理解 AGPL，得先理解它前身 GPL 的触发条件。</p>
+
+<p>
+  <span class="term" data-tip="GPL（GNU General Public License）= 最著名的「传染性」开源许可证。核心规则：你可以自由使用和修改，但如果你把软件「分发」出去（给别人二进制），就必须同时提供源码，且衍生作品也必须用 GPL 开源。">GPL</span>
+  的传染触发条件是
+  <span class="term" data-tip="分发（distribute）= 把软件的副本交给别人。GPL 的义务只在「分发」时触发；如果你只在自己公司内部用、不给外人副本，就没有开源义务。">「分发」</span>。
+  云服务时代出现了一个漏洞：
+</p>
+
+<div class="warn">
+  <strong>那个漏洞长这样</strong>：我拿一个 GPL 软件改一改，然后<strong>只对外提供在线服务</strong>，
+  不把二进制文件交给任何人。这样我从未「分发」过，
+  所以 GPL 的开源义务<strong>永远不触发</strong>——我白拿了开源成果，却不必回馈。
+  <br />当年很多云厂商正是这么干的。
+</div>
+
+<p>
+  <span class="term" data-tip="AGPL（Affero GPL）= GPL 的加强版，专门针对云服务场景。相比 GPL 只多了一条第 13 条，但威力巨大：只要用户通过网络与你的程序交互，就等同于分发，必须提供源码。">AGPL</span>
+  就是来堵这个漏洞的。它相比 GPL 只多了一条——
+  <span class="term r" data-tip="AGPLv3 第 13 条「Remote Network Interaction」：如果你修改了本程序，并让用户通过计算机网络与之交互，你必须为这些用户提供该修改版本的源代码。这条把「网络服务」等同于「分发」。">第 13 条「远程网络交互」</span>：
+</p>
+
+<div class="bad">
+  <strong>只要用户能通过网络跟你的程序交互，就视同分发，必须提供源码。</strong>
+  <br />这一条让「藏在服务器里就不用开源」这个操作失效了。
+</div>
+
+<h3>2.5 那到底会不会传染到我们？—— 争议在哪里</h3>
+
+<p>严格从法理讲，风险边界是这样的：</p>
+
+<ul>
+  <li>如果 MinIO 是<strong>未经修改</strong>的、跑在<strong>独立进程</strong>里，我们的应用只通过网络 API 调它——
+    一般认为这构成
+    <span class="term" data-tip="聚合（mere aggregation）= GPL 系许可证承认的概念：多个独立程序只是放在一起、各自运行、通过标准接口通信，不构成「衍生作品」，因此不互相传染许可证。">「聚合」</span>
+    而非
+    <span class="term" data-tip="衍生作品（derivative work）= 基于原作品改编而来的作品。判定标准在软件上很模糊：静态链接通常算，独立进程间通过网络通信通常不算，但从未有充分的判例定论。">「衍生作品」</span>，
+    <strong>不传染</strong>。</li>
+  <li><strong>但是</strong>：①这个边界从未经过充分的司法检验，属于「大家都这么认为」而非「法院这么判过」；
+    ②MinIO 官方在商务上对此态度积极，历史上主动向使用方发起过许可询问；
+    ③大公司法务的通行做法是<strong>一刀切禁止 AGPL 组件进产品</strong>，不去赌解释空间。</li>
+</ul>
+
+<div class="verdict">
+  所以业界的标准处置<strong>不是去论证「我不传染」，而是直接移除依赖</strong>——
+  法律不确定性的成本远高于换一个存储后端的成本。
+  <br />我司提出整改、集成商答应弃用，走的正是这条标准路径。<strong>这个判断是对的。</strong>
+</div>
+
+<h3>2.6 FastDFS 是什么，为什么它不算真正的解</h3>
+
+<p>
+  <span class="term" data-tip="FastDFS = 一款国产开源分布式文件系统，2008 年前后诞生，在国内互联网早期用得较多。架构上由 tracker（调度节点）+ storage（存储节点）组成，取文件通常还要额外挂一个 nginx 扩展模块。">FastDFS</span>
+  是国产的分布式文件系统，架构上分
+  <span class="term" data-tip="tracker（调度节点）= 负责记录哪个文件在哪台存储节点上，客户端先问 tracker 再去取文件。默认端口 22122。">tracker</span>
+  +
+  <span class="term" data-tip="storage（存储节点）= 真正存放文件的节点。默认端口 23000。要通过 HTTP 取文件，通常还要额外部署 nginx 加 FastDFS 模块。">storage</span>，
+  取文件还要再挂一个 nginx 模块。
+</p>
+
+<div class="warn">
+  <strong>关键判断：换 FastDFS 并没有解决「开源组件商业许可」这个议题本身。</strong>
+  <br />FastDFS 自身是 <span class="tag orange">GPLv3</span>——只是从 AGPL 换成了 GPL。
+  因为少了第 13 条，对「独立进程网络调用」的传染性确实<strong>弱一些</strong>，
+  但仍属传染性许可证，<strong>没有根除议题</strong>。
+  <br />另外它还带来两个新麻烦：<strong>要多开端口</strong>（见 §4.1）、<strong>维护活跃度低</strong>（项目多年少有更新）。
+</div>
+
+<h2 id="s3">3. 三条路的技术对比</h2>
+
+<p>把「保留 MinIO」也列进来做对照，共四个选项：</p>
+
+<table>
+  <tr>
+    <th style="width:15%">维度</th>
+    <th style="width:22%">① 本地化存储</th>
+    <th style="width:21%">② 保留 MinIO</th>
+    <th style="width:21%">③ FastDFS</th>
+    <th style="width:21%">④ 对接我司组件</th>
+  </tr>
+  <tr>
+    <td><strong>许可风险</strong></td>
+    <td><span class="tag green">无</span>不引入任何第三方组件</td>
+    <td><span class="tag red">高</span>AGPLv3，正是要摆脱的</td>
+    <td><span class="tag orange">中</span>GPLv3，缓解但未根除</td>
+    <td><span class="tag green">无</span>许可自主</td>
+  </tr>
+  <tr>
+    <td><strong>额外<span class="term" data-tip="端口 = 一台服务器上区分不同服务的编号。客户做私有化部署时，每个要对外访问的端口都得在防火墙/路由器上单独配一条转发规则，所以端口越多，客户配置负担越重。这正是当前正在收敛端口清单的原因。">端口</span></strong></td>
+    <td><span class="tag green">0 个</span>复用平台已有的 <code>8888</code></td>
+    <td><span class="tag red">2 个</span><code>9000</code>+<code>9091</code></td>
+    <td><span class="tag red">2~3 个</span>tracker+storage+取文件</td>
+    <td><span class="tag orange">未知</span>取决于我司组件形态</td>
+  </tr>
+  <tr>
+    <td><strong>部署复杂度</strong></td>
+    <td><span class="tag green">最低</span>就是个目录</td>
+    <td><span class="tag orange">中</span>多一个服务要维护</td>
+    <td><span class="tag red">最高</span>多组件+nginx 模块</td>
+    <td><span class="tag orange">中高</span>跨团队集成</td>
+  </tr>
+  <tr>
+    <td><strong>我方运维<br />责任</strong></td>
+    <td><span class="tag green">无</span>集成商侧的事</td>
+    <td><span class="tag green">无</span></td>
+    <td><span class="tag green">无</span></td>
+    <td><span class="tag red">有</span>存储可用性变成我方担责</td>
+  </tr>
+  <tr>
+    <td><strong><span class="term" data-tip="冗余 = 多存几份副本，任何一份坏掉数据还在。对象存储天然支持多机多副本；单机本地硬盘没有冗余，盘坏即数据全丢（除非另做备份）。">冗余</span>/可靠性</strong></td>
+    <td><span class="tag red">无冗余</span>盘坏即丢，须另做备份</td>
+    <td><span class="tag green">支持多副本</span></td>
+    <td><span class="tag green">支持多副本</span></td>
+    <td><span class="tag grey">看组件</span></td>
+  </tr>
+  <tr>
+    <td><strong>扩展性</strong></td>
+    <td><span class="tag orange">差</span>受单机磁盘上限</td>
+    <td><span class="tag green">好</span></td>
+    <td><span class="tag green">好</span></td>
+    <td><span class="tag grey">看组件</span></td>
+  </tr>
+  <tr>
+    <td><strong>对我方项目<br />的净影响</strong></td>
+    <td><span class="tag green">利好</span>少 2 端口<br />⚠️ 但有磁盘耦合（§4.3）</td>
+    <td><span class="tag red">不利</span>许可+端口双负担</td>
+    <td><span class="tag red">不利</span>与端口收敛直接冲突</td>
+    <td><span class="tag red">存疑</span>离线环境可达性（§4.2）</td>
+  </tr>
+</table>
+
+<p class="hint">
+  说明：「冗余/可靠性」和「扩展性」两行虽然本地化存储得分低，
+  但那是<strong>客户的数据可靠性问题</strong>，不属于我方交付范围——只需在交付文档里书面提示并约定备份策略。
+  不应因此选一个给我方带来实际负担的方案。
+</p>
+
+<h2 id="s4">4. 对我们项目的四个具体影响</h2>
+
+<h3>4.1 🟢 这是端口收敛谈判里的一个筹码</h3>
+
+<p>
+  客户私有化部署要做<span class="term" data-tip="端口转发 = 在路由器/防火墙上配一条规则，把外部访问导到内网某台机器的某个端口。每个端口一条规则，所以端口多了客户配置量就大——这正是我司提出「给一个最小端口集合」的原因。">端口转发</span>，
+  我司已经要求集成商给「最小使用端口集合」。
+</p>
+
+<div class="ok">
+  <strong>选本地化存储可以直接砍掉 <code>9000</code> 和 <code>9091</code> 两个端口。</strong>
+  <br />这跟我司正在推的端口收敛<strong>方向完全一致</strong>，是个可以拿来说服对方的现成理由——
+  不用讲许可证的法律细节，只说「这样端口最少」，对方就没有反对立场。
+  <br />反过来，选 FastDFS 会<strong>增加</strong> 2~3 个端口，和我司自己的诉求打架。
+</div>
+
+<h3>4.2 🔴 「对接我司组件」在离线环境可能根本走不通</h3>
+
+<div class="bad">
+  现场是<strong>离线一体机</strong>——不连公网。
+  如果我司的附件存储组件部署在公司云上，<strong>这台机器根本访问不到</strong>。
+  <br />所以选④之前必须先回答：<strong>我司是否有能落地到客户内网、离线运行的附件存储组件？</strong>
+  如果没有，这个选项是假的。
+</div>
+
+<p>
+  即便有，它还有个隐性代价：<strong>把存储可用性变成了我方的责任</strong>。
+  存储一挂，平台的告警抓拍就存不下来，客户会来找我们——
+  <span class="term" data-tip="故障域（failure domain）= 一个故障会波及的范围。故障域越大，单点问题影响面越广。方案 §1.4 已有一条纪律：不许在文档里虚报「物理隔离」，要诚实标注共享故障域。">故障域</span>
+  反而扩大了。我方在这个项目里的定位是拿数据做闭环，不是给对方做存储运维。
+</p>
+
+<h3>4.3 🟡 最隐蔽的坑：附件会和我们的训练数据抢同一块硬盘</h3>
+
+<p>
+  「本身服务器就是共用的」这句话的技术后果是：<strong>附件写这台一体机的本地磁盘</strong>。
+  而我方的
+  <span class="term" data-tip="Recorder（录制器）= 我方的飞行/行走数据录制模块。把 RGB 图像、深度、位姿、动作、状态按统一时钟落盘，产出可训练的数据集。狗侧版本见方案 D2a/D2b。">Recorder</span>
+  录
+  <span class="term" data-tip="episode（回合）= 一次连续的采集片段。一次起飞/一段行走 = 一个 episode，包含同步好的视频帧、位姿、动作序列。是训练世界模型的基本数据单位。">episode</span>
+  也要写盘。
+</p>
+
+<div class="warn">
+  <strong>冲突点</strong>：方案 §5 有一条既有保护——
+  <span class="term" data-tip="磁盘水位保护 = 我方 runtime 的安全机制：可用磁盘空间低于 10% 时自动停止录制，避免写满盘导致整机异常。见方案 D0 交付物第 2 项。">磁盘可用空间低于 10% 就自动停止录制</span>。
+  <br />如果平台的巡检图片、视频长期累积把盘吃满，<strong>会触发我方的保护而中止采数</strong>。
+  <br />🔴 <strong>而且这个故障的表象极具误导性</strong>：现场看到的是「采数莫名中断」，
+  很容易去查我们的录制代码、查网络、查相机，
+  <strong>而真正的原因在平台的附件目录</strong>——不查磁盘根本想不到。
+</div>
+
+<p><strong>处置</strong>（已写进方案）：</p>
+<ul>
+  <li>D1 现机盘点须记录：附件目录位置、当前占用、<strong>增长速率</strong>、有无自动清理策略；</li>
+  <li>我方 episode 落盘尽量用<strong>独立分区或独立盘</strong>，把两者的磁盘故障域切开；</li>
+  <li>磁盘水位告警要能区分「谁在涨」，否则排障时会指向错误方向。</li>
+</ul>
+
+<h3>4.4 🟡 存储后端一换，资源地址形态就会变</h3>
+
+<p>
+  存储后端换掉，平台返回的文件
+  <span class="term" data-tip="URL = 资源地址，形如 http://主机:端口/路径/文件名。换存储后端时，主机、端口、路径前缀都可能变化。">URL</span>
+  结构就会变（主机、端口、路径前缀都可能变）。
+</p>
+
+<div class="warn">
+  如果我方代码里对 URL 形态有<strong>隐式假设</strong>，会在某次平台升级后
+  <span class="term" data-tip="静默失效（silent failure）= 程序不报错、日志不告警，但功能实际已经不工作。这类故障最难发现，往往等到要用数据时才暴露，而此时可能已经丢了很多天的数据。">静默失效</span>——
+  不报错，只是拿不到图。等发现时可能已经缺了很多天的数据。
+</div>
+
+<p><strong>处置</strong>（已写进方案 D1/E7 的强制输出）：探针须记录响应体里
+  <strong>所有资源 URL 的主机与端口</strong>去重清单；并在书面约定里加一条
+  <strong>「存储后端变更须提前知会」</strong>。</p>
+
+<h2 id="s5">5. 小昭的推荐与理由</h2>
+
+<div class="verdict">
+  <strong>推荐：① 本地化存储。</strong>
+</div>
+
+<p>理由按重要性排序：</p>
+
+<ol>
+  <li><strong>许可风险是根除而非缓解。</strong>不引入任何第三方存储组件，就没有任何传染性许可证的解释空间。</li>
+  <li><strong>端口最省，且与我司诉求同向。</strong>少 2 个端口，谈判时不需要讲法律，只讲端口数就能说服对方。</li>
+  <li><strong>我方本来不依赖对象存储。</strong>Recorder 是本地落盘，S3 那套横向扩容、多副本的能力对我们没有价值——
+    我们要的是<strong>能拿到告警图片的稳定地址</strong>，本地化存储同样能给。</li>
+  <li><strong>客户侧运维最简。</strong>私有化部署少一个要装、要监控、要打补丁的服务。</li>
+</ol>
+
+<p>不选其余三条的理由：</p>
+
+<table>
+  <tr><th style="width:20%">选项</th><th>不选的原因</th></tr>
+  <tr><td>② 保留 MinIO</td><td>整个议题的起点就是要摆脱它，没有讨论价值。</td></tr>
+  <tr><td>③ FastDFS</td><td>三重不利：<strong>增加 2~3 个端口</strong>（与端口收敛直接冲突）、<strong>仍是 GPLv3</strong>（没根除议题）、<strong>项目维护活跃度低</strong>（长期风险）。</td></tr>
+  <tr><td>④ 对接我司组件</td><td><strong>离线环境可达性存疑</strong>（§4.2），且把存储可用性变成我方责任、扩大故障域。除非我司已有现成的、能离线部署的组件，否则这是在给自己加活。</td></tr>
+</table>
+
+<div class="warn">
+  <strong>选①必须同时落实的前置条件</strong>：本地化存储<strong>没有冗余</strong>，
+  一体机磁盘损坏则附件全部丢失。这属于客户的数据可靠性范畴、不在我方交付范围内，
+  但必须在交付文档中<strong>书面提示</strong>并约定备份策略——
+  不能因为「不是我们的责任」就不说，那是埋雷。
+</div>
+
+<h2 id="s6">6. 需要主人决策的四件事</h2>
+
+<table>
+  <tr><th style="width:6%">#</th><th style="width:44%">要决策什么</th><th>小昭的建议 / 为什么需要您拍板</th></tr>
+  <tr>
+    <td><strong>1</strong></td>
+    <td>是否采纳<strong>本地化存储</strong>并据此回复对方？</td>
+    <td>建议<strong>是</strong>。对外话术可以只说端口与部署最简，不必展开许可证细节——
+      对方已答应弃用 MinIO，没必要再论证。</td>
+  </tr>
+  <tr>
+    <td><strong>2</strong></td>
+    <td>我司是否已有<strong>能离线部署</strong>的附件存储组件？</td>
+    <td>这决定第④条路是真选项还是假选项。<strong>只有主人知道公司内部有没有</strong>——
+      小昭无法从本仓库判断。若没有，④直接划掉。</td>
+  </tr>
+  <tr>
+    <td><strong>3</strong></td>
+    <td>磁盘规划：是否向客户/集成商要求
+      <strong>为我方 episode 数据单独划分区或加盘</strong>？</td>
+    <td>建议<strong>要</strong>，且趁现在还在谈部署形态时提，事后加盘要停机。
+      不切开的话，§4.3 那个「采数莫名中断」的坑迟早会踩，而且极难排查。</td>
+  </tr>
+  <tr>
+    <td><strong>4</strong></td>
+    <td>是否把<strong>「存储后端 / 资源 URL 变更须提前知会」</strong>写进书面约定？</td>
+    <td>建议<strong>写</strong>。成本为零，但能挡掉 §4.4 的静默失效。
+      与已在跟踪的「运控协议变更知会」可以合并成一条。</td>
+  </tr>
+</table>
+
+<div class="ok">
+  <strong>另外一件已经完成、不需要主人操作的事</strong>：集成商已口头承诺承担中间件商业许可责任
+  （对「后续商业许可问题由你们负责落实或对服务做改造」答复「可以的」）。
+  该承诺已在接口清单 §8.3 技术留档。<strong>建议由主人按公司流程纳入书面合同或会议纪要</strong>——
+  技术文档留档不等于商务约束力。
+</div>
+
+<p class="footnote">
+  依据来源：集成商 2026-08-10 答复原文（已逐字留档于 <code>docs/references/2026-08-08-topsee-interface-inventory.md</code> §7 / §8）；
+  端口拓扑据集成商《端口映射一览表》。<br />
+  许可证事实：MinIO 服务端自 2021 年 4 月起采用 AGPLv3（此前为 Apache 2.0），其客户端 SDK 仍为 Apache 2.0；FastDFS 为 GPLv3。
+  <strong>本报告的许可证分析仅为工程选型参考，不构成法律意见</strong>；涉及合同与合规责任划分的事项，请按公司法务流程确认。<br />
+  本文只记录本项目的工程事实、约束与决策依据，不含客户方标识信息。
+</p>
+
+</body>
+</html>
