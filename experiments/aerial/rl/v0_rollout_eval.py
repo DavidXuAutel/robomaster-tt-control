@@ -288,6 +288,14 @@ def make_obstacle_facing_episodes(
     episodes: List[Dict[str, np.ndarray]] = []
     accepted_fwd: List[float] = []
     probe_hit_depths: List[float] = []
+    # Diagnostics recorded on EVERY proxy-OK probe (hit or miss) so a 0-accepted
+    # scan still tells us WHY: the nearest forward depth the straight-line seeker
+    # actually reached, how far it flew, and whether it collided. Distinguishes
+    # "threshold just missed (reached ~1.8 m)" from "never approached (~12 m)"
+    # from "flew nowhere (travel ~0)" without another blind 4090 cycle.
+    probe_reached: List[float] = []   # min forward central-crop depth over the probe
+    probe_travel: List[float] = []    # ‖end pos − start pos‖ (m actually flown)
+    probe_collided = 0
     n_scanned = 0
     do_probe = probe_policy is not None and probe_near_m is not None and int(probe_steps) > 0
     rej = {"no_depth": 0, "spawn_collision": 0, "too_close": 0,
@@ -353,13 +361,27 @@ def make_obstacle_facing_episodes(
             # is jitter-robust and makes both the eval near mask (full-field <1.5)
             # and the ④ ratio reproduce by construction.
             probe_min = float("inf")
+            collided_here = False
             for tr in probe_ep:
+                if getattr(tr.obs, "collided", False) or (
+                    tr.next_obs is not None and getattr(tr.next_obs, "collided", False)
+                ):
+                    collided_here = True
                 d = getattr(tr.obs, "depth", None)
                 if d is None:
                     continue
                 fwd_min = _forward_min_depth(np.asarray(d, dtype=np.float64), center_frac=center_frac)
                 if math.isfinite(fwd_min):
                     probe_min = min(probe_min, float(fwd_min))
+            # Telemetry for every proxy-OK probe (before the accept/reject branch).
+            if math.isfinite(probe_min):
+                probe_reached.append(probe_min)
+            if probe_ep:
+                p0 = np.asarray(probe_ep[0].obs.position, dtype=np.float64)
+                p1 = np.asarray(probe_ep[-1].obs.position, dtype=np.float64)
+                probe_travel.append(float(np.linalg.norm(p1 - p0)))
+            if collided_here:
+                probe_collided += 1
             if not (probe_min < float(probe_near_m)):
                 rej["probe_no_hit"] += 1
                 continue
@@ -384,6 +406,21 @@ def make_obstacle_facing_episodes(
             "near_m": float(probe_near_m) if probe_near_m is not None else None,
             "steps": int(probe_steps),
             "hits": len(probe_hit_depths),
+            # WHY a probe missed: nearest forward depth reached + distance flown +
+            # collisions, over ALL proxy-OK probes (not just hits). p50 reached ≈
+            # 1.6 → threshold; ≈ 12 → never approached; travel ≈ 0 → flew nowhere.
+            "n_probed": len(probe_reached),
+            "collided": int(probe_collided),
+            "reached_fwd_m": {
+                "min": float(np.min(probe_reached)) if probe_reached else None,
+                "p50": float(np.median(probe_reached)) if probe_reached else None,
+                "max": float(np.max(probe_reached)) if probe_reached else None,
+            },
+            "travel_m": {
+                "min": float(np.min(probe_travel)) if probe_travel else None,
+                "p50": float(np.median(probe_travel)) if probe_travel else None,
+                "max": float(np.max(probe_travel)) if probe_travel else None,
+            },
             "hit_depth_m": {
                 "min": float(np.min(probe_hit_depths)) if probe_hit_depths else None,
                 "max": float(np.max(probe_hit_depths)) if probe_hit_depths else None,
