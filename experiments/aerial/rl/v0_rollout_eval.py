@@ -183,7 +183,7 @@ def make_obstacle_facing_episodes(
     accepted_fwd: List[float] = []
     n_scanned = 0
     rej = {"no_depth": 0, "spawn_collision": 0, "too_close": 0,
-           "open_ahead": 0, "obstacle_ok": 0}
+           "open_ahead": 0, "obstacle_ok": 0, "reset_error": 0}
     for pi, yaw_deg in pairs:
         if len(episodes) >= int(n) or n_scanned >= budget:
             break
@@ -194,7 +194,14 @@ def make_obstacle_facing_episodes(
         goal = start + heading * float(goal_dist_m)
         epi = {"pos": np.stack([start, goal]),
                "yaw": np.array([yaw, yaw], dtype=np.float64)}
-        obs = env.reset(epi)
+        # A reset can raise on airsim (health-check on a bad pose, transient RPC).
+        # Skip that candidate rather than aborting the whole scan — one unlucky
+        # teleport must not lose the other 15 obstacle-facing starts.
+        try:
+            obs = env.reset(epi)
+        except Exception:  # noqa: BLE001
+            rej["reset_error"] += 1
+            continue
         if getattr(obs, "collided", False):
             rej["spawn_collision"] += 1
             continue
