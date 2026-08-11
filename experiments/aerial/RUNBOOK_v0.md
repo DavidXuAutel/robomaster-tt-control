@@ -109,6 +109,19 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚⁶) —— 定位 ④ 真根因=深度头近障乐观 → 深度头 near-band 重训(离线诊断先证,再修 loss)。**
+  晚⁵ 修完 flaky 后 ④ 仍未过。用只读离线诊断 `_diag_depth_vs_gt`(不碰 gate/spec/config/flags,仅读 ckpt+语料,
+  按 shield 同款 `DepthMinPredictor` 逐帧配 D̂ vs GT、按 GT 深度分箱)在 `dataset_v0_approach_merged`(115 集/14487 帧)
+  上**决定性证实**:FORWARD 正前裁剪 `GT[0,1.5)` → D̂ p50=**6.415m**、`P(over)=1.000`、`P(trig)=0.000`
+  —— 1.5m 正前墙被预测成 ~6.4m,shield 永不刹。这是**安全攸关的近前向深度质量问题**,被聚合 ①d(远/地板像素主导)
+  掩盖;调 shield 余量/阈值都救不了(各 GT 箱的 D̂ 分布重叠)。修:`dynamics_torch.depth_head_loss` 加
+  **near-band 强调项** `near_weight*mean(AbsRel | GT≤near_focus_m)`(默认 `near_weight=0.0` 保持旧行为/单测惰性;
+  `train_depth_head._load_depth_cfg` setdefault `near_weight=3.0/near_focus_m=5.0`)。加可复用 `_merge_datasets.py`
+  (npz 顺序重编号复制+provenance manifest)。**治理**:改训练 loss 属 §6 Step 5/6 范围内;①d gate 度量
+  (`v0_metrics.depth_absrel`,全掩码,阈值 0.30)与所有 §4.1 阈值不动;`near_focus_m` 是训练超参非 gate 阈值。
+  commits `df08bfa`(诊断)/`dc4a8b5`(near-band loss)/`39db5ea`(merge)。**待**:合并
+  `dataset_v0_local_depth + dataset_v0_approach_merged` → 重训 DA3 头(fresh,`--eval-every 200`)→ 权威 ①d≤0.30 复验
+  + 诊断复跑(FORWARD 近带 D̂p50 下压、`P(over)`↓)→ 双绿才上 4090 重跑 ④。env/模型/flags 未动。
 - **2026-08-11(晚⁵) —— rollout 对 reset/健康失败重试+跳过(修 flaky 深度帧崩全局 gate)。**
   晚⁴ 重跑时崩在 shield-off 臂的 `env.reset`:`depth sanity failed: depth nearly constant (span=0.239, std=0.048)`
   —— 一个抖动/近似恒定的深度帧让 `_assert_healthy` 抛 `RuntimeError` 冒到顶,**整个 40min gate 挂掉**。
