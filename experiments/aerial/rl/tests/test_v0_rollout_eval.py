@@ -116,6 +116,39 @@ class _PessimisticGTDepthPredictor:
         return float(np.min(finite)) - self.margin
 
 
+def test_episode_geom_diag_flags_backward_retreat():
+    # 晚¹³ read-only telemetry: a blind backward retreat (body −x with a forward-only
+    # sensor) into an unsensed rear wall shows up as along_heading_on < 0 with the
+    # collision on the terminal step — the signal that separates it from a too-close
+    # spawn (which would show start_*_min < standoff). Neither field entered the
+    # policy graph; this is pure proprio+GT post-processing.
+    from experiments.aerial.rl.buffer import Transition
+
+    def _o(x, collided=False):
+        state = np.array([x, 0, 0, 0, 0, 0, 0.0], np.float32)  # yaw 0 → heading +x
+        return Observation(
+            rgb=np.zeros((4, 4, 3), np.uint8), state=state, collided=collided,
+            depth=np.full((4, 4), 5.0, np.float32),
+            imu={"ang_vel": [0, 0, 0], "lin_acc": [0, 0, 9.807]}, info={},
+        )
+
+    ep_on = [
+        Transition(obs=_o(0.0), action=np.array([-3, 0, 0, 0]), reward=0.0,
+                   done=False, next_obs=_o(-1.0), info={"intervention": True}),
+        Transition(obs=_o(-1.0), action=np.array([-3, 0, 0, 0]), reward=0.0,
+                   done=True, next_obs=_o(-2.0, collided=True),
+                   info={"intervention": True}),
+    ]
+    epi = {"pos": np.stack([np.zeros(3), np.array([5.0, 0, 0])]),
+           "yaw": np.array([0.0, 0.0])}
+    d = rollout._episode_geom_diag(ep_on, None, epi)
+    assert d["along_heading_on"] < 0.0, d          # net travel was BACKWARD
+    assert d["coll_first_on"] == 1, d              # collided on the terminal step
+    assert d["interv_first"] == 0, d
+    assert d["start_full_min"] == 5.0 and d["start_fwd_min"] == 5.0, d
+    assert d["len_off"] == -1 and d["coll_first_off"] == -1, d
+
+
 def test_signal4_shield_reduces_near_collision_on_wall():
     env = _WallEnv(wall_x=10.0, step_hz=5.0)
     starts = rollout.make_start_episodes(8, seed=0)

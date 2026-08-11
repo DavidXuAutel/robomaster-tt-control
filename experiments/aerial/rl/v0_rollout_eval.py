@@ -598,6 +598,79 @@ def _episode_masks(
             "depth_steps": depth_steps}
 
 
+def _episode_geom_diag(
+    ep_on: Episode,
+    ep_off: Optional[Episode],
+    epi: Dict[str, np.ndarray],
+    *,
+    center_frac: float = 0.5,
+) -> Dict[str, Any]:
+    """Per-episode ④ GEOMETRY telemetry (read-only; proprio position + GT depth,
+    neither ever entered the policy graph).
+
+    ``_shield_diag`` pools booleans across episodes, so it cannot separate the two
+    very different reasons a shielded episode collides at step ~1:
+
+      * **blind backward retreat into unsensed rear geometry** — the shield latches
+        and drives body −x, but the V0 depth sensor is FORWARD-only, so a wall
+        behind is invisible; net travel along the start heading is then NEGATIVE.
+        That start tests a V1 (rear/omni) capability, not the frontal avoidance ④
+        is meant to score.
+      * **spawn too close** — refuted upstream by ``start_clearance_m`` + the
+        spawn-collision reject, but confirmed here directly via ``start_full_min`` /
+        ``start_fwd_min`` (the forward-camera clearance at obs₀).
+
+    ``along_heading_on`` = (p_end − p_start)·ĥ (ĥ from the start yaw): < 0 ⇒ the
+    vehicle moved backward before terminating. Paired ``len_off`` / ``coll_first_off``
+    show what the SAME start did with no shield (a genuine frontal approach collides
+    only after several forward steps — one step cannot cross a 5–25 m frontal gap).
+    """
+    def _coll_first(ep: Optional[Episode]) -> int:
+        if not ep:
+            return -1
+        for i, tr in enumerate(ep):
+            post = tr.next_obs if tr.next_obs is not None else tr.obs
+            if bool(getattr(post, "collided", False)):
+                return i
+        return -1
+
+    def _interv_first(ep: Episode) -> int:
+        for i, tr in enumerate(ep):
+            if bool(tr.info.get("intervention", False)):
+                return i
+        return -1
+
+    obs0 = ep_on[0].obs
+    d0 = getattr(obs0, "depth", None)
+    start_full = float(_full_min_depth(d0)) if d0 is not None else float("nan")
+    start_fwd = (float(_forward_min_depth(d0, center_frac=center_frac))
+                 if d0 is not None else float("nan"))
+
+    yaw = float(np.asarray(epi["yaw"]).reshape(-1)[0])
+    heading = np.array([math.cos(yaw), math.sin(yaw), 0.0], dtype=np.float64)
+    p0 = np.asarray(obs0.position, dtype=np.float64)
+    last = ep_on[-1]
+    p_end = np.asarray(
+        (last.next_obs if last.next_obs is not None else last.obs).position,
+        dtype=np.float64,
+    )
+    dp = p_end - p0
+    along = float(np.dot(dp, heading))          # <0 ⇒ retreated backward
+    lateral = float(np.linalg.norm(dp - along * heading))
+
+    return {
+        "len_on": len(ep_on),
+        "len_off": (len(ep_off) if ep_off else -1),
+        "interv_first": _interv_first(ep_on),
+        "coll_first_on": _coll_first(ep_on),
+        "coll_first_off": _coll_first(ep_off),
+        "start_full_min": round(start_full, 3),
+        "start_fwd_min": round(start_fwd, 3),
+        "along_heading_on": round(along, 3),
+        "lateral_on": round(lateral, 3),
+    }
+
+
 def run_shield_eval(
     env: Any,
     policy: Any,
@@ -631,6 +704,7 @@ def run_shield_eval(
     collided_on: List[List[bool]] = []
     near_coll_on: List[List[bool]] = []
     near_coll_off: List[List[bool]] = []
+    episode_diag: List[Dict[str, Any]] = []
     depth_steps = 0
 
     for epi in start_episodes:
@@ -667,11 +741,17 @@ def run_shield_eval(
         near_coll_off.append(m_off["near"])
         depth_steps += int(m_off["depth_steps"])
 
+        # Read-only per-episode geometry (proprio + GT) so a step-1 collision can be
+        # attributed to a blind backward retreat vs a too-close spawn — see
+        # _episode_geom_diag. Touches no threshold/model/flag.
+        episode_diag.append(_episode_geom_diag(ep_on, ep_off, epi))
+
     return {
         "interventions_on": interventions_on,
         "collided_on": collided_on,
         "near_coll_on": near_coll_on,
         "near_coll_off": near_coll_off,
+        "episode_diag": episode_diag,
         # 0 → no episode carried GT depth (grab_depth=false). The near-collision
         # masks are then vacuously all-False; the caller must fail ④ closed
         # rather than mistaking "no depth" for "no obstacle ever near".

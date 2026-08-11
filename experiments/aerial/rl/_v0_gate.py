@@ -677,6 +677,11 @@ def _signals_2_4_from_rollouts(
     # does a collision follow a latch (retreat not overpowering forward drift)?
     # and how do on/off episode lengths & near-counts compare.
     diag = _shield_diag(masks)
+    # Per-episode geometry (read-only): attributes step-1 collisions to a blind
+    # backward retreat (along_heading_on<0) vs a too-close spawn (start_*_min).
+    ep_geom = masks.get("episode_diag")
+    if ep_geom:
+        diag["episodes"] = ep_geom
     s4["shield_diag"] = diag
     print(f"[v0-gate] shield mechanism diag: {json.dumps(diag)}")
     return s2, s4

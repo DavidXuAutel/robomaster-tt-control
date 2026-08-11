@@ -110,6 +110,11 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚¹³) —— 晚¹² 修好 ④c(ratio 12.96→0.192 ✓),但 ④b 仍 FAIL(before_frac=0);加只读按集几何遥测定位 step-1 碰撞方向。**
+  晚¹² 有界后退在 4090 权威 rollout 上**大幅改善 ④c**:`near_coll_rate_ratio` 12.96→**0.192 ≤0.80** ✓、`near_coll_rate_on` 0.385→0.0066、`coll_after_latch` 4→3、6 集里 3 集存活满 200 步(shield 成功)。但 **④ 仍 FAIL 于 ④b**:`intervention_before_contact_frac=0.0`。
+  **只读定位**:`collided` 是 post-step、只在 done 的终止步(v0_rollout_eval.py:571)→ `first_coll_step=0` ⟹ 该集**长度=1**(第一个动作后即撞)。3 个接触集全长度≈1 → `first_i<first_c` 恒 `0<0`=False → ④b 恒 0。**根因收窄(非 shield 控制律、非出生嵌入)**:起点 `start_clearance_m=3.0` + `spawn_collision` 拒 → 起点前向 FOV 净空 ≥3.0m(不在带内);off 臂 ~9 步才撞 → 每步 ~0.5–2.8m → **一步跨不过 5–25m 前障** → step-1 碰撞对象**不是前障**。shield 退 body −x + **前视相机看不到后方** → 强指向**盲目后退撞未感知的后/侧墙**(3 个 boxed-in 起点);design-4 有界后退在后墙就在第一退步内时仍无能为力。
+  **但碰撞方向尚未实证,不据此定 fix**。加只读 `_episode_geom_diag`(v0_rollout_eval.py:600;proprio 位置 + GT 起点净空,均不入策略图)→ 按集出 `along_heading_on`(沿起点朝向净位移,**<0=后退**)、`start_full/fwd_min`(起点净空)、`len_on/off`、`coll_first_on/off`、`interv_first`,经 `run_shield_eval` 返回 `episode_diag`、`_v0_gate` 挂到 `shield_diag["episodes"]` 打印。新单测 `test_episode_geom_diag_flags_backward_retreat`;51 全过。
+  **治理**:纯只读诊断,§4.1(1.5/0.50/0.80)、shield 控制律、env/模型/flags **全未动**。**待**:4090 同命令重跑 ④ → 看 `episodes[*].along_heading_on` 符号:若接触集 <0 → 实锤盲退撞后墙 → fix = 起点选择排除 boxed-in(仿晚⁸ 记录航向,治理安全的 episode 过滤);若 ≥0 或起点净空<standoff → 另定。flags 仍全关。commit 本次待 push。
 - **2026-08-11(晚¹²) —— ④ shield:保持(悬停)→有界状态反馈后退;修惯性滑进带停留(near_count_on 200/200、ratio 12.96)。re-freeze。**
   晚¹¹ 4090 权威 rollout 推翻晚¹⁰"保持"假设:零 body-delta **不刹前向动量** → latch 关掉策略后机体**惯性滑进 1.5m 带并停在里面** —— `near_count_on` 达 200/200、`near_coll_rate_on=0.385`、`ratio=12.96`(比后退设计 1.24 更差)、`coll_after_latch=4`、`first_coll_step max=8`、`first_near_on max=15`。**分析错误定位**:晚¹⁰ 误以为零 delta 能定住位置;实际设计 (2) 的后退**身兼两职** —— 抵消乐观预测器 + 刹前向动量;晚⁷ 消除了乐观偏差,但**动量刹车仍需要**,悬停把它一起丢了。
   **修法**:`override_action` 恢复 `retreat_step_m=3.0`,`D̂ < min_depth_m`(反应 standoff)时后退 body −x(刹动量+退出带),`D̂ ≥ standoff` 时保持零 delta(**不再后退**→不盲目倒进后墙)。晚⁷ 使 D̂ 近带准确/欠读(前向 6.4→0.65m)故 `D̂≥standoff ⟺ 真 ≈3m 净空`(先前"退到 D̂ 安全再悬停"停带里正因乐观 D̂ 在 GT 仍<1.5 时就过 standoff,该前提已消失);latch 使 standoff 稳定后策略不再逼近。综合了后退(晚¹⁰前)刹动量 + 保持(晚¹¹)不撞后墙两者的正确部分。collector.py:158-163 在 `depth_min_pred` 填入后、`override_action` 前调用 → 状态反馈拿得到当前步 D̂(已核 wiring)。
