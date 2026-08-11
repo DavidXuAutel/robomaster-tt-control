@@ -24,7 +24,7 @@
 | **①d** | 深度 AbsRel ≤0.30 | H100 离线(DA3 ckpt) | ✅ 0.132 代表 / 0.167 approach OOD |
 | **②** | 接近量↑(N=16 rollout vs random) | **4090 sim rollout** | ✅ 决定性通过:progress 24.13 vs random −5.11;final_dist 5.01m vs 34.99m |
 | **③** | D̂ 尺度一致(reprojection,GT-proprio 位移) | H100 离线 | ✅ 0.05–0.12(重投影估计器,GT-oracle 0.002) |
-| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 晚⁷ 深度头 near-band 重训消除感知层根因(正前 1.5m 墙 D̂ 6.4→0.65m、P(trig) 0→1.0、①d 0.0483 不退),**待用新头 `depth_ckpt_da3_near_20260811` 重跑 4090 rollout** |
+| **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🟡 晚⁷ 深度头 near-band 重训消除感知层根因(D̂ 6.4→0.65m、①d 0.0483);晚⁸ 修 scan 用采集记录航向(probe_no_hit=19→0 预期),**待用新头+头对头语料 `dataset_v0_headon_20260811` 重跑 4090 rollout** |
 
 > ④ `near_coll_rate_off=0`(2026-08-11 rollout)根因:`HeuristicPolicy` 是纯 proprio 直线奔 goal、
 > **不看 depth 不避障**;宽锥深度代理(`center_frac=0.5`)只证明"视野里有障碍",直线策略从旁 >1.5m 擦过。
@@ -70,10 +70,11 @@
     "$AERIAL_PY" -m experiments.aerial.rl._v0_gate --signals 2,4 --rollout-eval \
       --config configs/aerial_rl_rollout.yaml \
       --depth-ckpt /home/a25689/aerial-rl-skeleton/experiments/aerial/rl/artifacts/depth_ckpt_da3_near_20260811/depth_step_2000_da3_head.pt \
-      --rollout-dataset /home/a25689/aerial-rl-skeleton/experiments/aerial/rl/artifacts/dataset_v1_rgb \
+      --rollout-dataset /home/a25689/aerial-rl-skeleton/experiments/aerial/rl/artifacts/dataset_v0_headon_20260811 \
       --device cuda --emit experiments/aerial/rl/artifacts/v0_partial_24.json
     ```
     先盯 `[v0-gate] obstacle-facing scan: {...}` 看 `accepted`/16;跑完 `cat .../v0_partial_24.json`。
+    (晚⁸:scan 现对每个位置先试采集记录航向再走 8 网格,头对头语料 `dataset_v0_headon_20260811` 才能被 probe 命中。)
   - **合并**:`_v0_gate --merge <各信号 json>` → exit 0 才算 V0 过关 → 才翻 flags。
 
 ## 5. 基础设施要点
@@ -109,6 +110,17 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚⁸) —— ④ scan 用采集记录航向(修 probe_no_hit=19/accepted=0);待 4090 用新头对头语料重跑。**
+  晚⁷ 深度头修好后,4090 ④ rollout 仍找不到近障起点。专采头对头语料 `dataset_v0_headon_20260811`(34/34 可用)
+  后扫 656 对:`candidates=82 / proxy_ok=19 / probe_no_hit=19 / accepted=0` —— **19 个朝障候选全被 probe 判否**。
+  根因:`make_obstacle_facing_episodes` 丢弃采集记录的接近航向,改用 8 网格(0/45/…/315°,最多差 22.5°);
+  中距正前障碍只擦到 0.3 中心裁剪边缘 → proxy 过但直线 probe 从旁擦过。**修法(harness,非 §4.1)**:
+  `_obstacle_candidate_positions` 现返回 `(positions, 记录yaw)`;`make_obstacle_facing_episodes` 新增可选
+  `candidate_yaws`,每个位置**先试记录航向**再走 8 网格兜底(头对头语料里记录 yaw 正对障碍 → probe 正撞)。
+  向后兼容(不传则纯网格,单测不变);新增 off-grid 单测(0.3rad≈17° 网格打不中、给记录航向即命中),3 测全过。
+  **治理**:选点=episode 过滤器非 gate 阈值(docstring 明载"②/④ harness 几何修正,非 §4.1");env/阈值/模型/flags 不动。
+  **待**:4090 起渲染器 → `_v0_gate --signals 2,4 --rollout-eval --rollout-dataset dataset_v0_headon_20260811
+  --depth-ckpt <晚⁷ 新头>` 重跑 ④ → `--merge` 四信号权威判决。flags 仍全关。
 - **2026-08-11(晚⁷) —— near-band 重训验证双绿(①d 不退 + 近带感知实锤修复);待 4090 重跑 ④。**
   合并 `dataset_v0_local_depth + dataset_v0_approach_merged`(`_merge_datasets`)→ DA3 头 fresh 重训
   (near_weight=3.0,本地 HF cache 权重,`pip install safetensors` 解依赖)→ `depth_ckpt_da3_near_20260811`。

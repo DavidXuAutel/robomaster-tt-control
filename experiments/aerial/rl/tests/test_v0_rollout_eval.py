@@ -148,12 +148,14 @@ class _ScanEnv:
     (a benign 'ground' well beyond the near-zone) so start_clearance never trips.
     """
 
-    def __init__(self, *, obstacle_at, obs_dist=8.0, far=60.0, floor_m=30.0, size=8):
+    def __init__(self, *, obstacle_at, obs_dist=8.0, far=60.0, floor_m=30.0, size=8,
+                 obstacle_yaw=0.0):
         self._obstacle_at = np.asarray(obstacle_at, dtype=np.float64)
         self._obs_dist = float(obs_dist)
         self._far = float(far)
         self._floor = float(floor_m)
         self._size = int(size)
+        self._obstacle_yaw = float(obstacle_yaw)
         self._pos = np.zeros(3)
         self._yaw = 0.0
         self._goal = None
@@ -167,9 +169,9 @@ class _ScanEnv:
         self._pos = pos[0].copy()
         self._goal = pos[-1].copy()
         self._yaw = float(np.asarray(episode["yaw"]).reshape(-1)[0])
-        facing_x = abs(self._yaw) < 1e-6  # yaw 0 → +x heading
+        facing = abs(self._yaw - self._obstacle_yaw) < 1e-6  # obstacle only along this heading
         at_obstacle = bool(np.allclose(self._pos, self._obstacle_at, atol=1e-6))
-        fwd = self._obs_dist if (facing_x and at_obstacle) else self._far
+        fwd = self._obs_dist if (facing and at_obstacle) else self._far
         # Central pixel carries the forward reading; borders carry the floor.
         d = np.full((self._size, self._size), self._floor, dtype=np.float32)
         c = self._size // 2
@@ -207,6 +209,28 @@ def test_make_obstacle_facing_episodes_reports_zero_in_open_scene():
     assert eps == []
     assert diag["accepted"] == 0
     assert diag["rejections"]["open_ahead"] == diag["scanned"]
+
+
+def test_make_obstacle_facing_episodes_uses_recorded_yaw_off_grid():
+    """A head-on obstacle along an OFF-GRID heading (0.3 rad ≈ 17°, not in the
+    8-yaw 45° grid) is missed by the grid alone but found when the recorded
+    approach yaw is supplied — the 2026-08-11 probe_no_hit fix.
+    """
+    obstacle_pos = np.array([10.0, 0.0, 20.0])
+    off_grid_yaw = 0.3  # radians; nearest grid yaw (0) is ~17° off → grid misses
+    cand = np.array([[10.0, 0.0, 20.0]])
+    env = _ScanEnv(obstacle_at=obstacle_pos, obs_dist=8.0, obstacle_yaw=off_grid_yaw)
+
+    # Grid only (no recorded yaw): none of 0/45/…/315° align → open_ahead, 0 kept.
+    eps_grid, diag_grid = rollout.make_obstacle_facing_episodes(env, 4, cand, seed=0)
+    assert diag_grid["accepted"] == 0, diag_grid
+
+    # With the recorded approach yaw, the scan tries it first → obstacle found.
+    eps, diag = rollout.make_obstacle_facing_episodes(
+        env, 4, cand, seed=0, candidate_yaws=np.array([off_grid_yaw]),
+    )
+    assert diag["accepted"] == 1, diag
+    assert np.isclose(float(eps[0]["yaw"].reshape(-1)[0]), off_grid_yaw), eps[0]
 
 
 def test_episode_masks_collided_reads_post_step_obs():

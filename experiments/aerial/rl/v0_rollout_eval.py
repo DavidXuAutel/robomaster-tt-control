@@ -181,6 +181,7 @@ def make_obstacle_facing_episodes(
     seed: int = 0,
     goal_dist_m: float = 30.0,
     yaw_candidates_deg: Optional[List[float]] = None,
+    candidate_yaws: Optional[np.ndarray] = None,
     obstacle_min_m: float = 5.0,
     obstacle_max_m: float = 25.0,
     start_clearance_m: float = 3.0,
@@ -246,6 +247,21 @@ def make_obstacle_facing_episodes(
         if yaw_candidates_deg is not None
         else [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
     )
+    # Per-candidate RECORDED approach heading (radians→deg), aligned row-for-row
+    # with ``candidate_positions``. On a head-on approach corpus the logged yaw
+    # points the camera straight at the obstacle, so the straight-line probe rams
+    # it dead-on; tried FIRST for each position (see loop below). ``inf``/absent →
+    # fall back to the grid. Backward-compatible: callers that pass no yaws (and
+    # the unit tests) keep the pure 8-yaw grid behaviour.
+    cand_yaw_deg = (
+        np.degrees(np.asarray(candidate_yaws, dtype=np.float64).reshape(-1))
+        if candidate_yaws is not None else None
+    )
+    if cand_yaw_deg is not None and cand_yaw_deg.shape[0] != cand.shape[0]:
+        raise ValueError(
+            "candidate_yaws must align with candidate_positions "
+            f"({cand_yaw_deg.shape[0]} vs {cand.shape[0]})"
+        )
     # (position, yaw) scan order: each position tries its yaws in a shuffled
     # order (spread across headings). Positions are shuffled by default so the
     # accepted set spreads across the map; but when ``preserve_order`` is set the
@@ -258,6 +274,13 @@ def make_obstacle_facing_episodes(
     for pi in order:
         ys = list(yaws)
         rng.shuffle(ys)
+        # Recorded approach heading first: the 8-yaw grid is ≤22.5° off the true
+        # heading, so a mid-range frontal obstacle clips the FOV edge → proxy_ok
+        # but the straight-line probe threads past (2026-08-11 on the head-on
+        # corpus: proxy_ok=19 / probe_no_hit=19 / accepted=0). The logged yaw is
+        # the heading the drone actually flew into the obstacle → probe rams it.
+        if cand_yaw_deg is not None and math.isfinite(cand_yaw_deg[pi]):
+            ys = [float(cand_yaw_deg[pi])] + ys
         for y in ys:
             pairs.append((int(pi), float(y)))
     budget = int(max_scans) if max_scans is not None else len(pairs)

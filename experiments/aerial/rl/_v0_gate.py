@@ -510,8 +510,10 @@ def _predict_depth_over_windows(
 # --------------------------------------------------------------------------- #
 # ② / ④ via paired rollouts (mock env by default; airsim for a real ④ pass)   #
 # --------------------------------------------------------------------------- #
-def _obstacle_candidate_positions(dataset_dir: Path, *, stride: int = 5) -> np.ndarray:
-    """+up world positions sampled from a real collection's trajectories.
+def _obstacle_candidate_positions(
+    dataset_dir: Path, *, stride: int = 5
+) -> Tuple[np.ndarray, np.ndarray]:
+    """+up world positions (and recorded yaws) sampled from a collection.
 
     ④'s obstacle-facing generator teleports to these and keeps the yaws with a
     forward obstacle. Using collection trajectory positions (the drone flew
@@ -528,13 +530,20 @@ def _obstacle_candidate_positions(dataset_dir: Path, *, stride: int = 5) -> np.n
     so ordering the few near-obstacle poses to the front is what makes ④ scannable.
     If the corpus is RGB-only (no stored depth) every pose ranks ``inf`` and the
     order is left unchanged — a safe no-op fallback.
+
+    Also returns the per-pose **recorded yaw** (radians, row-aligned with the
+    positions) so the obstacle scan can try the heading the drone actually flew —
+    on a head-on approach corpus that yaw points straight at the obstacle, which
+    the 8-yaw grid (≤22.5° off) misses (2026-08-11: proxy_ok=19/probe_no_hit=19).
     """
     episodes = ds.load_dataset(Path(dataset_dir), skip_quarantined=True)
     pts: List[np.ndarray] = []
+    yaws: List[float] = []
     prox: List[float] = []
     for ep in episodes:
         for i in range(0, len(ep), max(1, int(stride))):
             pts.append(np.asarray(ep[i].obs.position, dtype=np.float64))
+            yaws.append(float(ep[i].obs.yaw))
             d = getattr(ep[i].obs, "depth", None)
             if d is None:
                 prox.append(float("inf"))
@@ -545,11 +554,14 @@ def _obstacle_candidate_positions(dataset_dir: Path, *, stride: int = 5) -> np.n
     if not pts:
         raise ValueError(f"no positions in dataset {dataset_dir}")
     out = np.stack(pts)
+    yaw_arr = np.asarray(yaws, dtype=np.float64)
     prox_arr = np.asarray(prox, dtype=np.float64)
     if np.isfinite(prox_arr).any():
         # stable ascending sort → near-building poses first; ties keep dataset order.
-        out = out[np.argsort(prox_arr, kind="stable")]
-    return out
+        order = np.argsort(prox_arr, kind="stable")
+        out = out[order]
+        yaw_arr = yaw_arr[order]
+    return out, yaw_arr
 
 
 def _signals_2_4_from_rollouts(
@@ -587,7 +599,7 @@ def _signals_2_4_from_rollouts(
     # dead end where the proxy accepted wide-cone hits the policy threaded past).
     policy = HeuristicPolicy(goal_getter=lambda: getattr(env, "goal", None))
     if rollout_dataset is not None:
-        cand = _obstacle_candidate_positions(Path(rollout_dataset))
+        cand, cand_yaw = _obstacle_candidate_positions(Path(rollout_dataset))
         # obstacle_max_m 25 (was 15): the probe is the real filter (rams the wall
         # head-on), so accept mid-range frontal obstacles up to just under the 30 m
         # goal — sky/max-range artifacts get rejected by the probe anyway.
@@ -599,6 +611,7 @@ def _signals_2_4_from_rollouts(
         # poses because the open corridors sort to the back.
         starts, scan_diag = rollout.make_obstacle_facing_episodes(
             env, int(n_episodes), cand, seed=int(seed),
+            candidate_yaws=cand_yaw,
             obstacle_max_m=25.0, center_frac=0.3,
             probe_policy=policy, probe_near_m=float(thr.near_collision_depth_m),
             probe_steps=40, reward_cfg=reward_cfg,
