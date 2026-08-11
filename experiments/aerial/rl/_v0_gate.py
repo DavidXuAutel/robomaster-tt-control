@@ -556,25 +556,33 @@ def _signals_2_4_from_rollouts(
     # set drives ② and ④ (frozen §4.1). Without a dataset we fall back to level
     # over-origin starts — fine for ② and the --allow-mock dev smoke, but ④ will
     # honestly degenerate in open airspace (near_coll_rate_off == 0).
+    # ② progress-vs-random (goal-seeking HeuristicPolicy is the V0 baseline
+    # policy). Built before the scan so it can PROBE-VERIFY obstacle starts:
+    # the same straight-line goal-seeker drives ②, ④ and the scan probe, so a
+    # start where the probe reaches the near-zone reproduces near_coll_off>0 on
+    # the ④ shield-off arm by construction (fixes the 2026-08-11 near_coll_off==0
+    # dead end where the proxy accepted wide-cone hits the policy threaded past).
+    policy = HeuristicPolicy(goal_getter=lambda: getattr(env, "goal", None))
     if rollout_dataset is not None:
         cand = _obstacle_candidate_positions(Path(rollout_dataset))
         starts, scan_diag = rollout.make_obstacle_facing_episodes(
             env, int(n_episodes), cand, seed=int(seed),
+            obstacle_max_m=15.0, center_frac=0.3,
+            probe_policy=policy, probe_near_m=float(thr.near_collision_depth_m),
+            probe_steps=24, reward_cfg=reward_cfg,
         )
         print(f"[v0-gate] obstacle-facing scan: {json.dumps(scan_diag)}")
         if not starts:
-            reason = ("④ found 0 obstacle-facing starts scanning "
+            reason = ("④ found 0 near-collision starts (probe-verified) scanning "
                       f"{scan_diag['scanned']} (pos,yaw) pairs from {rollout_dataset} "
-                      "— scene open at these coords / bounds too tight; ④ cannot be "
-                      "scored (fails closed)")
+                      "— straight-line goal-seeker never entered the 1.5 m near-zone "
+                      "at these coords; ④ cannot be scored (fails closed)")
             s2 = {"ok": False, "reason": reason, "scan": scan_diag}
             s4 = {"ok": False, "reason": reason, "scan": scan_diag}
             return s2, s4
     else:
         starts = rollout.make_start_episodes(int(n_episodes), seed=int(seed))
 
-    # ② progress-vs-random (goal-seeking HeuristicPolicy is the V0 baseline policy).
-    policy = HeuristicPolicy(goal_getter=lambda: getattr(env, "goal", None))
     rnd = rollout.RandomActionPolicy(seed=int(seed))
     prog = rollout.run_progress_eval(
         env, policy, rnd, starts, max_steps=int(max_steps), reward_cfg=reward_cfg

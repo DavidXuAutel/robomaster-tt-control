@@ -26,10 +26,12 @@
 | **③** | D̂ 尺度一致(reprojection,GT-proprio 位移) | H100 离线 | ✅ 0.05–0.12(重投影估计器,GT-oracle 0.002) |
 | **④** | 近障避让(shield 开/关对比) | **4090 sim rollout** | 🔴 rollout 完成但**不可测**:④b 干预=1.0 ✅,但 `near_coll_rate_off=0` / `n_contact=0` → ratio=NaN fail |
 
-> ④ 仍卡在 `near_coll_rate_off=0`(2026-08-11 rollout):障碍生成器让相机前方 ~21m 有障碍,但**过 ② 的
-> 好策略天然直达目标、不进 <1.5m 近障区** → shield 开/关对比无分母。根因是**障碍在相机前方,不必在
-> start→goal 航线上**。下一步:收紧几何(障碍压到 start→goal 连线上、`obstacle_max_m`↓、goal 置于障碍
-> 更远端),逼未开 shield 的策略真的进近障区,`n_contact_episodes>0` 才能测 ④c。
+> ④ `near_coll_rate_off=0`(2026-08-11 rollout)根因:`HeuristicPolicy` 是纯 proprio 直线奔 goal、
+> **不看 depth 不避障**;宽锥深度代理(`center_frac=0.5`)只证明"视野里有障碍",直线策略从旁 >1.5m 擦过。
+> **已修(待重跑)**:`make_obstacle_facing_episodes` 加 **probe 验证** —— 代理通过后用直线策略空跑 24 步
+> (shield 关),只留 GT 深度真进 <1.5m 的起点;因 ④ shield-off 臂跑同策略同起点 → `near_coll_off>0`
+> 构造保证。同时收紧代理(`obstacle_max_m=15`、`center_frac=0.3`)。属 harness 几何修,不动 §4.1。
+> 重跑看 scan 的 `probe.hits`;若 probe 找不到 hit(场景太开)→ ④ 诚实 fail-closed,提示换候选点。
 
 ## 3. 文档地图
 
@@ -107,6 +109,12 @@
 
 > 格式:`YYYY-MM-DD —— 改了什么(为什么 / 依据)`。最新在上。
 
+- **2026-08-11(晚²) —— ④ probe 验证起点(修 near_coll_off=0)。**
+  - `make_obstacle_facing_episodes` 加 `probe_policy/probe_steps/probe_near_m`:代理判据通过后,用同一
+    `HeuristicPolicy` 空跑 24 步(shield 关),只保留 GT 深度真进 `<near_collision_depth_m` 的起点 →
+    ④ shield-off 臂 `near_coll_off>0` 构造保证。`_v0_gate` 传入该策略,并收紧代理(`obstacle_max_m=15`、
+    `center_frac=0.3`)。scan diag 新增 `probe.{hits,hit_depth_m}` + `rej.{proxy_ok,probe_no_hit}`。
+    harness 几何修,env/阈值/模型/flags 均未动。**待 H100 pull + 重跑 ②④ 验证。**
 - **2026-08-11(晚) —— ②④ rollout 判读 + 修 DA3 依赖漏装。**
   - ②④ rollout 出结果:**② 决定性过**(progress 24.13 vs −5.11;final_dist 5.01 vs 34.99m);
     **④ 不可测**(④b 干预 1.0 ✅,但 `near_coll_rate_off=0`/`n_contact=0`→ratio NaN)。判定:过 ② 的

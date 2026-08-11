@@ -127,6 +127,10 @@ def make_obstacle_facing_episodes(
     start_clearance_m: float = 3.0,
     center_frac: float = 0.5,
     max_scans: Optional[int] = None,
+    probe_policy: Any = None,
+    probe_steps: int = 24,
+    probe_near_m: Optional[float] = None,
+    reward_cfg: Optional[RewardConfig] = None,
 ) -> tuple[List[Dict[str, np.ndarray]], Dict[str, Any]]:
     """Build N obstacle-facing start/goal episodes by *live scanning* the renderer.
 
@@ -150,6 +154,20 @@ def make_obstacle_facing_episodes(
          a collision. The goal is ``goal_dist_m`` straight along that heading, so
          a goal-seeking policy flies *into* the obstacle (shield-off → near-
          collision; shield-on → brake) and a random policy does not.
+      3. PROBE-VERIFY (when ``probe_policy`` given): the central-crop forward
+         depth is only a *proxy* — a wide cone accepts starts where the obstacle
+         merely clips the field of view, and the straight-line goal-seeker
+         (``HeuristicPolicy`` steers on proprio only, never avoids) threads past
+         it with >1.5 m clearance → ``near_coll_rate_off == 0`` and ④ is
+         unscorable (observed 2026-08-11: 16/16 accepted on the proxy, all
+         near_coll_off==0). So after the proxy passes, roll ``probe_policy`` from
+         this start for ``probe_steps`` (shield OFF, no predictor) and keep the
+         start ONLY if the GT-depth min actually drops below ``probe_near_m``
+         (= near-collision depth). Because the shield-OFF eval arm later runs the
+         SAME policy from the SAME start, this makes ``near_coll_rate_off > 0`` by
+         construction — ④'s ratio becomes measurable instead of NaN. ② still
+         passes on these starts: even blocked, the goal-seeker out-progresses the
+         random policy before it stalls at the obstacle.
 
     This is a ②/④ *harness* geometry fix (selecting valid episodes for the
     shield comparison), NOT a §4.1 change: env / thresholds / model / flags are
@@ -181,9 +199,12 @@ def make_obstacle_facing_episodes(
 
     episodes: List[Dict[str, np.ndarray]] = []
     accepted_fwd: List[float] = []
+    probe_hit_depths: List[float] = []
     n_scanned = 0
+    do_probe = probe_policy is not None and probe_near_m is not None and int(probe_steps) > 0
     rej = {"no_depth": 0, "spawn_collision": 0, "too_close": 0,
-           "open_ahead": 0, "obstacle_ok": 0, "reset_error": 0}
+           "open_ahead": 0, "proxy_ok": 0, "probe_no_hit": 0,
+           "obstacle_ok": 0, "reset_error": 0}
     for pi, yaw_deg in pairs:
         if len(episodes) >= int(n) or n_scanned >= budget:
             break
@@ -216,6 +237,32 @@ def make_obstacle_facing_episodes(
         if not (float(obstacle_min_m) <= fwd <= float(obstacle_max_m)):
             rej["open_ahead"] += 1
             continue
+        rej["proxy_ok"] += 1
+        # Confirm the straight-line goal-seeker actually enters the near-zone from
+        # this start (proxy accepts wide-cone hits it threads past). Roll it a few
+        # steps shield-OFF and require GT-depth min < probe_near_m; else drop.
+        if do_probe:
+            try:
+                probe_ep = _run_one(
+                    env, probe_policy, epi, max_steps=int(probe_steps),
+                    reward_cfg=reward_cfg, shield=None, depth_predictor=None,
+                )
+            except Exception:  # noqa: BLE001
+                rej["reset_error"] += 1
+                continue
+            probe_min = float("inf")
+            for tr in probe_ep:
+                d = getattr(tr.obs, "depth", None)
+                if d is None:
+                    continue
+                d = np.asarray(d, dtype=np.float64)
+                finite = d[np.isfinite(d) & (d > 0)]
+                if finite.size:
+                    probe_min = min(probe_min, float(np.min(finite)))
+            if not (probe_min < float(probe_near_m)):
+                rej["probe_no_hit"] += 1
+                continue
+            probe_hit_depths.append(probe_min)
         rej["obstacle_ok"] += 1
         accepted_fwd.append(fwd)
         episodes.append(epi)
@@ -230,6 +277,17 @@ def make_obstacle_facing_episodes(
             "min": float(np.min(accepted_fwd)) if accepted_fwd else None,
             "max": float(np.max(accepted_fwd)) if accepted_fwd else None,
             "mean": float(np.mean(accepted_fwd)) if accepted_fwd else None,
+        },
+        "probe": {
+            "enabled": bool(do_probe),
+            "near_m": float(probe_near_m) if probe_near_m is not None else None,
+            "steps": int(probe_steps),
+            "hits": len(probe_hit_depths),
+            "hit_depth_m": {
+                "min": float(np.min(probe_hit_depths)) if probe_hit_depths else None,
+                "max": float(np.max(probe_hit_depths)) if probe_hit_depths else None,
+                "mean": float(np.mean(probe_hit_depths)) if probe_hit_depths else None,
+            },
         },
         "params": {
             "goal_dist_m": float(goal_dist_m),
