@@ -233,6 +233,114 @@ def test_shield_eval_reports_spawn_collision_drops():
     assert masks["health_drops"] == 0, masks
 
 
+class _JitterEnv:
+    """First ``jitter_resets`` resets produce a physically-impossible single-step
+    position jump on the first step (proprio teleport-jitter — the live reset left
+    the z coordinate unsettled for a frame); later resets fly normally. Mirrors
+    _SpawnCollisionEnv so the resample-then-recover / persistent-drop paths are
+    exercised identically for the jitter guard.
+    """
+
+    def __init__(self, *, jitter_resets: int, jump_m: float = 20.0,
+                 step_hz: float = 5.0, size: int = 8) -> None:
+        self.config = type("C", (), {"step_hz": float(step_hz)})()
+        self._jitter_resets = int(jitter_resets)
+        self._jump_m = float(jump_m)
+        self._resets = 0
+        self._pos = np.zeros(3, dtype=np.float64)
+        self._goal = np.array([30.0, 0.0, 0.0], dtype=np.float64)
+        self._jitter = False
+        self._stepped = False
+
+    @property
+    def goal(self) -> Optional[np.ndarray]:
+        return self._goal
+
+    def _observe(self, collided: bool) -> Observation:
+        state = np.array([self._pos[0], self._pos[1], self._pos[2], 0, 0, 0, 0.0], np.float32)
+        return Observation(
+            rgb=np.zeros((8, 8, 3), np.uint8), state=state,
+            depth=np.full((8, 8), 5.0, np.float32), collided=collided, info={},
+        )
+
+    def reset(self, episode: Optional[Dict[str, Any]] = None) -> Observation:
+        self._pos = np.zeros(3, dtype=np.float64)
+        self._jitter = self._resets < self._jitter_resets
+        self._resets += 1
+        self._stepped = False
+        return self._observe(False)
+
+    def step(self, action: np.ndarray) -> tuple[Observation, Dict[str, Any]]:
+        if self._jitter and not self._stepped:
+            self._stepped = True
+            self._pos[2] += self._jump_m  # impossible ~20 m z jump in one step
+            return self._observe(True), {}
+        self._stepped = True
+        self._pos[0] += float(action[0])
+        return self._observe(False), {}
+
+
+def test_run_one_resilient_drops_persistent_proprio_jitter():
+    # A start that teleport-jitters on EVERY reset is an invalid trial (not real
+    # flight, no legitimate pre-contact window) → DROP (None), auditable via
+    # drop_stats["proprio_jitter"]. Same class as persistent spawn-collision (晚¹⁷).
+    env = _JitterEnv(jitter_resets=99)
+    policy = HeuristicPolicy(goal_getter=lambda: env.goal)
+    stats: Dict[str, int] = {}
+    ep = rollout._run_one_resilient(
+        env, policy, rollout.make_start_episodes(1, seed=0)[0],
+        max_steps=20, reward_cfg=None, retry_sleep_s=0.0, drop_stats=stats,
+    )
+    assert ep is None, ep
+    assert stats.get("proprio_jitter") == 1, stats
+    assert stats.get("spawn_collision", 0) == 0, stats
+
+
+def test_run_one_resilient_resamples_proprio_jitter_then_succeeds():
+    # The reset is non-deterministic: the first spawn jitters, the retry lands a
+    # clean roll. The resample must RECOVER the start (preserve N), not drop it.
+    env = _JitterEnv(jitter_resets=1)
+    policy = HeuristicPolicy(goal_getter=lambda: env.goal)
+    stats: Dict[str, int] = {}
+    ep = rollout._run_one_resilient(
+        env, policy, rollout.make_start_episodes(1, seed=0)[0],
+        max_steps=20, reward_cfg=None, retry_sleep_s=0.0, drop_stats=stats,
+    )
+    assert ep is not None and len(ep) > 0, ep
+    assert rollout._max_step_travel(ep) <= rollout._MAX_STEP_TRAVEL_M, ep
+    assert stats == {}, stats  # recovered → nothing dropped
+
+
+def test_jitter_guard_no_false_positive_on_genuine_roll():
+    # A real forward approach never jumps > cap in one 5 Hz step, so the guard must
+    # NOT fire on it — otherwise valid ④ data would be dropped. Positive control.
+    env = _WallEnv(wall_x=10.0, step_hz=5.0)
+    policy = HeuristicPolicy(goal_getter=lambda: env.goal)
+    stats: Dict[str, int] = {}
+    ep = rollout._run_one_resilient(
+        env, policy, rollout.make_start_episodes(1, seed=0)[0],
+        max_steps=40, reward_cfg=None, retry_sleep_s=0.0, drop_stats=stats,
+    )
+    assert ep is not None and len(ep) > 0, ep
+    assert rollout._max_step_travel(ep) <= rollout._MAX_STEP_TRAVEL_M, ep
+    assert stats == {}, stats
+
+
+def test_shield_eval_reports_proprio_jitter_drops():
+    # run_shield_eval surfaces proprio_jitter_drops so a jitter-driven drop is
+    # auditable, never a silent truncation.
+    env = _JitterEnv(jitter_resets=99)
+    policy = HeuristicPolicy(goal_getter=lambda: env.goal)
+    predictor = _PessimisticGTDepthPredictor(margin=1.6)
+    masks = rollout.run_shield_eval(
+        env, policy, predictor, rollout.make_start_episodes(3, seed=0),
+        near_collision_depth_m=1.5, max_steps=20,
+    )
+    assert masks["interventions_on"] == [], masks
+    assert masks["proprio_jitter_drops"] >= 3, masks
+    assert masks["spawn_collision_drops"] == 0, masks
+
+
 def test_signal4_shield_reduces_near_collision_on_wall():
     env = _WallEnv(wall_x=10.0, step_hz=5.0)
     starts = rollout.make_start_episodes(8, seed=0)

@@ -44,6 +44,38 @@ _TRANSIENT_RESET_MARKERS = (
     "renderer/sensors unavailable",
 )
 
+# A physically-impossible single-step displacement marks a *proprio teleport-
+# jitter*: the live (non-deterministic) reset can leave the vehicle's z
+# coordinate unsettled for one frame, so ``position`` reads jump tens of metres
+# in a single 0.2 s (5 Hz) step while ``velocity`` stays at a few m/s — not real
+# flight (晚¹⁷: run2 idx0 jumped Δz=19.47 m at vel.z=−2.7, x/y unchanged). A
+# genuine forward-approach roll peaks ~3.5 m/step, so 8 m cleanly separates the
+# two while leaving ~2× margin over real motion. Handled exactly like a
+# spawn-in-collision: an invalid trial with no legitimate pre-contact window →
+# resample the reset, drop (auditable) only if it keeps jittering. This is an
+# episode-validity guard, NOT a §4.1 threshold / shield-law / model / flag change.
+_MAX_STEP_TRAVEL_M = 8.0
+
+
+def _max_step_travel(ep: Any) -> float:
+    """Largest single-step ‖next_pos − pos‖ over the roll, in metres (read-only).
+
+    Proprio geometry only (``Observation.position`` derives from the 4-D proprio,
+    never the policy graph). Used to reject teleport-jitter starts — see
+    ``_MAX_STEP_TRAVEL_M``.
+    """
+    m = 0.0
+    for tr in ep:
+        if tr.next_obs is None:
+            continue
+        d = float(np.linalg.norm(
+            np.asarray(tr.next_obs.position, dtype=np.float64)
+            - np.asarray(tr.obs.position, dtype=np.float64)
+        ))
+        if d > m:
+            m = d
+    return m
+
 
 def _run_one_resilient(
     env: Any,
@@ -57,9 +89,10 @@ def _run_one_resilient(
     retries: int = 2,
     retry_sleep_s: float = 0.5,
     drop_stats: Optional[Dict[str, int]] = None,
+    max_step_travel_m: float = _MAX_STEP_TRAVEL_M,
 ) -> Optional[Episode]:
-    """``_run_one`` with retry-then-skip on transient reset/health failures AND
-    spawn-in-collision resets.
+    """``_run_one`` with retry-then-skip on transient reset/health failures,
+    spawn-in-collision resets, AND proprio teleport-jitter starts.
 
     Returns the episode, or ``None`` if the reset kept failing. A ``None`` tells
     the caller to DROP this start from both arms so the pairing (and same-N) is
@@ -76,9 +109,16 @@ def _run_one_resilient(
         "start pose may need resampling", applied at the ④ eval boundary so a
         spawn-embedded start is never miscounted as a shielded collision.
 
+      * **proprio teleport-jitter** — ``_run_one`` returns a NON-empty episode
+        but a single step's ‖Δpos‖ exceeds ``max_step_travel_m`` (physically
+        impossible at the 5 Hz cadence). The reset left the proprio z unsettled
+        for a frame, so the position read jumps while velocity stays small —
+        an invalid trial, not real flight. Resampled like spawn-in-collision.
+
     ``drop_stats`` (optional) is incremented in place (``"spawn_collision"`` /
-    ``"health"``) so the caller can surface WHY starts were dropped — auditable,
-    not a silent truncation. Non-transient errors (real bugs) propagate unchanged.
+    ``"health"`` / ``"proprio_jitter"``) so the caller can surface WHY starts
+    were dropped — auditable, not a silent truncation. Non-transient errors
+    (real bugs) propagate unchanged.
     """
     last: Optional[BaseException] = None
     last_kind = "health"
@@ -100,8 +140,21 @@ def _run_one_resilient(
             if attempt < int(retries) and retry_sleep_s > 0:
                 time.sleep(float(retry_sleep_s))
             continue
-        if ep:  # a real roll (at least one step) — done
-            return ep
+        if ep:  # a real roll (at least one step)
+            travel = _max_step_travel(ep)
+            if travel <= float(max_step_travel_m):
+                return ep  # clean roll — done
+            # A single-step jump beyond the physical cap ⇒ proprio teleport-
+            # jitter (reset left z unsettled): resample like spawn-in-collision.
+            last_kind = "proprio_jitter"
+            logger.warning(
+                "proprio teleport-jitter (max step travel %.2fm > %.2fm) "
+                "(attempt %d/%d), resampling",
+                travel, float(max_step_travel_m), attempt + 1, int(retries) + 1,
+            )
+            if attempt < int(retries) and retry_sleep_s > 0:
+                time.sleep(float(retry_sleep_s))
+            continue
         # Empty episode ⇒ spawn-in-collision guard fired. Resample the reset.
         last_kind = "spawn_collision"
         logger.warning(
@@ -862,6 +915,7 @@ def run_shield_eval(
     max_steps: int = 200,
     reward_cfg: Optional[RewardConfig] = None,
     dump_dir: Optional[str] = None,
+    max_step_travel_m: float = _MAX_STEP_TRAVEL_M,
 ) -> Dict[str, List[List[bool]]]:
     """Signal ④ inputs: paired shield-on vs shield-off per-step boolean masks.
 
@@ -901,6 +955,7 @@ def run_shield_eval(
         ep_on = _run_one_resilient(
             env, policy, epi, max_steps=max_steps, reward_cfg=reward_cfg,
             shield=shield, depth_predictor=depth_predictor_on, drop_stats=drop_stats,
+            max_step_travel_m=max_step_travel_m,
         )
 
         if hasattr(policy, "reset"):
@@ -908,6 +963,7 @@ def run_shield_eval(
         ep_off = _run_one_resilient(
             env, policy, epi, max_steps=max_steps, reward_cfg=reward_cfg,
             shield=None, depth_predictor=None, drop_stats=drop_stats,
+            max_step_travel_m=max_step_travel_m,
         )
 
         # A transient reset/health failure on EITHER arm drops the whole start,
@@ -960,6 +1016,10 @@ def run_shield_eval(
         # (the pair is dropped together to keep on/off at the same N).
         "spawn_collision_drops": int(drop_stats.get("spawn_collision", 0)),
         "health_drops": int(drop_stats.get("health", 0)),
+        # proprio_jitter_drops = starts whose reset kept producing a physically-
+        # impossible single-step position jump (teleport-jitter) across all
+        # resamples — invalid trials, dropped like spawn-collision (晚¹⁷).
+        "proprio_jitter_drops": int(drop_stats.get("proprio_jitter", 0)),
         # 0 → no episode carried GT depth (grab_depth=false). The near-collision
         # masks are then vacuously all-False; the caller must fail ④ closed
         # rather than mistaking "no depth" for "no obstacle ever near".

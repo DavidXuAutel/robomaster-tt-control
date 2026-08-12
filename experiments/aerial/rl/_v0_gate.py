@@ -688,6 +688,9 @@ def _signals_2_4_from_rollouts(
     # (spawn-embedded resamples that never cleared vs degenerate renderer frames).
     diag["spawn_collision_drops"] = int(masks.get("spawn_collision_drops", 0))
     diag["health_drops"] = int(masks.get("health_drops", 0))
+    # Starts dropped for a physically-impossible single-step position jump
+    # (proprio teleport-jitter, 晚¹⁷) — invalid trials, not shielded collisions.
+    diag["proprio_jitter_drops"] = int(masks.get("proprio_jitter_drops", 0))
     # Opt-in forensic per-contact-episode dumps (--dump-contact-frames). Empty
     # unless requested; read-only, never affects the verdict.
     cdumps = masks.get("contact_dumps") or []
