@@ -27,6 +27,9 @@ _bak_*/
 .claude/
 .synced_from_git_rev
 docs/references/**/*.pdf
+# 厂商即时沟通截图/原表含人员姓名与未脱敏内网拓扑，禁止进公开仓库。
+# 工程结论已吸收进 docs/design 与 docs/references 下的脱敏文档。
+docs/references/813微信聊天记录/
 
 # 狗侧现场产物：含客户内网地址与设备明文凭据，禁止进公开仓库。
 # 需要入库的证据请先脱敏，另存为 *.sample.json 或写进 docs/ 下的分析文档。

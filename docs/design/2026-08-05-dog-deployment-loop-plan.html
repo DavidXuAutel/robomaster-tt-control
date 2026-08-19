@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>机器狗部署闭环方案（可读版 v3.1，权威版 v3.5）· 2026-08-05</title>
+<title>机器狗部署闭环方案（可读版 v3.1，权威版 v3.7）· 2026-08-05</title>
 <style>
   body {
     background: #fafafa;
@@ -54,33 +54,29 @@
 </head>
 <body>
 
-<h1>机器狗部署闭环方案 v3.1<span style="font-size:.5em;font-weight:400;color:#b45309"> · 可读版，已落后于权威文档 v3.5</span></h1>
+<h1>机器狗部署闭环方案 v3.1<span style="font-size:.5em;font-weight:400;color:#b45309"> · 可读版，已落后于权威文档 v3.7</span></h1>
 <p class="meta">
-  2026-08-05 · 状态：<strong>可据此开发</strong>（其他 Agent 按 D0–D8 直接开工）· 已过 Codex 对抗评审并重写<br />
+  2026-08-05 · 状态：<strong>可据此开发</strong>（当前只授权 D0；09-14 前只执行 md §3.0 切片）<br />
   权威 markdown：<code>docs/design/2026-08-05-dog-deployment-loop-plan.md</code>（开发以 md 为准，本页为可读版）<br />
   接替 v2（08-03）的路线图；v2 的接口事实（F/G 编号）与契约仍然有效
 </p>
 
 <div class="warn" style="border-left:6px solid #dc2626">
-  <strong>🔴 版本落后提示（2026-08-10 更新）</strong>：本页是 <strong>v3.1</strong> 的可读版，权威 markdown 已到 <strong>v3.5</strong>。
-  下列内容本页<strong>不完整或已被推翻</strong>，动手前必须回 markdown 看：
+  <strong>🔴 版本落后提示（2026-08-13 更新到权威 v3.7）</strong>：本页是 <strong>v3.1</strong> 的可读版，权威 markdown 已到 <strong>v3.7</strong>。
+  动手前必须回 markdown。下面只列<strong>会让你走错路</strong>的口径：
   <ul>
-    <li>🎯 <strong>快通道载体已换</strong>（md §1.6-A1）：不是宇树 DDS <code>SportClient.Move</code>，而是<strong>平台 WebSocket 运控接口</strong>（Twist 语义）。DDS 因「政策 + 物理不可路由」<strong>终局退出</strong>，不再是任何阶段的准入条件；</li>
-    <li>🎯 <strong>deadman 已有官方口径 = 0.5 秒</strong>（md §1.6-A2）：停发速度指令 0.5 s 后自动停止。本页下文凡写「deadman 从未验证」处<strong>均已过时</strong>——现状是「有官方口径、待实测复核」，且<strong>实现层级未知</strong>（上位机还是狗底层，md §1.6-U1）；</li>
-    <li>🎯 <strong>位姿与置信度已可得</strong>（md §1.6-A4）：平台 MQ 推送 2 Hz 的地图系位姿与 <code>matchProb</code>，G4/G5 解开，不依赖 DDS；</li>
-    <li>🔴 <strong>新增两条一级安全缺口</strong>（md §1.6-B）：平台<strong>当前版本运控不校验控制权</strong>（第三方与界面可同时下发）、<strong>服务端不做速度限幅</strong>。我方限幅与互斥是<strong>唯一防线</strong>；</li>
-    <li>🔴 <strong>E4-C③（权属封堵）当前判负</strong>，D7 准入已改写为九条（md §2 / D7）。只有「等平台上线控制权判断」或「D7 期间物理锁定界面端」两条合规出路；</li>
-    <li><strong>没有优雅停车</strong>（md §1.6-A3）：零速即常规刹车；软件急停只是电机断电、狗会塌，不是安全动作；</li>
-    <li><strong>B2 无身高/步态能力</strong>（仅 B1 有）；<code>th</code> 为弧度但「右为 0、顺时针为正」，与 ROS 相反；</li>
-    <li>🔴 <strong>两项外部变更进入跟踪</strong>（md §1.6-F）：客户侧正在<strong>收敛端口清单</strong>——我方须申报最小端口集合（<code>8888</code> + 视频取流端口），否则依赖端口可能被砍，且<strong>取流被波及会直接打穿 D2b/D3 数据采集</strong>；集成商<strong>MinIO 许可整改</strong>可能替换对象存储，依赖面待 D1 核实。二者共同把 <strong>D1 的 E7 抬为关键路径</strong>；</li>
-    <li><strong>MQ 中间件定性为 ActiveMQ</strong>，部署形态（云端 <code>8001</code> vs 离线 <code>8888</code>）已闭合为离线一体机，该问询销项（md §1.6-E）；</li>
-    <li>🔴 <strong>项目地位约束（md §1.6-F8，最新且影响最大）</strong>：本项目属<strong>搭载验证、非正式立项</strong>，我方不具备向集成商提配合要求的立场。
-      对外诉求<strong>整体 HOLD</strong>，风险转为我方自主缓解（自带外置存储、URL 漂移自检、端口依赖走内部路径）。
-      <strong>后果：D7 因组织约束事实上不可达</strong>，动作类实验 E1/E3/E4-C 一并挂起（<u>非判负，是不具备执行条件</u>）。
-      近期目标锚定 <strong>D6 只读影子</strong>，并先执行 <strong>§3.0-V 最小价值验证切片</strong>：取流 → 视频+遥测同步录制 → QA 可训练性。</li>
+    <li>🎯 快通道不是宇树 DDS，是<strong>平台 WebSocket 运控</strong>（Twist）；DDS 因政策+物理不可路由终局退出；</li>
+    <li>🎯 deadman 官方口径 <strong>0.5 秒</strong>（待实测）；MQ 2 Hz 位姿+<code>matchProb</code>，G4/G5 已解；</li>
+    <li>🔴 当前版本运控<strong>不校验控制权</strong>、服务端<strong>不做速度限幅</strong>；E4-C③预判判负；D7 因搭载验证地位<strong>事实上不可达</strong>；</li>
+    <li>🔴 对外诉求整体 HOLD。近期只做 <strong>§3.0-V</strong>：取流 → 同步录制 → QA；</li>
+    <li>🎯 <strong>v3.7 端口</strong>：CVR-GB 动态段已收到 <code>50000-50070</code>+<code>30000-30070</code>（142），仍非最小集。
+      <strong>禁止采信「一路四口」公式</strong>，E7 只认本场景实测。MinIO <code>9000</code>/<code>9091</code> 仍印在最新表上；</li>
+    <li>🎯 <code>delayTime</code>＝狗↔服务器时延，<strong>不是信号格</strong>。<code>signalStrength</code>（0–31）承诺月底可测，缺省 0；</li>
+    <li>⚠️ 充电房 <strong>08-30 现场调试、09-05 交付</strong>。08-07 实测「充电房未配置」交付前不得当已具备。硬件到场 ≠ 软件已配。
+      <strong>V1 取流尽量赶在 08-30 前</strong>。</li>
   </ul>
-  本页保留 v3.1 文字是为了不丢失术语解说；<strong>结论一律以 markdown v3.5 为准</strong>。
 </div>
+<p class="meta">本页保留 v3.1 文字是为了不丢失术语解说；<strong>结论一律以 markdown v3.7 为准</strong>。</p>
 
 <div class="verdict">
   <strong>一句话</strong>：项目重心从「把狗接进任务编排」升级为「<strong>部署闭环</strong>」——

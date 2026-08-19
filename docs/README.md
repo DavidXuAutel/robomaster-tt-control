@@ -21,8 +21,9 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 | 改漫游（Wander）代码或参数 | `design/2026-07-27-wander-explore-design.md`（仅 Claude 可改） |
 | 了解项目全部能力 | `handover/2026-07-25-capability-inventory.md` |
 | 空地协同（无人机×机器狗）演示 | `design/air-ground/README.md` + `handover/2026-07-31-air-ground-deferred-hardware.md` + 方案总览 HTML |
-| **对接机器狗（宇树 B2 + 拓普视平台）** | `design/2026-08-03-dog-integration-plan.md`（权威规格）+ 同名 `.html`（报告版） |
-| 接着写机器狗代码 / 真机联调前准备 | `handover/2026-08-03-dog-integration-m6-m11-implementation.md` |
+| **对接机器狗（宇树 B2 + 拓普视平台）** | `design/2026-08-05-dog-deployment-loop-plan.md`（**当前权威 v3.7**，只授权 D0）+ 同名 `.html`（可读版，以 md 为准） |
+| 机器狗接口怎么调 / 端口与充电房口径 | `references/2026-08-08-topsee-interface-inventory.md`（先查）→ `handover/2026-08-07-dog-first-navigate-loop-handover.md`（实测为准） |
+| 接着写机器狗代码 / 真机联调前准备 | `handover/2026-08-03-dog-integration-m6-m11-implementation.md`（M6–M11 已落地）+ 上列 v3.7 方案 §3.0 |
 
 ## 现有文档
 
@@ -40,7 +41,9 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-31-air-ground-g1-g2-design.md` — G1–G2 真机适配设计（Codex 审过：串行 Scout / abort 广播 / 防假绿）
 - `2026-07-31-air-ground-mission-overview.html` — 空地协同方案总览（术语悬停 + 设计理由，面向阅读）
 - `air-ground/` — 分模块详设与 Codex 审稿索引（M0–M5 软件已实现）
-- `2026-08-03-dog-integration-plan.md` — **机器狗对接方案 v2**（宇树 B2 × 拓普视平台）：能力取舍矩阵、Arbiter 分时双通道、契约变更、WAM 采集规格、M6–M12 路线图、E1–E9 验证实验、待厂商确认清单
+- `2026-08-05-dog-deployment-loop-plan.md` — **机器狗部署闭环方案 v3.7**（当前开发权威）：D0–D8 路线、运控 WS、端口收敛 142 口、充电房 08-30/09-05、§3.0-V 取流切片；只授权 D0
+- `2026-08-05-dog-deployment-loop-plan.html` — 同上可读版（正文仍为 v3.1，**结论以 markdown v3.7 为准**）
+- `2026-08-03-dog-integration-plan.md` — 机器狗对接方案 v2（接口事实 F/G 与契约仍有效；路线图已被 v3.7 接替）
 - `2026-08-03-dog-integration-plan.html` — 同上的报告版（含架构图与状态机 SVG）
 
 ### dev-notes/ — 开发过程笔记
@@ -78,12 +81,14 @@ RoboMaster TT 视觉避障 / 真机-仿真链路项目文档。按**用途**分�
 - `2026-07-31-air-ground-deferred-hardware.md` — 真机/人工待测搁置清单
 - `2026-07-31-air-ground-marker-print-guide.md` — 标记物打印编号约定
 - `2026-08-03-dog-integration-m6-m11-implementation.md` — **机器狗对接 M6–M11 实现交接**：落地清单、自测结果、探针/绑定导出用法、真机联调前的配置空位与三件人工前置
+- `2026-08-07-dog-first-navigate-loop-handover.md` — 真机首次导航闭环交接（派单 SOP、10 个坑、授权边界；与方案冲突时以本文为准）
 
 ### references/ — 外部参考
 - `2026-07-20-scoutxwam-world-model-analysis.md` / `.html` — ScoutXWAM 世界模型技术方案分析
 - `world_model_report_jiedu.md` — 世界模型 · ScoutWAM 汇报的通俗解读与独立评估
 - `大众具身智能遥操作数据飞轮_研究分析报告.md` — 大众遥操作数据飞轮系统研究分析报告
 - `机器人巡检平台用户说明书/2026-08-03-dog-inspection-platform-user-manual.md` — 拓普视全地形巡检机器人 PC 端手册（离线版+在线云端版去重整合，含修正说明）
+- `2026-08-08-topsee-interface-inventory.md` — **拓普视接口清单**（实现方案第一检索位；2026-08-13 已同步 142 口动态段、充电房排期、`signalStrength`）
 - `机器狗文档/机器人模块.openapi.json` / `登录模块.openapi.json` — 巡检平台 API 参考
 
 ## 约定
